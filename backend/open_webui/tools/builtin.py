@@ -2622,16 +2622,54 @@ async def query_knowledge_bases(
 # =============================================================================
 
 
+async def list_skills(
+    count: int = 20,
+    skip: int = 0,
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    List skills available to the user. Each entry has an id, name, and description.
+    Use view_skill(id) to load a skill's full instructions before applying it.
+
+    :param count: Maximum number of skills to return (default: 20)
+    :param skip: Number of results to skip for pagination (default: 0)
+    :return: JSON list of available skills with id, name, and description
+    """
+    if __request__ is None:
+        return json.dumps({'error': 'Request context not available'})
+
+    if not __user__:
+        return json.dumps({'error': 'User context not available'})
+
+    try:
+        from open_webui.models.skills import Skills
+
+        user_id = __user__.get('id')
+
+        # get_skills_by_user_id enforces ownership + read access grants; keep only
+        # active skills, then slice the requested page out of the accessible set.
+        skills = [s for s in await Skills.get_skills_by_user_id(user_id, 'read') if s.is_active]
+        skills = skills[max(skip, 0) : max(skip, 0) + max(count, 0)]
+
+        result = [{'id': s.id, 'name': s.name, 'description': s.description or ''} for s in skills]
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        log.exception(f'list_skills error: {e}')
+        return json.dumps({'error': str(e)})
+
+
 async def view_skill(
     id: str,
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
     """
-    Load the full instructions of a skill by its id from the available skills manifest.
-    Use this when you need detailed instructions for a skill listed in <available_skills>.
+    Load the full instructions of a skill by its id.
+    Use this when you need detailed instructions for a skill listed in <available_skills>
+    or returned by list_skills.
 
-    :param id: The id of the skill to load (as shown in the manifest)
+    :param id: The id of the skill to load (as shown in the manifest or in list_skills)
     :return: The full skill instructions as markdown content
     """
     if __request__ is None:

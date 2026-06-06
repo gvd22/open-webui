@@ -65,6 +65,7 @@ from open_webui.tools.builtin import (
     list_knowledge,
     list_knowledge_bases,
     list_memories,
+    list_skills,
     query_knowledge_bases,
     query_knowledge_files,
     replace_memory_content,
@@ -445,19 +446,19 @@ async def get_builtin_tools(
 
     # Helper to check if a builtin tool category is enabled via meta.builtinTools
     # Defaults to True if not specified (backward compatible)
-    def is_builtin_tool_enabled(category: str) -> bool:
+    def is_builtin_tool_enabled(category: str, default: bool = True) -> bool:
         builtin_tools = model.get('info', {}).get('meta', {}).get('builtinTools', {})
-        return builtin_tools.get(category, True)
+        return builtin_tools.get(category, default)
 
     # Helper to check user-level feature permission (admins always pass)
     user = extra_params.get('__user__', {})
 
-    async def has_user_permission(feature_key: str) -> bool:
+    async def has_user_permission(feature_key: str, group: str = 'features') -> bool:
         if user.get('role') == 'admin':
             return True
         return await has_permission(
             user.get('id', ''),
-            f'features.{feature_key}',
+            f'{group}.{feature_key}',
             request.app.state.config.USER_PERMISSIONS,
         )
 
@@ -591,9 +592,13 @@ async def get_builtin_tools(
             ]
         )
 
-    # Skills tools - view_skill allows model to load full skill instructions on demand
+    # Skills tools - per-skill read access is enforced inside the tools themselves.
     if extra_params.get('__skill_ids__'):
         builtin_functions.append(view_skill)
+    elif is_builtin_tool_enabled('skills', default=False) and await has_user_permission(
+        'skills', group='workspace'
+    ):
+        builtin_functions.extend([list_skills, view_skill])
 
     # Task management - break down complex work into trackable steps
     if is_builtin_tool_enabled('tasks'):

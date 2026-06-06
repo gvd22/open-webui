@@ -27,6 +27,10 @@
 			label: $i18n.t('Knowledge Base'),
 			description: $i18n.t('Browse and query knowledge bases')
 		},
+		skills: {
+			label: $i18n.t('Skills'),
+			description: $i18n.t('Discover and load available skills on demand')
+		},
 		channels: {
 			label: $i18n.t('Channels'),
 			description: $i18n.t('Search channels and channel messages')
@@ -59,6 +63,9 @@
 
 	const allTools = Object.keys(toolLabels);
 
+	// Categories that are opt-in (disabled unless explicitly enabled). All others default on.
+	const optInTools = ['skills'];
+
 	export let builtinTools: Record<string, boolean> = {};
 </script>
 
@@ -70,12 +77,28 @@
 		{#each allTools as tool}
 			<div class="flex items-center gap-2 mr-3">
 				<Checkbox
-					state={builtinTools[tool] !== false ? 'checked' : 'unchecked'}
+					state={optInTools.includes(tool)
+						? builtinTools[tool] === true
+							? 'checked'
+							: 'unchecked'
+						: builtinTools[tool] !== false
+							? 'checked'
+							: 'unchecked'}
 					on:change={(e) => {
-						if (e.detail === 'checked') {
-							delete builtinTools[tool];
+						if (optInTools.includes(tool)) {
+							// Opt-in: store explicit true when enabled, drop the key when disabled
+							if (e.detail === 'checked') {
+								builtinTools[tool] = true;
+							} else {
+								delete builtinTools[tool];
+							}
 						} else {
-							builtinTools[tool] = false;
+							// Default-on: drop the key when enabled, store explicit false when disabled
+							if (e.detail === 'checked') {
+								delete builtinTools[tool];
+							} else {
+								builtinTools[tool] = false;
+							}
 						}
 						builtinTools = builtinTools;
 					}}
