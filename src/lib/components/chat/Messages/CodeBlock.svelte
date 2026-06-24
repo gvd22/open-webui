@@ -234,7 +234,18 @@
 			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
-			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
+			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null,
+			/\bimport\s+docx\b|\bfrom\s+docx\b/.test(code) ? 'python-docx' : null,
+			/\bimport\s+pptx\b|\bfrom\s+pptx\b/.test(code) ? 'python-pptx' : null,
+			/\bimport\s+xlsxwriter\b|\bfrom\s+xlsxwriter\b/.test(code) ? 'xlsxwriter' : null,
+			/\bimport\s+pypdf\b|\bfrom\s+pypdf\b/.test(code) ? 'pypdf' : null,
+			/\bimport\s+reportlab\b|\bfrom\s+reportlab\b/.test(code) ? 'reportlab' : null,
+			/\bimport\s+jinja2\b|\bfrom\s+jinja2\b/.test(code) ? 'jinja2' : null,
+			/\bimport\s+markdown\b|\bfrom\s+markdown\b/.test(code) ? 'markdown' : null,
+			/\bimport\s+plotly\b|\bfrom\s+plotly\b/.test(code) ? 'plotly' : null,
+			/\bimport\s+qrcode\b|\bfrom\s+qrcode\b/.test(code) ? 'qrcode' : null,
+			/\bimport\s+PIL\b|\bfrom\s+PIL\b/.test(code) ? 'pillow' : null,
+			/\bimport\s+cerberus\b|\bfrom\s+cerberus\b/.test(code) ? 'cerberus' : null
 		].filter(Boolean);
 
 		console.log(packages);

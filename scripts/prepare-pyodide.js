@@ -15,14 +15,40 @@ const packages = [
 	'pytz',
 	'black',
 	'openai',
-	'openpyxl'
+	'openpyxl',
+	'python-docx',
+	'python-pptx',
+	'xlsxwriter',
+	'pypdf',
+	'reportlab',
+	'jinja2',
+	'markdown',
+	'plotly',
+	'qrcode',
+	'pillow',
+	'cerberus'
 ];
 
 // Pure-Python packages whose wheels must be downloaded from PyPI and saved into
 // static/pyodide/ so that the browser can install them offline via micropip.
 // Packages already provided by the Pyodide distribution (click, platformdirs,
 // typing_extensions, etc.) do NOT need to be listed here.
-const pypiPackages = ['black', 'pathspec', 'mypy_extensions', 'pytokens'];
+const pypiPackages = [
+	'black',
+	'pathspec',
+	'mypy_extensions',
+	'pytokens',
+	'python-docx',
+	'python-pptx',
+	'xlsxwriter',
+	'pypdf',
+	'reportlab',
+	'jinja2',
+	'markdown',
+	'plotly',
+	'qrcode',
+	'cerberus'
+];
 
 import { loadPyodide } from 'pyodide';
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
