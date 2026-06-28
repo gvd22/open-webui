@@ -5059,10 +5059,10 @@
     },
     "pypdf": {
       "name": "pypdf",
-      "version": "6.13.3",
-      "file_name": "pypdf-6.13.3-py3-none-any.whl",
+      "version": "6.14.2",
+      "file_name": "pypdf-6.14.2-py3-none-any.whl",
       "install_dir": "site",
-      "sha256": "c6e3f86afb625791510b02ad5480e94b63970bb957df75d44657c282ecc52224",
+      "sha256": "3f07891af76dc002657e04993ab9b4de81de29f9013b9761d0b7968bff12e946",
       "package_type": "package",
       "imports": [
         "pypdf"
@@ -5126,6 +5126,18 @@
       "package_type": "package",
       "imports": [
         "cerberus"
+      ],
+      "depends": []
+    },
+    "validators": {
+      "name": "validators",
+      "version": "0.35.0",
+      "file_name": "validators-0.35.0-py3-none-any.whl",
+      "install_dir": "site",
+      "sha256": "e8c947097eae7892cb3d26868d637f79f47b4a0554bc6b80065dfe5aac3705dd",
+      "package_type": "package",
+      "imports": [
+        "validators"
       ],
       "depends": []
     }

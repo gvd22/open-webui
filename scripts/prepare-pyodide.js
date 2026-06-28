@@ -24,10 +24,17 @@ const packages = [
 	'jinja2',
 	'markdown',
 	'plotly',
+	'altair',
 	'qrcode',
 	'pillow',
-	'cerberus'
+	'cerberus',
+	'validators',
+	'pydantic'
 ];
+
+// rapidfuzz is intentionally not listed here: Pyodide/micropip cannot install it
+// because PyPI does not publish a pure Python wheel and Pyodide does not ship a
+// wasm32 wheel for it.
 
 // Pure-Python packages whose wheels must be downloaded from PyPI and saved into
 // static/pyodide/ so that the browser can install them offline via micropip.
@@ -47,12 +54,13 @@ const pypiPackages = [
 	'markdown',
 	'plotly',
 	'qrcode',
-	'cerberus'
+	'cerberus',
+	'validators'
 ];
 
 import { loadPyodide } from 'pyodide';
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
-import { writeFile, readFile, copyFile, readdir, rmdir, access } from 'fs/promises';
+import { writeFile, readFile, copyFile, readdir, rm, access } from 'fs/promises';
 
 /**
  * Loading network proxy configurations from the environment variables.
@@ -106,7 +114,7 @@ async function downloadPackages() {
 
 		if (pyodideVersion !== pyodidePackageVersion) {
 			console.log('Pyodide version mismatch, removing static/pyodide directory');
-			await rmdir('static/pyodide', { recursive: true });
+			await rm('static/pyodide', { recursive: true, force: true });
 		}
 	} catch (err) {
 		console.log('Pyodide package not found, proceeding with download.', err);
