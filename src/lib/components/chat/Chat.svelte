@@ -110,6 +110,7 @@
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
 	import Placeholder from './Placeholder.svelte';
+	import ChatStartBackground from './ChatStartBackground.svelte';
 	import FilesOverlay from './MessageInput/FilesOverlay.svelte';
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
@@ -225,6 +226,7 @@
 		messages: {},
 		currentId: null
 	};
+	$: hasChatMessages = createMessagesList(history, history.currentId).length > 0;
 
 	let taskIds = null;
 
@@ -3175,6 +3177,9 @@
 			<PaneGroup direction="horizontal" class="w-full h-full">
 				<Pane defaultSize={50} minSize={30} class="h-full flex relative max-w-full flex-col">
 					<FilesOverlay show={dragged} />
+					{#if hasChatMessages}
+						<ChatStartBackground mode="ambient" active={generating} />
+					{/if}
 					<Navbar
 						bind:this={navbarElement}
 						{readOnly}
@@ -3238,7 +3243,7 @@
 					/>
 
 					<div id="chat-pane" class="flex flex-col flex-auto z-10 w-full @container overflow-auto">
-						{#if ($settings?.landingPageMode === 'chat' && !$selectedFolder) || createMessagesList(history, history.currentId).length > 0}
+						{#if ($settings?.landingPageMode === 'chat' && !$selectedFolder) || hasChatMessages}
 							<div
 								class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
 								id="messages-container"

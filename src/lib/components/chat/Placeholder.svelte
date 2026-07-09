@@ -4,7 +4,9 @@
 	import DOMPurify from 'dompurify';
 
 	import { onMount, getContext, tick, createEventDispatcher } from 'svelte';
-	import { blur, fade } from 'svelte/transition';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
+	import { fade } from 'svelte/transition';
 
 	const dispatch = createEventDispatcher();
 
@@ -18,10 +20,11 @@
 		temporaryChatEnabled,
 		selectedFolder,
 		chats,
-		currentChatPage
+		currentChatPage,
+		type Model
 	} from '$lib/stores';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { getChatGreeting } from '$lib/utils/chatGreeting';
 
 	import Suggestions from './Suggestions.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -29,8 +32,9 @@
 	import MessageInput from './MessageInput.svelte';
 	import FolderPlaceholder from './Placeholder/FolderPlaceholder.svelte';
 	import FolderTitle from './Placeholder/FolderTitle.svelte';
+	import ChatStartBackground from './ChatStartBackground.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
@@ -68,12 +72,20 @@
 
 	let models = [];
 	let selectedModelIdx = 0;
+	let greetingDate = new Date();
+	let backgroundPulseKey = 0;
+	let backgroundActive = false;
 
 	$: if (selectedModels.length > 0) {
 		selectedModelIdx = models.length - 1;
 	}
 
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
+	$: greeting = getChatGreeting({
+		name: $user?.name,
+		date: greetingDate,
+		seed: `${selectedModels.join('|')}-${$i18n.language}`
+	});
 
 	// True when viewing a shared folder the current user doesn't own AND lacks write access
 	$: folderReadOnly =
@@ -83,23 +95,41 @@
 
 	// True when the current user does NOT own this folder (hide management menus)
 	$: folderNotOwned = $selectedFolder != null && $selectedFolder.user_id !== $user?.id;
+
+	const handleSubmit = (detail) => {
+		backgroundPulseKey += 1;
+		dispatch('submit', detail);
+	};
 </script>
 
-<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 text-center">
-	{#if $temporaryChatEnabled}
-		<Tooltip
-			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
-			className="w-full flex justify-center mb-0.5"
-			placement="top"
-		>
-			<div class="flex items-center gap-2 text-gray-500 text-base my-2 w-fit">
-				<EyeSlash strokeWidth="2.5" className="size-4" />{$i18n.t('Temporary Chat')}
-			</div>
-		</Tooltip>
-	{/if}
+<div
+	class="relative isolate m-auto w-full max-w-6xl translate-y-6 px-2 py-24 text-center @2xl:px-20"
+	on:focusin={() => {
+		backgroundActive = true;
+	}}
+	on:focusout={(event) => {
+		if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+			backgroundActive = false;
+		}
+	}}
+>
+	<ChatStartBackground pulseKey={backgroundPulseKey} active={backgroundActive} />
+	<div class="mb-0.5 flex h-8 w-full items-center justify-center">
+		{#if $temporaryChatEnabled}
+			<Tooltip
+				content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
+				className="flex justify-center"
+				placement="top"
+			>
+				<div class="flex w-fit items-center gap-2 text-base text-gray-500">
+					<EyeSlash strokeWidth="2.5" className="size-4" />{$i18n.t('Temporary Chat')}
+				</div>
+			</Tooltip>
+		{/if}
+	</div>
 
 	<div
-		class="w-full text-3xl text-gray-800 dark:text-gray-100 text-center flex items-center gap-4 font-primary"
+		class="flex w-full items-center gap-4 text-center font-primary text-3xl text-gray-800 dark:text-gray-100"
 	>
 		<div class="w-full flex flex-col justify-center items-center">
 			{#if $selectedFolder}
@@ -118,62 +148,27 @@
 					}}
 				/>
 			{:else}
-				<div class="flex flex-row justify-center gap-2.5 @sm:gap-3 w-fit px-5 max-w-xl">
-					<div class="flex shrink-0 justify-center">
-						<div class="flex -space-x-4 mb-0.5" in:fade={{ duration: 100 }}>
-							{#each models as model, modelIdx}
-								<Tooltip
-									content={(models[modelIdx]?.info?.meta?.tags ?? [])
-										.map((tag) => tag.name.toUpperCase())
-										.join(', ')}
-									placement="top"
-								>
-									<button
-										aria-hidden={models.length <= 1}
-										aria-label={$i18n.t('Get information on {{name}} in the UI', {
-											name: models[modelIdx]?.name
-										})}
-										on:click={() => {
-											selectedModelIdx = modelIdx;
-										}}
-									>
-										<img
-											src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
-											class=" size-9 @sm:size-10 rounded-full border-[1px] border-gray-100 dark:border-none"
-											aria-hidden="true"
-											draggable="false"
-											on:error={(e) => {
-												e.currentTarget.src = '/favicon.png';
-											}}
-										/>
-									</button>
-								</Tooltip>
-							{/each}
-						</div>
-					</div>
-
+				<div class="flex flex-row justify-center w-fit px-5 max-w-xl">
 					<div
 						class=" text-3xl @sm:text-3xl line-clamp-1 flex items-center"
 						in:fade={{ duration: 100 }}
 					>
-						{#if models[selectedModelIdx]?.name}
-							<Tooltip
-								content={models[selectedModelIdx]?.name}
-								placement="top"
-								className=" flex items-center "
-							>
-								<span class="line-clamp-1">
-									{models[selectedModelIdx]?.name}
-								</span>
-							</Tooltip>
-						{:else}
-							{$i18n.t('Hello, {{name}}', { name: $user?.name })}
-						{/if}
+						{$i18n.t(greeting.key, greeting.params)}
 					</div>
 				</div>
 
 				<div class="flex mt-1 mb-2">
 					<div in:fade={{ duration: 100, delay: 50 }}>
+						{#if models[selectedModelIdx]?.name}
+							<Tooltip content={models[selectedModelIdx]?.name} placement="top" className=" w-fit">
+								<div
+									class="mt-0.5 px-2 text-sm font-normal text-gray-400 dark:text-gray-500 line-clamp-1"
+								>
+									{$i18n.t('Using {{model}}', { model: models[selectedModelIdx]?.name })}
+								</div>
+							</Tooltip>
+						{/if}
+
 						{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
 							<Tooltip
 								className=" w-fit"
@@ -247,7 +242,7 @@
 						{onUpload}
 						{onWebSearchToggle}
 						on:submit={(e) => {
-							dispatch('submit', e.detail);
+							handleSubmit(e.detail);
 						}}
 					/>
 				{/if}

@@ -1,34 +1,42 @@
 <script lang="ts">
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 
-	import { config, user, models as _models, temporaryChatEnabled } from '$lib/stores';
+	import { config, user, models as _models, temporaryChatEnabled, type Model } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 
-	import { blur, fade } from 'svelte/transition';
+	import { fade } from 'svelte/transition';
 
 	import Suggestions from './Suggestions.svelte';
 	import { sanitizeResponseContent } from '$lib/utils';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
+	import { getChatGreeting } from '$lib/utils/chatGreeting';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
-	export let modelIds = [];
-	export let models = [];
-	export let atSelectedModel;
+	export let modelIds: string[] = [];
+	export let models: (Model | undefined)[] = [];
+	export let atSelectedModel: Model | undefined;
 
 	export let onSelect = (e) => {};
 
 	let mounted = false;
 	let selectedModelIdx = 0;
+	let greetingDate = new Date();
 
 	$: if (modelIds.length > 0) {
 		selectedModelIdx = models.length - 1;
 	}
 
 	$: models = modelIds.map((id) => $_models.find((m) => m.id === id));
+	$: greeting = getChatGreeting({
+		name: $user?.name,
+		date: greetingDate,
+		seed: `${modelIds.join('|')}-${$i18n.language}`
+	});
 
 	onMount(() => {
 		mounted = true;
@@ -37,65 +45,37 @@
 
 {#key mounted}
 	<div class="m-auto w-full max-w-6xl px-8 lg:px-20">
-		<div class="flex justify-start">
-			<div class="flex -space-x-4 mb-0.5" in:fade={{ duration: 200 }}>
-				{#each models as model, modelIdx}
-					<button
-						on:click={() => {
-							selectedModelIdx = modelIdx;
-						}}
-					>
-						<Tooltip
-							content={DOMPurify.sanitize(
-								marked.parse(
-									sanitizeResponseContent(
-										models[selectedModelIdx]?.info?.meta?.description ?? ''
-									).replaceAll('\n', '<br>')
-								)
-							)}
-							placement="right"
-						>
-							<img
-								src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
-								class=" size-[2.7rem] rounded-full border-[1px] border-gray-100 dark:border-none"
-								alt="logo"
-								draggable="false"
-								on:error={(e) => {
-									e.currentTarget.src = '/favicon.png';
-								}}
-							/>
-						</Tooltip>
-					</button>
-				{/each}
-			</div>
+		<div class="mb-0.5 flex h-8 w-full items-center justify-start">
+			{#if $temporaryChatEnabled}
+				<Tooltip
+					content={$i18n.t(
+						"This chat won't appear in history and your messages will not be saved."
+					)}
+					className="flex justify-start"
+					placement="top"
+				>
+					<div class="flex w-fit items-center gap-2 text-lg text-gray-500">
+						<EyeSlash strokeWidth="2.5" className="size-5" />{$i18n.t('Temporary Chat')}
+					</div>
+				</Tooltip>
+			{/if}
 		</div>
 
-		{#if $temporaryChatEnabled}
-			<Tooltip
-				content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
-				className="w-full flex justify-start mb-0.5"
-				placement="top"
-			>
-				<div class="flex items-center gap-2 text-gray-500 text-lg mt-2 w-fit">
-					<EyeSlash strokeWidth="2.5" className="size-5" />{$i18n.t('Temporary Chat')}
-				</div>
-			</Tooltip>
-		{/if}
-
 		<div
-			class=" mt-2 mb-4 text-3xl text-gray-800 dark:text-gray-100 text-left flex items-center gap-4 font-primary"
+			class="mb-4 mt-2 flex items-center gap-4 text-left font-primary text-3xl text-gray-800 dark:text-gray-100"
 		>
 			<div>
-				<div class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
-					{#if models[selectedModelIdx]?.name}
-						{models[selectedModelIdx]?.name}
-					{:else}
-						{$i18n.t('Hello, {{name}}', { name: $user?.name })}
-					{/if}
+				<div class="line-clamp-1" in:fade={{ duration: 200 }}>
+					{$i18n.t(greeting.key, greeting.params)}
 				</div>
 
 				<div in:fade={{ duration: 200, delay: 200 }}>
 					{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
+						{#if models[selectedModelIdx]?.name}
+							<div class="mt-0.5 text-sm font-normal text-gray-400 dark:text-gray-500 line-clamp-1">
+								{$i18n.t('Using {{model}}', { model: models[selectedModelIdx]?.name })}
+							</div>
+						{/if}
 						<div
 							class="mt-0.5 text-base font-normal text-gray-500 dark:text-gray-400 line-clamp-3 markdown"
 						>
@@ -123,9 +103,9 @@
 								{/if}
 							</div>
 						{/if}
-					{:else}
+					{:else if models[selectedModelIdx]?.name}
 						<div class=" text-gray-400 dark:text-gray-500 line-clamp-1 font-p">
-							{$i18n.t('How can I help you today?')}
+							{$i18n.t('Using {{model}}', { model: models[selectedModelIdx]?.name })}
 						</div>
 					{/if}
 				</div>
