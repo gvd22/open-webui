@@ -2,6 +2,20 @@
 
 This file documents local experiments for the OpenWebUI chat background. These notes are for comparison while iterating; do not treat every section as a committed target.
 
+## Current Active Design Specification
+
+The code currently uses the Soft Cross Glow settings in `ChatStartBackground.svelte`, but the design is not approved as the preferred direction. This section captures the product/design wishes that should guide the next iteration.
+
+- Overall direction: Swiss/Bundesverwaltung inspired, calm, precise, institutional, and high quality.
+- Composition: central dynamic background behind greeting, logo, and chat input; normal chat may keep only a much weaker ambient version.
+- Color hierarchy: red and white should dominate; blue is only a restrained technical accent.
+- Blue tokens: dark accent `rgb(5 40 86)`, lighter accent `rgb(51 102 204)`.
+- Avoidance: do not create a France flag impression, avoid obvious blue-white-red vertical grouping, avoid gaming/RGB effects, avoid visible particle grid, and avoid explicit Swiss-cross symbolism.
+- Motion: visible but calm continuous movement, with slow evolving cycles and no hectic animation.
+- Accessibility: chat input text must stay readable; the input surface should remain semi-solid with a clear border and a visible blinking caret when focused, including the empty placeholder state before any text is typed.
+- Performance: keep the effect CSS-based, GPU-friendly, responsive, weak in normal chat, reduced on mobile, and disabled/simplified for `prefers-reduced-motion`.
+- Rejected references: Input-Centric Halo, Swiss Signal, and Soft Cross Glow are documented for comparison but should not be treated as the final direction.
+
 ## Baseline Swiss Dynamic Commit
 
 Committed feature baseline before later local experiments:
