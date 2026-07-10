@@ -124,7 +124,8 @@
 		left: 50%;
 		top: 50%;
 		z-index: -1;
-		width: min(1380px, 118vw);
+		width: min(1380px, 100%);
+		max-width: 100%;
 		height: min(700px, 76vh);
 		min-height: 390px;
 		pointer-events: none;
@@ -192,7 +193,8 @@
 
 		top: 46%;
 		z-index: 0;
-		width: min(1180px, 106vw);
+		width: min(1180px, 100%);
+		max-width: 100%;
 		height: min(620px, 74vh);
 		min-height: 360px;
 		mask-image:
@@ -418,7 +420,8 @@
 
 	@media (max-width: 768px) {
 		.ai-start-bg {
-			width: min(650px, 100vw);
+			width: 100%;
+			max-width: 100%;
 			height: min(560px, 72vh);
 			min-height: 360px;
 			--ai-bg-blur: 28px;
