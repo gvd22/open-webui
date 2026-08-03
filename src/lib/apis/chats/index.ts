@@ -1300,6 +1300,104 @@ export const updateChatById = async (
 	return res;
 };
 
+export const updateTransientCanvasDocument = async (
+	token: string,
+	chatId: string,
+	canvasId: string,
+	document: { title: string; content: string; title_edited: boolean }
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			},
+			body: JSON.stringify(document)
+		}
+	);
+
+	if (!res.ok) {
+		throw await res.json();
+	}
+
+	return res.json();
+};
+
+export const undoLastTransientCanvasAiUpdate = async (
+	token: string,
+	chatId: string,
+	canvasId: string
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}/undo-ai`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			}
+		}
+	);
+
+	if (!res.ok) {
+		throw await res.json();
+	}
+
+	return res.json();
+};
+
+export const selectTransientCanvasDocument = async (
+	token: string,
+	chatId: string,
+	canvasId: string
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}/select`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			}
+		}
+	);
+
+	if (!res.ok) {
+		throw await res.json();
+	}
+
+	return res.json();
+};
+
+export const promoteTransientCanvasDocument = async (
+	token: string,
+	chatId: string,
+	canvasId: string,
+	document: { title: string; content: string; html?: string; json?: object | null }
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}/promote`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			},
+			body: JSON.stringify(document)
+		}
+	);
+
+	if (!res.ok) {
+		throw await res.json();
+	}
+
+	return res.json();
+};
+
 export const compactChatById = async (token: string, id: string, model?: string | null) => {
 	let error = null;
 

@@ -1,0 +1,155 @@
+<script lang="ts">
+	import { getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
+
+	import { toast } from 'svelte-sonner';
+	import { selectTransientCanvasDocument } from '$lib/apis/chats';
+	import {
+		artifactCode,
+		artifactContents,
+		chatId,
+		showArtifacts,
+		showControls,
+		showEmbeds
+	} from '$lib/stores';
+	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
+	import { generateCanvasTitle, type CanvasNoteArtifact } from '../Artifacts/canvas';
+
+	const i18n: Writable<i18nType> = getContext('i18n');
+	type WorkspaceItem = {
+		canvasId?: string;
+		noteId?: string;
+		title?: string;
+		content?: string;
+		titleEdited?: boolean;
+		updatedAt?: number;
+		[key: string]: unknown;
+	};
+	const workspaceArtifacts = artifactContents as unknown as Writable<WorkspaceItem[] | null>;
+
+	export let name = '';
+	export let done = false;
+	export let artifact: CanvasNoteArtifact | undefined = undefined;
+	export let error = '';
+
+	const toolLabels: Record<string, { pending: string; complete: string }> = {
+		canvas_create_document: {
+			pending: 'Creating canvas',
+			complete: 'Canvas created'
+		},
+		canvas_update_document: {
+			pending: 'Updating canvas',
+			complete: 'Canvas updated'
+		},
+		canvas_select_document: {
+			pending: 'Opening canvas',
+			complete: 'Canvas opened'
+		},
+		canvas_list_documents: {
+			pending: 'Checking canvas documents',
+			complete: 'Canvas documents checked'
+		}
+	};
+	const errorLabels: Record<string, string> = {
+		canvas_create_document: 'Canvas konnte nicht erstellt werden',
+		canvas_update_document: 'Canvas konnte nicht aktualisiert werden',
+		canvas_select_document: 'Canvas konnte nicht geöffnet werden',
+		canvas_list_documents: 'Canvas-Dokumente konnten nicht geprüft werden'
+	};
+
+	$: label = toolLabels[name] ?? toolLabels.canvas_update_document;
+	$: errorLabel = errorLabels[name] ?? errorLabels.canvas_update_document;
+	$: title = artifact ? generateCanvasTitle(artifact.content, artifact.title) : '';
+
+	const openCanvas = async () => {
+		if (!artifact) return;
+
+		if ($chatId && artifact.canvasId) {
+			try {
+				const document = await selectTransientCanvasDocument(
+					localStorage.token,
+					$chatId,
+					artifact.canvasId
+				);
+				workspaceArtifacts.update((items) => {
+					let found = false;
+					const updatedItems = (items ?? []).map((item) => {
+						if (item?.canvasId !== artifact?.canvasId) {
+							return item;
+						}
+
+						found = true;
+						return {
+							...item,
+							title: document.title ?? item.title,
+							content: document.content ?? item.content,
+							titleEdited: Boolean(document.title_edited),
+							updatedAt: document.updated_at ?? item.updatedAt,
+							noteId: document.note_id ?? item.noteId
+						};
+					});
+
+					return found ? updatedItems : [...updatedItems, artifact as unknown as WorkspaceItem];
+				});
+			} catch {
+				toast.error($i18n.t('Document could not be opened'));
+				return;
+			}
+		}
+
+		artifactCode.set(artifact.canvasId || artifact.noteId || artifact.content);
+		showEmbeds.set(false);
+		if (!$showArtifacts) showArtifacts.set(true);
+		if (!$showControls) showControls.set(true);
+	};
+</script>
+
+{#if artifact && done && !error}
+	<button
+		type="button"
+		class="w-fit py-1 text-left text-[0.9375rem] text-gray-500 transition hover:text-gray-700 dark:hover:text-gray-300"
+		aria-label={`${$i18n.t(label.complete)}: ${title}`}
+		on:click={openCanvas}
+	>
+		<span class="flex w-full max-w-full items-center gap-1.5 font-normal">
+			<span class="text-emerald-500 dark:text-emerald-400">
+				<CheckCircle className="size-4" strokeWidth="2" />
+			</span>
+			<span class="max-w-72 flex-1 truncate text-black dark:text-white"
+				>{$i18n.t(label.complete)}: {title}</span
+			>
+		</span>
+	</button>
+{:else}
+	<div
+		class="w-fit py-1 text-[0.9375rem] text-gray-500 dark:text-gray-400"
+		role={error ? 'alert' : 'status'}
+		aria-live="polite"
+	>
+		<span class="flex w-full max-w-full items-center gap-1.5 font-normal {error ? '' : 'shimmer'}">
+			{#if error}
+				<span class="text-red-600 dark:text-red-400">
+					<XMark className="size-4" strokeWidth="2" />
+				</span>
+			{:else if done}
+				<span class="text-emerald-500 dark:text-emerald-400">
+					<CheckCircle className="size-4" strokeWidth="2" />
+				</span>
+			{:else}
+				<span><Spinner className="size-4" /></span>
+			{/if}
+			<span
+				class="max-w-72 flex-1 truncate {error
+					? 'text-red-700 dark:text-red-300'
+					: 'text-black dark:text-white'}"
+			>
+				{$i18n.t(error ? errorLabel : done ? label.complete : label.pending)}{title
+					? `: ${title}`
+					: ''}
+			</span>
+		</span>
+	</div>
+{/if}

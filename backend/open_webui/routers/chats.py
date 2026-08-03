@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 from uuid import uuid4
 
@@ -32,14 +33,22 @@ from open_webui.models.chats import (
     MessageStats,
 )
 from open_webui.models.folders import Folders
+from open_webui.models.notes import NoteForm, Notes
 from open_webui.models.shared_chats import SharedChatResponse, SharedChats
 from open_webui.models.tags import TagModel, Tags
-from open_webui.socket.main import get_event_emitter
+from open_webui.socket.main import get_event_emitter, sio
 from open_webui.tasks import has_active_tasks, stop_item_tasks
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.auth import bearer_security, get_admin_user, get_current_user, get_verified_user
 from open_webui.utils.chat_fork import build_fork_history
+from open_webui.utils.canvas import (
+    CANVAS_DOCUMENTS_KEY,
+    build_canvas_note_content,
+    generate_canvas_title,
+    set_active_canvas_document,
+    sync_linked_canvas_note_content,
+)
 from open_webui.utils.context_compaction import compact_chat_branch, get_chat_context_usage
 from open_webui.utils.misc import get_message_list
 from open_webui.utils.models import get_all_models
@@ -51,7 +60,6 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 SEARCH_FILTER_PREFIXES = ('tag:', 'folder:', 'pinned:', 'archived:', 'shared:')
-
 CHAT_CONFIG_KEYS = {
     'CONTEXT_COMPACTION_MODEL': 'chat.context_compaction.model',
     'ENABLE_CONTEXT_COMPACTION': 'chat.context_compaction.enable',
@@ -1343,6 +1351,222 @@ async def get_chat_by_id(id: str, user=Depends(get_verified_user), db: AsyncSess
 ############################
 # UpdateChatById
 ############################
+
+
+class CanvasDocumentForm(BaseModel):
+    """User-authored edits for one transient Canvas document in a chat."""
+
+    title: str
+    content: str
+    title_edited: bool = False
+
+
+class CanvasPromotionForm(BaseModel):
+    title: str
+    content: str
+    html: str | None = None
+    json: dict | None = None
+
+
+@router.post('/{id}/canvas/{canvas_id}/undo-ai')
+async def undo_last_canvas_ai_update(
+    request: Request,
+    id: str,
+    canvas_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Restore exactly the state before the most recent Canvas tool update."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+    document = documents.get(canvas_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Canvas document not found in this chat.')
+
+    previous = document.get('last_ai_update')
+    if not isinstance(previous, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='No AI Canvas update to undo.')
+
+    restored_document = {
+        **document,
+        'title': previous.get('title', document.get('title', '')),
+        'content': previous.get('content', document.get('content', '')),
+        'title_edited': bool(previous.get('title_edited', False)),
+        'last_ai_update': None,
+        'updated_at': int(time.time()),
+    }
+    documents[canvas_id] = restored_document
+    chat_data[CANVAS_DOCUMENTS_KEY] = documents
+    chat_data = set_active_canvas_document(chat_data, canvas_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+
+    try:
+        updated_note = await sync_linked_canvas_note_content(
+            restored_document.get('note_id'), user.id, restored_document['content'], db=db
+        )
+        if updated_note:
+            await sio.emit('events:note', updated_note.model_dump(), to=f'note:{updated_note.id}')
+            await publish_event(
+                request,
+                EVENTS.NOTE_UPDATED,
+                actor=user,
+                subject_id=updated_note.id,
+                data={'title': updated_note.title},
+            )
+    except Exception:
+        log.exception('Unable to synchronize reverted Canvas Note canvas_id=%s', canvas_id)
+
+    return {'canvasId': canvas_id, **restored_document}
+
+
+@router.post('/{id}/canvas/{canvas_id}')
+async def update_transient_canvas_document(
+    request: Request,
+    id: str,
+    canvas_id: str,
+    form_data: CanvasDocumentForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Persist a direct edit without promoting the Canvas to a Note."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+    document = documents.get(canvas_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Canvas document not found in this chat.')
+
+    next_title = form_data.title.strip() or generate_canvas_title(form_data.content)
+    has_manual_change = (
+        next_title != document.get('title', '')
+        or form_data.content != document.get('content', '')
+        or form_data.title_edited != bool(document.get('title_edited', False))
+    )
+    updated_document = {
+        **document,
+        'title': next_title,
+        'content': form_data.content,
+        'title_edited': form_data.title_edited,
+        # A one-step AI undo must never overwrite later manual edits.
+        'last_ai_update': None if has_manual_change else document.get('last_ai_update'),
+        'updated_at': int(time.time()),
+    }
+    documents[canvas_id] = updated_document
+    chat_data[CANVAS_DOCUMENTS_KEY] = documents
+    chat_data = set_active_canvas_document(chat_data, canvas_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+
+    try:
+        updated_note = await sync_linked_canvas_note_content(
+            updated_document.get('note_id'),
+            user.id,
+            updated_document['content'],
+            db=db,
+        )
+        if updated_note:
+            await sio.emit('events:note', updated_note.model_dump(), to=f'note:{updated_note.id}')
+            await publish_event(
+                request,
+                EVENTS.NOTE_UPDATED,
+                actor=user,
+                subject_id=updated_note.id,
+                data={'title': updated_note.title},
+            )
+    except Exception:
+        # Keep local Canvas editing available even when a linked Note was removed.
+        log.exception('Unable to synchronize linked Canvas Note canvas_id=%s', canvas_id)
+
+    return {'canvasId': canvas_id, **documents[canvas_id]}
+
+
+@router.post('/{id}/canvas/{canvas_id}/select')
+async def select_transient_canvas_document(
+    id: str,
+    canvas_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Select a transient Canvas and return its canonical current state."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+    document = documents.get(canvas_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Canvas document not found in this chat.')
+
+    chat_data = set_active_canvas_document(chat_data, canvas_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+    return {'canvasId': canvas_id, **document}
+
+
+@router.post('/{id}/canvas/{canvas_id}/promote')
+async def promote_transient_canvas_document(
+    request: Request,
+    id: str,
+    canvas_id: str,
+    form_data: CanvasPromotionForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Create exactly one Note from a transient Canvas document on explicit request."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+    document = documents.get(canvas_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Canvas document not found in this chat.')
+
+    existing_note_id = document.get('note_id')
+    if existing_note_id:
+        note = await Notes.get_note_by_id(existing_note_id, db=db)
+        if note and note.user_id == user.id:
+            return note
+
+    note = await Notes.insert_new_note(
+        user.id,
+        NoteForm(
+            title=form_data.title.strip() or 'Neuer Entwurf',
+            data={'content': build_canvas_note_content(form_data.content, form_data.html, form_data.json)},
+            meta={'source': 'canvas'},
+            access_grants=[],
+        ),
+        db=db,
+    )
+    if not note:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Canvas note could not be created.')
+
+    documents[canvas_id] = {
+        **document,
+        'title': form_data.title.strip(),
+        'content': form_data.content,
+        'title_edited': True,
+        'note_id': note.id,
+        'updated_at': int(time.time()),
+    }
+    chat_data[CANVAS_DOCUMENTS_KEY] = documents
+    chat_data = set_active_canvas_document(chat_data, canvas_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+    await publish_event(
+        request,
+        EVENTS.NOTE_CREATED,
+        actor=user,
+        subject_id=note.id,
+        data={'title': note.title},
+    )
+    return note
 
 
 @router.post('/{id}', response_model=ChatResponse | None)

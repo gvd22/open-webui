@@ -311,3 +311,7 @@ cypress/videos
 cypress/screenshots
 .vscode/settings.json
 .cptr
+
+.superpowers
+.tmp
+.codex-dev-data

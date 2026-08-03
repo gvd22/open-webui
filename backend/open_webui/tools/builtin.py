@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Literal, Optional
 
 from fastapi import HTTPException, Request
@@ -59,12 +60,65 @@ from open_webui.tasks import stop_item_tasks
 from open_webui.events import EVENTS, publish_event
 from open_webui.socket.main import sio
 from open_webui.utils.chat_id import is_saved_chat_id
+from open_webui.utils.canvas import (
+    CANVAS_ACTIVE_DOCUMENT_KEY,
+    CANVAS_DOCUMENTS_KEY,
+    CANVAS_MAX_DOCUMENT_COUNT,
+    build_canvas_capacity_notice,
+    canvas_document_limit_reached,
+    generate_canvas_title,
+    set_active_canvas_document,
+    sync_linked_canvas_note_content,
+)
 from open_webui.utils.notifications import notify_target
 from open_webui.utils.sanitize import sanitize_code
 
 log = logging.getLogger(__name__)
 
 MAX_KNOWLEDGE_BASE_SEARCH_ITEMS = 10_000
+
+
+def _canvas_tool_error(message: str) -> str:
+    return json.dumps({'type': 'canvas.error', 'message': message}, ensure_ascii=False)
+
+
+def _canvas_tool_document(document: dict, warning: str = '') -> str:
+    return json.dumps(
+        {
+            'type': 'canvas.document',
+            'canvasId': document['canvas_id'],
+            'title': document.get('title', ''),
+            'content': {'md': document.get('content', '')},
+            'updatedAt': document.get('updated_at'),
+            'titleEdited': bool(document.get('title_edited', False)),
+            'noteId': document.get('note_id'),
+            'canUndoAiUpdate': bool(document.get('last_ai_update')),
+            **({'warning': warning} if warning else {}),
+        },
+        ensure_ascii=False,
+    )
+
+
+async def _get_canvas_chat(__chat_id__: str | None, __user__: dict | None):
+    """Return the owner-visible chat that holds transient Canvas documents."""
+    if not is_saved_chat_id(__chat_id__):
+        return None
+
+    chat = await Chats.get_chat_by_id(__chat_id__)
+    user_id = (__user__ or {}).get('id')
+    return chat if chat and chat.user_id == user_id else None
+
+
+async def _update_canvas_documents(
+    chat,
+    documents: dict,
+    active_canvas_id: str | None = None,
+) -> None:
+    chat_data = dict(chat.chat or {})
+    chat_data[CANVAS_DOCUMENTS_KEY] = documents
+    if active_canvas_id:
+        chat_data = set_active_canvas_document(chat_data, active_canvas_id)
+    await Chats.update_chat_by_id(chat.id, chat_data)
 
 
 async def _has_write_access_to_note(note, user_id: str) -> bool:
@@ -111,6 +165,186 @@ async def _has_read_access_to_file(
         file_id=file.id,
         access_type='read',
         user=UserModel(**{'id': user_id, 'role': user_role}),
+    )
+
+
+# =============================================================================
+# CHAT CANVAS TOOLS
+# =============================================================================
+
+
+async def canvas_create_document(
+    content: str,
+    title: str = '',
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Create a new editable Canvas document in this chat.
+
+    Canvas is a transient working document. Use this only when the user asks for
+    a separate or new document. If a Canvas document is already active and the
+    user asks to continue, expand, rewrite, correct, or edit it, use
+    canvas_update_document instead. Return the complete document content, not a
+    description of the change.
+
+    A chat can contain at most 15 Canvas documents. A capacity warning is
+    returned from the 10th document onward.
+
+    :param content: Complete Markdown content for the new document.
+    :param title: Optional short document title. Leave empty when the content should determine it.
+    :return: The Canvas document, including its stable canvasId.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+
+    now = int(time.time())
+    canvas_id = f'canvas-{uuid.uuid4()}'
+    documents = dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {})
+    if canvas_document_limit_reached(len(documents)):
+        return _canvas_tool_error(
+            f'This chat already contains the maximum of {CANVAS_MAX_DOCUMENT_COUNT} '
+            'Canvas documents. Edit an existing document, save work to Notes, or start a new chat.'
+        )
+
+    document = {
+        'canvas_id': canvas_id,
+        'title': generate_canvas_title(content, title),
+        'content': content,
+        'title_edited': bool(title.strip()),
+        'created_at': now,
+        'updated_at': now,
+    }
+    documents[canvas_id] = document
+    await _update_canvas_documents(chat, documents, canvas_id)
+    return _canvas_tool_document(document, build_canvas_capacity_notice(len(documents)))
+
+
+async def canvas_update_document(
+    canvas_id: str,
+    content: str,
+    title: str | None = None,
+    __request__: Request = None,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Replace the complete content of an existing Canvas document in this chat.
+
+    Use the canvasId returned by a previous Canvas tool call. This updates that
+    same document rather than creating another one. Return the complete updated
+    Markdown content.
+
+    :param canvas_id: Stable ID of the Canvas document to update.
+    :param content: Complete Markdown content after the requested edit.
+    :param title: Optional replacement title. Omit it to keep the current title.
+    :return: The updated Canvas document.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+
+    documents = dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {})
+    document = documents.get(canvas_id)
+    if not document:
+        return _canvas_tool_error('Canvas document not found in this chat.')
+
+    title_was_supplied = title is not None and bool(title.strip())
+    document = {
+        **document,
+        'content': content,
+        'updated_at': int(time.time()),
+        'last_ai_update': {
+            'title': document.get('title', ''),
+            'content': document.get('content', ''),
+            'title_edited': bool(document.get('title_edited', False)),
+        },
+        **(
+            {
+                'title': generate_canvas_title(content, title or ''),
+                'title_edited': title_was_supplied,
+            }
+            if title_was_supplied
+            else (
+                {'title': generate_canvas_title(content), 'title_edited': False}
+                if not document.get('title_edited', False)
+                else {}
+            )
+        ),
+    }
+    documents[canvas_id] = document
+    await _update_canvas_documents(chat, documents, canvas_id)
+
+    try:
+        updated_note = await sync_linked_canvas_note_content(
+            document.get('note_id'),
+            (__user__ or {}).get('id', ''),
+            content,
+        )
+        if updated_note and __request__ is not None:
+            await _emit_note_updated(__request__, __user__, updated_note)
+    except Exception:
+        # A missing/deleted Note must not make its chat-scoped Canvas unusable.
+        log.exception('Unable to synchronize linked Canvas Note canvas_id=%s', canvas_id)
+
+    return _canvas_tool_document(document)
+
+
+async def canvas_select_document(
+    canvas_id: str,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Open an existing Canvas document from this chat.
+
+    :param canvas_id: Stable ID of the Canvas document to open.
+    :return: The selected Canvas document.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+
+    document = ((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}).get(canvas_id)
+    if not document:
+        return _canvas_tool_error('Canvas document not found in this chat.')
+    await _update_canvas_documents(
+        chat,
+        dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}),
+        canvas_id,
+    )
+    return _canvas_tool_document(document)
+
+
+async def canvas_list_documents(
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """List the transient Canvas documents available in this chat.
+
+    :return: Canvas IDs, titles, and update times for this chat.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+
+    documents = (chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}
+    warning = build_canvas_capacity_notice(len(documents))
+    return json.dumps(
+        {
+            'type': 'canvas.documents',
+            'documentCount': len(documents),
+            'maxDocuments': CANVAS_MAX_DOCUMENT_COUNT,
+            **({'warning': warning} if warning else {}),
+            'documents': [
+                {
+                    'canvasId': document['canvas_id'],
+                    'title': document.get('title', ''),
+                    'updatedAt': document.get('updated_at'),
+                    'selected': document['canvas_id'] == (chat.chat or {}).get(CANVAS_ACTIVE_DOCUMENT_KEY),
+                }
+                for document in documents.values()
+            ],
+        },
+        ensure_ascii=False,
     )
 
 

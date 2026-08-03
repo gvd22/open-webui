@@ -73,6 +73,7 @@
 		getPinnedNoteList
 	} from '$lib/apis/notes';
 	import { deleteChatById } from '$lib/apis/chats';
+	import { canSynchronizeCanvasDocumentChange } from '$lib/components/chat/Artifacts/canvas';
 
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import FileItem from '../common/FileItem.svelte';
@@ -87,14 +88,21 @@
 	import RecordMenu from './RecordMenu.svelte';
 	import NoteMenu from './Notes/NoteMenu.svelte';
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
-	import Sparkles from '../icons/Sparkles.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import ArrowUturnLeft from '../icons/ArrowUturnLeft.svelte';
 	import ArrowUturnRight from '../icons/ArrowUturnRight.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
 	import ChatBubbleOval from '../icons/ChatBubbleOval.svelte';
+	import XMark from '../icons/XMark.svelte';
 
 	export let id: null | string = null;
+	export let canvas = false;
+	export let onClose: () => void = () => {};
+	export let onTitleChange: (title: string) => void = () => {};
+	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
+	export let showCanvasClose = true;
+	export let canUndoCanvasAiUpdate = false;
+	export let onUndoCanvasAiUpdate: () => void = () => {};
 
 	let editor = null;
 	let note = null;
@@ -148,6 +156,8 @@
 	let pendingNoteEvent = null;
 	let pendingNoteEventTimer = null;
 	let lastLocalContentChangeAt = 0;
+	let applyingExternalContent = false;
+	let canvasDocumentChangeSuppressedUntil = 0;
 	$: noteAttachmentFiles = (files ?? []).filter(
 		(file) => file?.type !== 'image' && !(file?.content_type ?? '').startsWith('image/')
 	);
@@ -252,6 +262,13 @@
 			return false;
 		}
 
+		if ((incomingContent?.md ?? '') === (note?.data?.content?.md ?? '')) {
+			if (_note.updated_at) {
+				note.updated_at = _note.updated_at;
+			}
+			return false;
+		}
+
 		const elapsed = Date.now() - lastLocalContentChangeAt;
 		if (elapsed < 800) {
 			pendingNoteEvent = _note;
@@ -294,8 +311,15 @@
 		}
 
 		const selection = editor.state.selection;
+		// RichTextInput can emit an onChange after setContent returns. Do not echo a
+		// model-driven Note event back into the Canvas document as a local edit.
+		if (canvas) {
+			canvasDocumentChangeSuppressedUntil = Date.now() + 1500;
+		}
+		applyingExternalContent = true;
 		editor.commands.setContent(incomingContent.html || marked.parse(incomingContent.md ?? ''));
 		await tick();
+		applyingExternalContent = false;
 
 		const docSize = editor.state.doc.content.size;
 		const from = Math.min(selection.from, docSize);
@@ -948,7 +972,6 @@ ${content}
 		if (pendingNoteEventTimer) {
 			clearTimeout(pendingNoteEventTimer);
 		}
-
 		const dropzoneElement = document.getElementById('note-editor');
 
 		if (dropzoneElement) {
@@ -1004,7 +1027,7 @@ ${content}
 </DeleteConfirmDialog>
 
 <PaneGroup direction="horizontal" class="w-full h-full">
-	<Pane defaultSize={70} minSize={30} class="h-full flex flex-col w-full relative">
+	<Pane defaultSize={canvas ? 100 : 70} minSize={30} class="h-full flex flex-col w-full relative">
 		<div class="relative flex-1 w-full h-full flex justify-center pt-2" id="note-editor">
 			{#if loading}
 				<div class=" absolute top-0 bottom-0 left-0 right-0 flex">
@@ -1016,7 +1039,7 @@ ${content}
 				<div class=" w-full flex flex-col {loading ? 'opacity-20' : ''}">
 					<div class="shrink-0 w-full flex justify-between items-center px-3">
 						<div class="w-full min-w-0 flex items-center">
-							{#if $mobile}
+							{#if $mobile && !canvas}
 								<Tooltip
 									content={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
 								>
@@ -1042,6 +1065,10 @@ ${content}
 									: ''}"
 								type="text"
 								bind:value={note.title}
+								on:input={() => {
+									onTitleChange(note.title);
+									onDocumentChange({ title: note.title });
+								}}
 								placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
 								disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
 									titleGenerating}
@@ -1061,7 +1088,7 @@ ${content}
 								}}
 							/>
 
-							{#if titleInputFocused && !titleGenerating}
+							{#if !canvas && titleInputFocused && !titleGenerating}
 								<div
 									class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
 								>
@@ -1090,7 +1117,7 @@ ${content}
 							{/if}
 
 							<div class="flex items-center gap-0.5 shrink-0">
-								{#if note?.write_access}
+								{#if note?.write_access && !canvas}
 									{#if editor}
 										<div>
 											<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
@@ -1120,18 +1147,20 @@ ${content}
 									{/if}
 								{/if}
 
-								<Tooltip content={$i18n.t('Chat')} placement="top">
-									<button
-										type="button"
-										class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg"
-										aria-label={$i18n.t('Chat')}
-										on:click={openNoteChat}
-									>
-										<ChatBubbleOval className="size-4" strokeWidth="1.8" />
-									</button>
-								</Tooltip>
+								{#if !canvas}
+									<Tooltip content={$i18n.t('Chat')} placement="top">
+										<button
+											type="button"
+											class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg"
+											aria-label={$i18n.t('Chat')}
+											on:click={openNoteChat}
+										>
+											<ChatBubbleOval className="size-4" strokeWidth="1.8" />
+										</button>
+									</Tooltip>
+								{/if}
 
-								{#if note?.write_access}
+								{#if note?.write_access && !canvas}
 									<RecordMenu
 										onRecord={async () => {
 											displayMediaRecord = false;
@@ -1187,51 +1216,79 @@ ${content}
 									</RecordMenu>
 								{/if}
 
-								<NoteMenu
-									onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
-									onDownload={(type) => {
-										downloadHandler(type);
-									}}
-									onCopyLink={async () => {
-										const baseUrl = window.location.origin;
-										const res = await copyToClipboard(`${baseUrl}/notes/${note.id}`);
+								{#if !canvas}
+									<NoteMenu
+										onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
+										onDownload={(type) => {
+											downloadHandler(type);
+										}}
+										onCopyLink={async () => {
+											const baseUrl = window.location.origin;
+											const res = await copyToClipboard(`${baseUrl}/notes/${note.id}`);
 
-										if (res) {
-											toast.success($i18n.t('Copied link to clipboard'));
-										} else {
-											toast.error($i18n.t('Failed to copy link'));
-										}
-									}}
-									onCopyToClipboard={async () => {
-										const res = await copyToClipboard(
-											note.data.content.md,
-											note.data.content.html,
-											true
-										).catch((error) => {
-											toast.error(`${error}`);
-											return null;
-										});
+											if (res) {
+												toast.success($i18n.t('Copied link to clipboard'));
+											} else {
+												toast.error($i18n.t('Failed to copy link'));
+											}
+										}}
+										onCopyToClipboard={async () => {
+											const res = await copyToClipboard(
+												note.data.content.md,
+												note.data.content.html,
+												true
+											).catch((error) => {
+												toast.error(`${error}`);
+												return null;
+											});
 
-										if (res) {
-											toast.success($i18n.t('Copied to clipboard'));
-										}
-									}}
-									onDelete={() => {
-										showDeleteConfirm = true;
-									}}
-									isPinned={$pinnedNotes.some((n) => n.id === note.id)}
-									onPin={async () => {
-										await toggleNotePinnedStatusById(localStorage.token, note.id);
-										note = await getNoteById(localStorage.token, note.id);
-										pinnedNotes.set(await getPinnedNoteList(localStorage.token).catch(() => []));
-									}}
-								>
-									<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
-										<EllipsisHorizontal className="size-5" />
-									</div>
-								</NoteMenu>
+											if (res) {
+												toast.success($i18n.t('Copied to clipboard'));
+											}
+										}}
+										onDelete={() => {
+											showDeleteConfirm = true;
+										}}
+										isPinned={$pinnedNotes.some((n) => n.id === note.id)}
+										onPin={async () => {
+											await toggleNotePinnedStatusById(localStorage.token, note.id);
+											note = await getNoteById(localStorage.token, note.id);
+											pinnedNotes.set(await getPinnedNoteList(localStorage.token).catch(() => []));
+										}}
+									>
+										<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
+											<EllipsisHorizontal className="size-5" />
+										</div>
+									</NoteMenu>
+								{/if}
 
-								{#if note?.write_access}
+								{#if canvas}
+									{#if canUndoCanvasAiUpdate}
+										<Tooltip content={$i18n.t('Undo AI change')}>
+											<button
+												type="button"
+												class="p-1 transition hover:bg-black/5 dark:hover:bg-white/5"
+												aria-label={$i18n.t('Undo AI change')}
+												on:click={onUndoCanvasAiUpdate}
+											>
+												<ArrowUturnLeft className="size-4" />
+											</button>
+										</Tooltip>
+									{/if}
+
+									{#if showCanvasClose}
+										<Tooltip content={$i18n.t('Close')}>
+											<button
+												type="button"
+												class="p-1 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 transition rounded-lg"
+												aria-label={$i18n.t('Close')}
+												on:click={onClose}
+											>
+												<XMark className="size-4" />
+											</button>
+										</Tooltip>
+									{/if}
+								{:else if note?.write_access}
 									<div class="ml-1.5">
 										<AccessButton
 											on:click={() => {
@@ -1372,6 +1429,15 @@ ${content}
 								lastLocalContentChangeAt = Date.now();
 								note.data.content.html = content.html;
 								note.data.content.md = content.md;
+								if (
+									!canvas ||
+									canSynchronizeCanvasDocumentChange(
+										applyingExternalContent,
+										canvasDocumentChangeSuppressedUntil
+									)
+								) {
+									onDocumentChange({ content: content.md });
+								}
 
 								if (editor) {
 									wordCount = editor.storage.characterCount.words();
@@ -1466,46 +1532,48 @@ ${content}
 			</div>
 		{/if}
 	</Pane>
-	<NotePanel bind:show={showNoteChat}>
-		{#if noteChatLoading}
-			<div class="flex h-full items-center justify-center">
-				<Spinner className="size-5" />
-			</div>
-		{:else if noteChatId || noteChatDraftKey}
-			<Chat
-				embedded={true}
-				chatIdProp={noteChatId ?? ''}
-				embeddedChats={noteChats}
-				embeddedDraftKey={noteChatDraftKey}
-				suggestedPrompts={noteChatSuggestedPrompts}
-				selectedText={selectedContent?.text ?? ''}
-				onInsertToNote={insertHandler}
-				onNewEmbeddedChat={createNoteChat}
-				onCreateEmbeddedChat={createNoteChatOnFirstMessage}
-				onSelectEmbeddedChat={(chatId) => {
-					if (!chatId || chatId === noteChatId) return;
-					noteChatId = chatId;
-					noteChatDraftKey = '';
-				}}
-				onDeleteEmbeddedChat={deleteNoteChat}
-				onEmbeddedChatTitle={(chatId, title) => {
-					noteChats = noteChats.map((chat) =>
-						chat.id === chatId
-							? {
-									...chat,
-									title,
-									chat: {
-										...(chat.chat ?? {}),
-										title
+	{#if !canvas}
+		<NotePanel bind:show={showNoteChat}>
+			{#if noteChatLoading}
+				<div class="flex h-full items-center justify-center">
+					<Spinner className="size-5" />
+				</div>
+			{:else if noteChatId || noteChatDraftKey}
+				<Chat
+					embedded={true}
+					chatIdProp={noteChatId ?? ''}
+					embeddedChats={noteChats}
+					embeddedDraftKey={noteChatDraftKey}
+					suggestedPrompts={noteChatSuggestedPrompts}
+					selectedText={selectedContent?.text ?? ''}
+					onInsertToNote={insertHandler}
+					onNewEmbeddedChat={createNoteChat}
+					onCreateEmbeddedChat={createNoteChatOnFirstMessage}
+					onSelectEmbeddedChat={(chatId) => {
+						if (!chatId || chatId === noteChatId) return;
+						noteChatId = chatId;
+						noteChatDraftKey = '';
+					}}
+					onDeleteEmbeddedChat={deleteNoteChat}
+					onEmbeddedChatTitle={(chatId, title) => {
+						noteChats = noteChats.map((chat) =>
+							chat.id === chatId
+								? {
+										...chat,
+										title,
+										chat: {
+											...(chat.chat ?? {}),
+											title
+										}
 									}
-								}
-							: chat
-					);
-				}}
-				onCloseEmbedded={() => {
-					showNoteChat = false;
-				}}
-			/>
-		{/if}
-	</NotePanel>
+								: chat
+						);
+					}}
+					onCloseEmbedded={() => {
+						showNoteChat = false;
+					}}
+				/>
+			{/if}
+		</NotePanel>
+	{/if}
 </PaneGroup>

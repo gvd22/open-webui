@@ -3,8 +3,10 @@ import { browser, dev } from '$app/environment';
 
 export const APP_NAME = 'Open WebUI';
 
-export const WEBUI_HOSTNAME = browser ? (dev ? `${location.hostname}:8080` : ``) : '';
-export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : ``) : ``;
+// Keep the dev browser on one origin. Vite proxies backend paths so embedded
+// clients do not need direct access to the backend port.
+export const WEBUI_HOSTNAME = browser ? (dev ? '' : ``) : '';
+export const WEBUI_BASE_URL = browser ? (dev ? '' : ``) : ``;
 export const WEBUI_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1`;
 
 export const OLLAMA_API_BASE_URL = `${WEBUI_BASE_URL}/ollama`;

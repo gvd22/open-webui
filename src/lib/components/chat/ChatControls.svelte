@@ -160,14 +160,15 @@
 	};
 
 	export const openPane = () => {
-		if (parseInt(localStorage?.chatControlsSize)) {
-			const container = document.getElementById(containerId);
-			let size = Math.floor(
-				(parseInt(localStorage?.chatControlsSize) / container.clientWidth) * 100
-			);
-			pane.resize(size);
+		const container = document.getElementById(containerId);
+		if (!container || !pane) return;
+
+		const savedWidth = parseInt(localStorage?.chatControlsSize);
+		const savedSize = savedWidth ? Math.floor((savedWidth / container.clientWidth) * 100) : minSize;
+		if ($showArtifacts) {
+			pane.resize(Math.min(68, Math.max(savedSize, 62)));
 		} else {
-			pane.resize(minSize);
+			pane.resize(savedSize);
 		}
 	};
 
@@ -203,6 +204,12 @@
 		handleMediaQuery(mediaQuery);
 
 		let resizeObserver: ResizeObserver | null = null;
+		const unsubscribeShowArtifacts = showArtifacts.subscribe(async (value) => {
+			if (value && paneReady && largeScreen) {
+				await tick();
+				openPane();
+			}
+		});
 		let isDestroyed = false;
 
 		// Wait for Svelte to render the Pane after largeScreen changed
@@ -251,6 +258,7 @@
 			isDestroyed = true;
 			paneReady = false;
 			resizeObserver?.disconnect();
+			unsubscribeShowArtifacts();
 			if (!largeScreen) {
 				showControls.set(false);
 			}

@@ -65,6 +65,7 @@
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
+	import { getCanvasNoteArtifactsFromOutput } from '../Artifacts/canvas';
 
 	interface MessageType {
 		id: string;
@@ -188,6 +189,21 @@
 	$: visibleResponseContent =
 		getOutputText(message.output) || removeAllDetails(message.content ?? '');
 	$: hasResponseContent = Boolean((message.content ?? '').trim() || message.output?.length);
+	$: previousCanvasIds = Array.from(
+		new Set(
+			createMessagesList(history, message.id)
+				.slice(0, -1)
+				.flatMap((previousMessage) =>
+					getCanvasNoteArtifactsFromOutput(previousMessage.output ?? []).map(
+						(artifact) => artifact.canvasId
+					)
+				)
+		)
+	);
+	const hasToolOutput = (_message: MessageType) =>
+		(_message?.output ?? []).some(
+			(item) => item?.type === 'function_call' || item?.type === 'function_call_output'
+		);
 
 	let edit = false;
 	let editedContent = '';
@@ -821,6 +837,7 @@
 									id={`${chatId}-${message.id}`}
 									content={message.content}
 									output={message.output}
+									{previousCanvasIds}
 									sources={message.sources}
 									floatingButtons={message?.done &&
 										!readOnly &&
@@ -1091,7 +1108,7 @@
 									</Tooltip>
 								{/if}
 
-								{#if !readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.tts ?? true))}
+								{#if !hasToolOutput(message) && !readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.tts ?? true))}
 									<Tooltip content={$i18n.t('Read Aloud')} placement="bottom">
 										<button
 											aria-label={$i18n.t('Read Aloud')}

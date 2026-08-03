@@ -1,3 +1,10 @@
+import {
+	getCanvasNoteArtifactsFromOutput,
+	getCanvasToolErrorFromOutput,
+	getCanvasToolWarningFromOutput,
+	type CanvasNoteArtifact
+} from '../Artifacts/canvas';
+
 export type OutputContentPart = {
 	type?: string;
 	text?: unknown;
@@ -13,7 +20,7 @@ export type OutputItem = {
 	arguments?: unknown;
 	content?: OutputContentPart[];
 	summary?: OutputContentPart[];
-	output?: OutputContentPart[];
+	output?: OutputContentPart[] | string;
 	files?: unknown;
 	embeds?: unknown;
 	code?: string;
@@ -56,7 +63,40 @@ export type OutputDisplayItem =
 			type: 'detail_group';
 			id: string;
 			tokens: OutputDetailToken[];
+	  }
+	| {
+			type: 'canvas';
+			id: string;
+			artifact: CanvasNoteArtifact;
+	  }
+	| {
+			type: 'canvas_activity';
+			id: string;
+			name: string;
+			done: boolean;
+			artifact?: CanvasNoteArtifact;
+			error?: string;
 	  };
+
+export function dedupeCanvasDisplayItems(
+	items: OutputDisplayItem[],
+	previousCanvasIds: string[] = []
+): OutputDisplayItem[] {
+	const seenCanvasIds = new Set(previousCanvasIds);
+
+	return items.filter((item) => {
+		if (item.type !== 'canvas') {
+			return true;
+		}
+
+		if (seenCanvasIds.has(item.artifact.canvasId)) {
+			return false;
+		}
+
+		seenCanvasIds.add(item.artifact.canvasId);
+		return true;
+	});
+}
 
 const GROUPABLE_OUTPUT_TYPES = new Set([
 	'reasoning',
@@ -72,6 +112,13 @@ const OPENAI_TOOL_NAMES: Record<string, string> = {
 	file_search_call: 'File Search',
 	computer_call: 'Computer Use'
 };
+
+const CANVAS_TOOL_NAMES = new Set([
+	'canvas_create_document',
+	'canvas_update_document',
+	'canvas_select_document',
+	'canvas_list_documents'
+]);
 
 function getTextFromParts(parts: OutputContentPart[] = []): string {
 	return parts
@@ -112,7 +159,12 @@ function getReasoningText(item: OutputItem): string {
 }
 
 function getToolResultText(item?: OutputItem): string {
-	return (item?.output ?? [])
+	const output =
+		typeof item?.output === 'string'
+			? [{ type: 'output_text', text: item.output }]
+			: (item?.output ?? []);
+
+	return output
 		.filter((part) => part?.type !== 'input_image')
 		.map((part) => {
 			if (part?.text === undefined || part?.text === null) {
@@ -267,10 +319,24 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	const displayItems: OutputDisplayItem[] = [];
 	const currentDetailTokens: OutputDetailToken[] = [];
 	const toolOutputByCallId: Record<string, OutputItem> = {};
+	const canvasToolCallIds = new Set<string>();
+	const canvasArtifactByCallId: Record<string, CanvasNoteArtifact> = {};
+	const canvasErrorByCallId: Record<string, string> = {};
 
 	for (const item of output) {
 		if (item?.type === 'function_call_output' && item.call_id) {
 			toolOutputByCallId[item.call_id] = item;
+			const canvasArtifact = getCanvasNoteArtifactsFromOutput([item])[0];
+			if (canvasArtifact) {
+				canvasToolCallIds.add(item.call_id);
+				if (canvasArtifact) {
+					canvasArtifactByCallId[item.call_id] = canvasArtifact;
+				}
+			}
+			const canvasError = getCanvasToolErrorFromOutput([item]);
+			if (canvasError) {
+				canvasErrorByCallId[item.call_id] = canvasError;
+			}
 		}
 	}
 
@@ -293,6 +359,55 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 
 	output.forEach((item, index) => {
 		if (item?.type === 'function_call_output') {
+			const canvasArtifacts = getCanvasNoteArtifactsFromOutput([item]);
+			if (canvasArtifacts.length > 0) {
+				flushDetails();
+				for (const artifact of canvasArtifacts) {
+					displayItems.push({
+						type: 'canvas',
+						id: artifact.canvasId,
+						artifact
+					});
+				}
+			}
+
+			const canvasError = getCanvasToolErrorFromOutput([item]);
+			if (canvasError) {
+				flushDetails();
+				displayItems.push({
+					type: 'message',
+					id: item.id ?? `canvas-error-${index}`,
+					text: canvasError
+				});
+			}
+
+			const canvasWarning = getCanvasToolWarningFromOutput([item]);
+			if (canvasWarning) {
+				flushDetails();
+				displayItems.push({
+					type: 'message',
+					id: `${item.id ?? `canvas-${index}`}-warning`,
+					text: canvasWarning
+				});
+			}
+			return;
+		}
+
+		if (
+			item?.type === 'function_call' &&
+			(CANVAS_TOOL_NAMES.has(item.name ?? '') ||
+				(item.call_id ? canvasToolCallIds.has(item.call_id) : false))
+		) {
+			flushDetails();
+			const token = buildToolCallToken(item, toolOutputByCallId);
+			displayItems.push({
+				type: 'canvas_activity',
+				id: `canvas-activity-${item.call_id ?? item.id ?? index}`,
+				name: item.name ?? 'canvas_update_document',
+				done: token.attributes.done === 'true',
+				artifact: item.call_id ? canvasArtifactByCallId[item.call_id] : undefined,
+				error: item.call_id ? canvasErrorByCallId[item.call_id] : undefined
+			});
 			return;
 		}
 

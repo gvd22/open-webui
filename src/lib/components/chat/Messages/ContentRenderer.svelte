@@ -74,6 +74,7 @@
 
 	export let history;
 	export let messageId;
+	export let previousCanvasIds = [];
 
 	export let selectedModels = [];
 
@@ -291,6 +292,7 @@
 			{editCodeBlock}
 			{topPadding}
 			{sourceIds}
+			{previousCanvasIds}
 			renderMarkdown={$settings?.renderMarkdownInAssistantMessages ?? true}
 			{formatMessageContent}
 			{onSourceClick}

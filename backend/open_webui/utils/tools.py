@@ -47,9 +47,14 @@ from open_webui.models.groups import Groups
 from open_webui.models.tools import Tools
 from open_webui.models.users import UserModel
 from open_webui.utils.chat_id import is_saved_chat_id
+from open_webui.utils.canvas import is_internal_note_chat
 from open_webui.tools.builtin import (
     add_memory,
     calculate_timestamp,
+    canvas_create_document,
+    canvas_list_documents,
+    canvas_select_document,
+    canvas_update_document,
     create_automation,
     create_calendar_event,
     create_tasks,
@@ -719,6 +724,23 @@ async def get_builtin_tools(
         is_builtin_tool_enabled('notes') and config.get('notes.enable') and await has_user_permission('notes')
     ):
         builtin_functions.extend([search_notes, view_note, write_note, replace_note_content])
+
+    # Canvas is intentionally opt-in per model. It persists only inside the
+    # chat until the user explicitly promotes the document to Notes in the UI.
+    if (
+        is_builtin_tool_enabled('canvas')
+        and get_model_capability('canvas', False)
+        and is_saved_chat_id(chat_id)
+        and not is_internal_note_chat(chat)
+    ):
+        builtin_functions.extend(
+            [
+                canvas_create_document,
+                canvas_update_document,
+                canvas_select_document,
+                canvas_list_documents,
+            ]
+        )
 
     # Channels tools - search channels and messages
     if is_builtin_tool_enabled('channels') and config.get('channels.enable') and await has_user_permission('channels'):

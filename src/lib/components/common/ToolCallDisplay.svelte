@@ -95,9 +95,16 @@
 
 	$: parsedArgs = parseArguments(args);
 	$: parsedResult = parseJSONString(result);
+	$: isCanvasToolCall = [
+		'canvas_create_document',
+		'canvas_update_document',
+		'canvas_select_document',
+		'canvas_list_documents'
+	].includes(attributes?.name ?? '');
 </script>
 
-<div {id} class={className}>
+{#if !isCanvasToolCall}
+	<div {id} class={className}>
 	{#if !grouped && embeds && Array.isArray(embeds) && embeds.length > 0}
 		<!-- Embed Mode: Show iframes without collapsible behavior -->
 		<div class="py-1 w-full cursor-pointer">
@@ -269,4 +276,5 @@
 			{/each}
 		{/if}
 	{/if}
-</div>
+	</div>
+{/if}

@@ -34,6 +34,7 @@
 		mobile,
 		chatTitle,
 		showArtifacts,
+		artifactCode,
 		artifactContents,
 		tools,
 		skills,
@@ -68,6 +69,11 @@
 	import { AudioQueue } from '$lib/utils/audio';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { getOutputText } from './Messages/structuredOutput';
+	import {
+		getCanvasNoteArtifactsFromOutput,
+		hasNewCanvasArtifact,
+		mergePersistedCanvasArtifact
+	} from './Artifacts/canvas';
 
 	import {
 		archiveChatById,
@@ -1637,17 +1643,74 @@
 
 	const getContents = () => {
 		const messages = history ? createMessagesList(history, history.currentId) : [];
-		let contents = [];
+		let contents: Array<{
+			type: string;
+			content: string;
+			title?: string;
+			canvasId?: string;
+			noteId?: string;
+			titleEdited?: boolean;
+			updatedAt?: number;
+			source?: string;
+		}> = [];
+		const previousCanvasContents = (get(artifactContents) ?? []).filter(
+			(content) => content?.type === 'canvas-note'
+		);
+		const persistedCanvasDocuments = (chat?.chat?._canvas_documents ?? {}) as Record<string, any>;
+		const mergeCanvasArtifacts = (artifacts = []) => {
+			for (const artifact of artifacts) {
+				const key = artifact.canvasId || artifact.noteId;
+				const currentIdx = key
+					? contents.findIndex(
+							(content) =>
+								content.type === 'canvas-note' &&
+								(content.canvasId === key || content.noteId === key)
+						)
+					: -1;
+				const existing =
+					currentIdx >= 0
+						? contents[currentIdx]
+						: previousCanvasContents.find(
+								(content) =>
+									content.canvasId === artifact.canvasId ||
+									(artifact.noteId && content.noteId === artifact.noteId)
+							);
+				const mergedArtifact = {
+					...artifact,
+					noteId: artifact.noteId ?? existing?.noteId,
+					title: existing?.titleEdited ? (existing.title ?? artifact.title) : artifact.title,
+					titleEdited: existing?.titleEdited ?? false,
+					updatedAt: artifact.updatedAt ?? existing?.updatedAt ?? 0
+				};
+
+				if (currentIdx >= 0) {
+					contents = contents.map((content, idx) =>
+						idx === currentIdx ? mergedArtifact : content
+					);
+				} else {
+					contents = [...contents, mergedArtifact];
+				}
+			}
+		};
 		messages.forEach((message) => {
 			if (message?.role !== 'user') {
+				const toolCanvasArtifacts = getCanvasNoteArtifactsFromOutput(message?.output ?? []);
+				if (toolCanvasArtifacts.length > 0) {
+					mergeCanvasArtifacts(toolCanvasArtifacts);
+				}
+
 				const messageContent =
 					getOutputText(message?.output) || removeAllDetails(message?.content ?? '');
 				if (!messageContent.trim()) {
 					return;
 				}
 
-				const { codeBlocks: codeBlocks, htmlGroups: htmlGroups } =
-					getCodeBlockContents(messageContent);
+				const { codeBlocks: codeBlocks, htmlGroups: htmlGroups } = getCodeBlockContents(
+					messageContent
+				) as {
+					codeBlocks: Array<{ lang: string; code: string }>;
+					htmlGroups: Array<{ html: string; css: string; js: string }>;
+				};
 
 				if (htmlGroups && htmlGroups.length > 0) {
 					htmlGroups.forEach((group) => {
@@ -1687,7 +1750,44 @@
 			}
 		});
 
+		contents = contents.map((content) => {
+			if (content.type !== 'canvas-note' || !content.canvasId) {
+				return content;
+			}
+			const persisted = persistedCanvasDocuments[content.canvasId];
+			if (!persisted) {
+				return content;
+			}
+			return mergePersistedCanvasArtifact(content as any, persisted);
+		});
+
+		const canvasContents = contents.filter((content) => content.type === 'canvas-note');
+		const shouldAutoOpenCanvas = hasNewCanvasArtifact(
+			previousCanvasContents as any,
+			canvasContents as any
+		);
 		artifactContents.set(contents);
+		const selectedArtifactId = get(artifactCode);
+		if (
+			canvasContents.length > 0 &&
+			!canvasContents.some(
+				(content) =>
+					content.canvasId === selectedArtifactId || content.noteId === selectedArtifactId
+			)
+		) {
+			const latestCanvas = canvasContents.at(-1);
+			artifactCode.set(latestCanvas?.canvasId ?? latestCanvas?.noteId ?? null);
+		}
+
+		if (
+			shouldAutoOpenCanvas &&
+			contents.some((content) => content.type === 'canvas-note' && content.source === 'tool') &&
+			!$mobile &&
+			$chatId
+		) {
+			showArtifacts.set(true);
+			showControls.set(true);
+		}
 	};
 
 	//////////////////////////
