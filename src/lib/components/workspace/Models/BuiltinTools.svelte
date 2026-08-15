@@ -51,6 +51,14 @@
 			label: $i18n.t('Code Interpreter'),
 			description: $i18n.t('Execute code')
 		},
+		canvas: {
+			label: $i18n.t('Canvas'),
+			description: $i18n.t('Create and update editable Canvas documents')
+		},
+		web_preview: {
+			label: $i18n.t('Web Preview'),
+			description: $i18n.t('Create and update interactive web previews')
+		},
 		tasks: {
 			label: $i18n.t('Task Management'),
 			description: $i18n.t('Break down complex requests into trackable steps')

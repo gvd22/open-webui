@@ -129,6 +129,15 @@ export const showFileNav = writable(false);
 export const showFileNavPath: Writable<string | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedTerminalId: Writable<string | null> = writable(null);
+export const workspaceTerminalConnectionId: Writable<string | null> = writable(null);
+export const workspaceChatContextId: Writable<string> = writable('');
+export type WorkspaceUtilityInstance = {
+	id: string;
+	kind: 'terminal' | 'browser';
+	title: string;
+	terminalId?: string;
+};
+export const workspaceUtilityInstances: Writable<WorkspaceUtilityInstance[]> = writable([]);
 
 export const artifactCode = writable(null);
 export const artifactContents = writable(null);

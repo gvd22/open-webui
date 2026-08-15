@@ -315,14 +315,25 @@ export const moveEntry = async (
 
 export const getListeningPorts = async (
 	baseUrl: string,
-	apiKey: string
+	apiKey: string,
+	options: { throwOnError?: boolean } = {}
 ): Promise<ListeningPort[]> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/ports`;
-	const res = await fetch(url, {
-		headers: bearerHeaders(apiKey)
-	}).catch(() => null);
-	if (!res || !res.ok) return [];
-	const json = await res.json().catch(() => null);
+	let res: Response | null = null;
+	try {
+		res = await fetch(url, { headers: bearerHeaders(apiKey) });
+	} catch (error) {
+		if (options.throwOnError) throw error;
+		return [];
+	}
+	if (!res.ok) {
+		if (options.throwOnError) throw new Error(`Terminal ports request failed: ${res.status}`);
+		return [];
+	}
+	const json = await res.json().catch((error) => {
+		if (options.throwOnError) throw error;
+		return null;
+	});
 	return json?.ports ?? [];
 };
 

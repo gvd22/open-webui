@@ -105,12 +105,6 @@
 	$: isCode = isCodeFile(selectedFile);
 	$: csvDelimiter = getExt(selectedFile) === 'tsv' ? '\t' : ',';
 
-	// For HTML files on system terminals (proxy URL), use path-based serving
-	// so the iframe can resolve relative CSS/JS/image references via cookie auth.
-	$: serveUrl =
-		isHtml && selectedFile && baseUrl && baseUrl.includes('/api/v1/terminals/')
-			? `${baseUrl}/files/serve/${selectedFile.replace(/^\//, '')}`
-			: null;
 	$: renderedHtml =
 		isMarkdown && fileContent
 			? DOMPurify.sanitize(marked.parse(fileContent, { async: false }) as string)
@@ -396,19 +390,7 @@
 			{/if}
 		</div>
 	{:else if fileContent !== null}
-		{#if isHtml && !showRaw && serveUrl}
-			{#if overlay}
-				<div class="absolute top-0 left-0 right-0 bottom-0 z-10"></div>
-			{/if}
-			<iframe
-				src={serveUrl}
-				sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ?? false)
-					? ' allow-forms'
-					: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false) ? ' allow-same-origin' : ''}"
-				class="w-full h-full border-none bg-white"
-				title="HTML Preview"
-			/>
-		{:else if isHtml && !showRaw}
+		{#if isHtml && !showRaw}
 			{#if overlay}
 				<div class="absolute top-0 left-0 right-0 bottom-0 z-10"></div>
 			{/if}

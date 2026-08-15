@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	generateCanvasTitle,
+	canUseNotes,
 	canSynchronizeCanvasDocumentChange,
 	getCanvasNoteArtifactsFromHistory,
 	getCanvasNoteArtifactsFromOutput,
@@ -210,6 +211,13 @@ describe('Canvas tool state', () => {
 		expect(canSynchronizeCanvasDocumentChange(true, 0, 10)).toBe(false);
 		expect(canSynchronizeCanvasDocumentChange(false, 20, 10)).toBe(false);
 		expect(canSynchronizeCanvasDocumentChange(false, 20, 20)).toBe(true);
+	});
+
+	it('allows Notes promotion only when Notes and the user permission are enabled', () => {
+		expect(canUseNotes(true, 'admin', false)).toBe(true);
+		expect(canUseNotes(true, 'user', true)).toBe(true);
+		expect(canUseNotes(true, 'user', false)).toBe(false);
+		expect(canUseNotes(false, 'admin', true)).toBe(false);
 	});
 });
 

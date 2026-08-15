@@ -8,10 +8,11 @@
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import {
 		terminalServers,
-		settings,
 		showFileNavPath,
 		showFileNavDir,
-		selectedTerminalId
+		selectedTerminalId,
+		artifactCode,
+		workspaceTerminalConnectionId
 	} from '$lib/stores';
 	import {
 		getCwd,
@@ -32,6 +33,8 @@
 	import { isCodeFile } from '$lib/utils/codeHighlight';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
+	import DocumentArrowUp from '../icons/DocumentArrowUp.svelte';
+	import TerminalIcon from '../icons/Terminal.svelte';
 	import PenAlt from '../icons/PenAlt.svelte';
 	import ZoomReset from '../icons/ZoomReset.svelte';
 
@@ -46,12 +49,28 @@
 	import PortList from './FileNav/PortList.svelte';
 	import PortPreview from './FileNav/PortPreview.svelte';
 	import XTerminal from './XTerminal.svelte';
+	import { isKeyboardActivationClick, WORKSPACE_TERMINAL_ID } from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
 	export let onAttach: ((blob: Blob, name: string, contentType: string) => void) | null = null;
 	export let overlay = false;
 	export let chatId: string | null = null;
+	export let showTerminal = true;
+	export let initialFilePath: string | null = null;
+	export let onOpenFile: (path: string) => void = () => {};
+
+	const openWorkspaceTerminal = () => {
+		const terminalId =
+			$selectedTerminalId ?? ($terminalServers ?? []).find((terminal) => terminal.id)?.id ?? null;
+		if (!terminalId) {
+			toast.error($i18n.t('No terminal is available'));
+			return;
+		}
+		selectedTerminalId.set(terminalId);
+		workspaceTerminalConnectionId.set(terminalId);
+		artifactCode.set(WORKSPACE_TERMINAL_ID);
+	};
 
 	// ── Terminal panel state ────────────────────────────────────────────
 	let terminalExpanded = false;
@@ -223,6 +242,12 @@
 	let creatingFile = false;
 	let newFileName = '';
 	let newFileInput: HTMLInputElement;
+	let emptyUploadInput: HTMLInputElement;
+
+	const openEmptyUploadPicker = () => {
+		if (uploading || !selectedTerminal) return;
+		emptyUploadInput?.click();
+	};
 
 	// ── Delete confirmation ──────────────────────────────────────────────
 	let deleteTarget: { path: string; name: string } | null = null;
@@ -236,16 +261,7 @@
 		const systemTerminal = $selectedTerminalId
 			? (($terminalServers ?? []).find((t) => t.id === $selectedTerminalId) ?? null)
 			: ($terminalServers?.[0] ?? null);
-
-		const userTerminal = ($settings?.terminalServers ?? []).find(
-			(s) => s.url === $selectedTerminalId
-		);
-
-		const isSystem = !!systemTerminal;
-		const url = systemTerminal?.url ?? userTerminal?.url ?? '';
-		const key = isSystem ? localStorage.token : (userTerminal?.key ?? '');
-
-		return url ? { url, key } : null;
+		return systemTerminal?.url ? { url: systemTerminal.url, key: localStorage.token } : null;
 	};
 
 	// Detect terminal or chat changes — the explicit store references ensure
@@ -255,7 +271,7 @@
 	let prevChatId = chatId;
 	let mounted = false;
 	$: {
-		($selectedTerminalId, $terminalServers, $settings);
+		($selectedTerminalId, $terminalServers);
 		const terminal = getTerminal();
 		selectedTerminal = terminal;
 
@@ -420,13 +436,15 @@
 		}
 	};
 
-	const openEntry = async (entry: FileEntry) => {
+	const openEntry = async (entry: FileEntry, notifyWorkspace = true) => {
 		if (entry.type === 'directory') {
 			await loadDir(`${currentPath}${entry.name}/`);
 			return;
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
+		appliedInitialFilePath = filePath;
+		if (notifyWorkspace) onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 
 		const terminal = selectedTerminal;
@@ -521,6 +539,28 @@
 		fileLoading = false;
 	};
 
+	let appliedInitialFilePath: string | null | undefined = undefined;
+	const openRequestedFile = async (path: string) => {
+		const normalized = normalizePath(path);
+		const separator = normalized.lastIndexOf('/');
+		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
+		const name = normalized.slice(separator + 1);
+		if (!name) return;
+		await loadDir(directory);
+		await openEntry({ name, type: 'file', size: 0 }, false);
+	};
+
+	$: if (mounted && selectedTerminal && initialFilePath !== appliedInitialFilePath) {
+		appliedInitialFilePath = initialFilePath;
+		if (initialFilePath) {
+			void openRequestedFile(initialFilePath);
+		} else if (selectedFile) {
+			selectedFile = null;
+			clearFilePreview();
+			void loadDir(currentPath);
+		}
+	}
+
 	let downloading = false;
 
 	const downloadFile = async (path: string) => {
@@ -581,14 +621,32 @@
 
 	const handleUploadFiles = async (files: File[]) => {
 		const terminal = selectedTerminal;
-		if (!files.length || !terminal) return;
+		if (!files.length) return;
+		if (!terminal) {
+			toast.error($i18n.t('No terminal is available'));
+			return;
+		}
 
 		uploading = true;
-		for (const file of files) {
-			await uploadToTerminal(terminal.url, terminal.key, currentPath, file, chatId ?? undefined);
+		let uploadedCount = 0;
+		try {
+			for (const file of files) {
+				const result = await uploadToTerminal(
+					terminal.url,
+					terminal.key,
+					currentPath,
+					file,
+					chatId ?? undefined
+				);
+				if (result) uploadedCount += 1;
+			}
+			if (uploadedCount !== files.length) {
+				toast.error($i18n.t('Some files could not be uploaded'));
+			}
+		} finally {
+			uploading = false;
+			await loadDir(currentPath);
 		}
-		uploading = false;
-		await loadDir(currentPath);
 	};
 
 	// ── Folder creation ──────────────────────────────────────────────────
@@ -1389,14 +1447,59 @@
 				{:else if error}
 					<div class="p-4 text-xs">{error}</div>
 				{:else if entries.length === 0 && !creatingFolder && !creatingFile}
-					<div class="flex flex-col items-center justify-center gap-1.5 py-12 text-center">
-						<Folder className="size-6 text-gray-200 dark:text-gray-700" />
-						<div class="text-xs text-gray-400 dark:text-gray-500">
-							{$i18n.t('This folder is empty')}
+					<div class="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
+						<div
+							class="flex size-9 items-center justify-center rounded-lg bg-gray-50 text-gray-400 dark:bg-gray-800/70 dark:text-gray-500"
+						>
+							<Folder className="size-[18px]" />
 						</div>
-						<div class="text-[11px] text-gray-300 dark:text-gray-600">
-							{$i18n.t('Drop files here to upload')}
+						<div class="mt-3">
+							<div class="text-sm font-medium text-gray-800 dark:text-gray-200">
+								{$i18n.t('No files yet')}
+							</div>
+							<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+								{$i18n.t('Drop files here to upload')}
+							</div>
 						</div>
+						<div
+							class="mt-4 flex items-center divide-x divide-gray-200 text-xs dark:divide-gray-700"
+						>
+							<button
+								type="button"
+								class="flex h-8 items-center gap-1.5 rounded-l-md px-3 font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+								disabled={uploading || !selectedTerminal}
+								on:mousedown|preventDefault|stopPropagation={openEmptyUploadPicker}
+								on:click={(event) => {
+									if (isKeyboardActivationClick(event.detail)) openEmptyUploadPicker();
+								}}
+							>
+								<DocumentArrowUp className="size-3.5" />
+								{$i18n.t('Upload files')}
+							</button>
+							<button
+								type="button"
+								class="flex h-8 items-center gap-1.5 rounded-r-md px-3 font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+								disabled={!selectedTerminal}
+								on:mousedown|preventDefault|stopPropagation={openWorkspaceTerminal}
+								on:click={(event) => {
+									if (isKeyboardActivationClick(event.detail)) openWorkspaceTerminal();
+								}}
+							>
+								<TerminalIcon className="size-3.5" strokeWidth="1.7" />
+								{$i18n.t('Open terminal')}
+							</button>
+						</div>
+						<input
+							bind:this={emptyUploadInput}
+							type="file"
+							multiple
+							hidden
+							on:change={() => {
+								if (!emptyUploadInput?.files?.length) return;
+								handleUploadFiles(Array.from(emptyUploadInput.files));
+								emptyUploadInput.value = '';
+							}}
+						/>
 					</div>
 				{/if}
 
@@ -1473,7 +1576,7 @@
 
 		<!-- Port detection -->
 		{#if selectedTerminal && !selectedFile && previewPort === null}
-			<div class="shrink-0 border-t border-gray-100 dark:border-gray-800">
+			<div class="shrink-0">
 				<PortList
 					baseUrl={selectedTerminal.url}
 					apiKey={selectedTerminal.key}
@@ -1487,7 +1590,7 @@
 		{/if}
 
 		<!-- Terminal bottom panel -->
-		{#if terminalEnabled}
+		{#if showTerminal && terminalEnabled}
 			<div class="shrink-0 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850">
 				{#if terminalExpanded}
 					<!-- Drag handle (at top of panel) -->

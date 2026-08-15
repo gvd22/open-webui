@@ -9,6 +9,7 @@
 		config,
 		mobile,
 		settings,
+		showArtifacts,
 		showControls,
 		showSidebar,
 		temporaryChatEnabled,
@@ -22,7 +23,7 @@
 	import ShareChatModal from '../chat/ShareChatModal.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Menu from '$lib/components/layout/Navbar/Menu.svelte';
-	import AdjustmentsHorizontal from '../icons/AdjustmentsHorizontal.svelte';
+	import FolderOpen from '../icons/FolderOpen.svelte';
 
 	import PencilSquare from '../icons/PencilSquare.svelte';
 	import Banner from '../common/Banner.svelte';
@@ -34,7 +35,8 @@
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
 	import ChatPlus from '../icons/ChatPlus.svelte';
 	import ChatCheck from '../icons/ChatCheck.svelte';
-	import Knobs from '../icons/Knobs.svelte';
+	import { artifactCode } from '$lib/stores';
+	import { WORKSPACE_LAUNCHER_ID } from './Artifacts/workspace';
 	import { isTemporaryChatId } from '$lib/utils/chatId';
 
 	const i18n = getContext('i18n');
@@ -230,19 +232,24 @@
 						</Tooltip>
 					{/if}
 
-					{#if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
-						<Tooltip content={$i18n.t('Controls')}>
-							<button
-								class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
-								on:click={async () => {
-									await showControls.set(!$showControls);
-								}}
-								aria-label="Controls"
-							>
-								<Knobs className="size-5" strokeWidth="1" />
-							</button>
-						</Tooltip>
-					{/if}
+					<Tooltip content={$i18n.t('Workspace')}>
+						<button
+							class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
+							on:click={async () => {
+								if ($showControls && $showArtifacts) {
+									showControls.set(false);
+									return;
+								}
+								artifactCode.set(WORKSPACE_LAUNCHER_ID);
+								showArtifacts.set(true);
+								showControls.set(true);
+							}}
+							aria-label={$i18n.t('Workspace')}
+							aria-pressed={$showControls && $showArtifacts}
+						>
+							<FolderOpen className="size-5" strokeWidth="1.35" />
+						</button>
+					</Tooltip>
 				</div>
 			</div>
 		</div>

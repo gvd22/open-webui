@@ -37,6 +37,14 @@
 				'Model can access Open Terminal for command execution and file management'
 			)
 		},
+		canvas: {
+			label: $i18n.t('Canvas'),
+			description: $i18n.t('Model can create and update editable Canvas documents')
+		},
+		web_preview: {
+			label: $i18n.t('Web Preview'),
+			description: $i18n.t('Model can create and update interactive web previews')
+		},
 		usage: {
 			label: $i18n.t('Usage'),
 			description: $i18n.t(

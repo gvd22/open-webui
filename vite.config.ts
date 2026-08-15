@@ -32,7 +32,7 @@ export default defineConfig({
 	server: {
 		...(allowedHosts.length ? { allowedHosts } : {}),
 		proxy: {
-			'/api': { target: backendUrl, changeOrigin: true },
+			'/api': { target: backendUrl, changeOrigin: true, ws: true },
 			'/ollama': { target: backendUrl, changeOrigin: true },
 			'/openai': { target: backendUrl, changeOrigin: true },
 			'/ws': { target: backendUrl, changeOrigin: true, ws: true },

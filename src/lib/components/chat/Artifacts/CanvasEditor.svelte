@@ -8,13 +8,13 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import ArrowUturnLeft from '$lib/components/icons/ArrowUturnLeft.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
-	import { artifactContents, socket, user } from '$lib/stores';
+	import { artifactContents, config, socket, user } from '$lib/stores';
 	import {
 		promoteTransientCanvasDocument,
 		undoLastTransientCanvasAiUpdate,
 		updateTransientCanvasDocument
 	} from '$lib/apis/chats';
-	import { canSynchronizeCanvasDocumentChange, generateCanvasTitle } from './canvas';
+	import { canSynchronizeCanvasDocumentChange, canUseNotes, generateCanvasTitle } from './canvas';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -26,6 +26,7 @@
 	export let titleEdited = false;
 	export let canUndoAiUpdate = false;
 	export let showClose = true;
+	export let noteId = '';
 
 	let editor: any = null;
 	let value = content;
@@ -37,7 +38,13 @@
 	let wordCount = 0;
 	let charCount = 0;
 	let saving = false;
-	let linkedNoteId = '';
+	let linkedNoteId = noteId;
+	$: if (noteId && noteId !== linkedNoteId) linkedNoteId = noteId;
+	$: notesAvailable = canUseNotes(
+		Boolean($config?.features?.enable_notes),
+		$user?.role,
+		$user?.permissions?.features?.notes
+	);
 	let lastContentProp = content;
 	let transientSaveTimer: ReturnType<typeof setTimeout> | null = null;
 	let transientSaveError = false;
@@ -113,7 +120,7 @@
 		content: string;
 		titleEdited: boolean;
 	}) => {
-		if (!chatId || !canvasId || linkedNoteId) {
+		if (!chatId || !canvasId) {
 			return;
 		}
 
@@ -138,7 +145,7 @@
 	};
 
 	const queueTransientSave = (nextTitle: string, nextContent: string, titleEdited: boolean) => {
-		if (!chatId || !canvasId || linkedNoteId) {
+		if (!chatId || !canvasId) {
 			return;
 		}
 		const nextSave = { title: nextTitle, content: nextContent, titleEdited };
@@ -155,7 +162,7 @@
 	};
 
 	const addToNotes = async () => {
-		if (saving) {
+		if (saving || !notesAvailable) {
 			return;
 		}
 
@@ -251,19 +258,25 @@
 					</button>
 				{/if}
 
-				<button
-					type="button"
-					class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-900 dark:hover:text-white"
-					disabled={saving || !!linkedNoteId}
-					on:mousedown|preventDefault|stopPropagation={addToNotes}
-					on:click={addToNotes}
-				>
-					{linkedNoteId
-						? $i18n.t('In Notizen')
-						: saving
-							? $i18n.t('Saving...')
-							: $i18n.t('Zu Notizen hinzufügen')}
-				</button>
+				{#if notesAvailable}
+					<button
+						type="button"
+						class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-900 dark:hover:text-white"
+						disabled={saving || !!linkedNoteId}
+						on:mousedown|preventDefault|stopPropagation={addToNotes}
+						on:click={addToNotes}
+					>
+						{linkedNoteId
+							? $i18n.t('In Notizen')
+							: saving
+								? $i18n.t('Saving...')
+								: $i18n.t('Zu Notizen hinzufügen')}
+					</button>
+				{:else if linkedNoteId}
+					<span class="px-2 text-xs text-gray-400 dark:text-gray-500">
+						{$i18n.t('Linked note is kept in sync')}
+					</span>
+				{/if}
 
 				{#if showClose}
 					<Tooltip content={$i18n.t('Close')}>

@@ -44,6 +44,7 @@
 		selectedFolder,
 		showEmbeds,
 		selectedTerminalId,
+		workspaceTerminalConnectionId,
 		showFileNavPath,
 		showFileNavDir,
 		chatRequestQueues,
@@ -74,6 +75,14 @@
 		hasNewCanvasArtifact,
 		mergePersistedCanvasArtifact
 	} from './Artifacts/canvas';
+	import {
+		generateWebPreviewTitle,
+		findNewToolWebPreview,
+		getWebPreviewsFromHistory,
+		getWebPreviewsFromOutput,
+		mergePersistedWebPreview,
+		type WebPreviewArtifact
+	} from './Artifacts/webPreview';
 
 	import {
 		archiveChatById,
@@ -111,6 +120,7 @@
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
+	import { WORKSPACE_TERMINAL_ID } from './Artifacts/workspace';
 	import EventConfirmDialog from '../common/ConfirmDialog.svelte';
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
@@ -369,6 +379,7 @@
 	let showCommands = false;
 
 	let generating = false;
+	let knownWebPreviewIds = new Set<string>();
 	let dragged = false;
 	let generationController = null;
 	let contextCompactionToastId = null;
@@ -552,6 +563,8 @@
 		clearTimeout(saveControlsTimer);
 		await saveControls();
 		loading = true;
+		showArtifacts.set(false);
+		showControls.set(false);
 
 		prompt = '';
 		messageInput?.setText('');
@@ -727,13 +740,22 @@
 		}
 	};
 
-	/** Check whether a terminal ID references an available system or direct terminal. */
+	/** Check whether a terminal ID references an available managed terminal. */
 	const isTerminalAvailable = (tid: string): boolean => {
-		return (
-			($terminalServers ?? []).some((t) => t.id && t.id === tid) ||
-			($settings?.terminalServers ?? []).some((s) => s.url === tid)
-		);
+		return ($terminalServers ?? []).some((terminal) => terminal.id === tid);
 	};
+
+	$: selectedModelSupportsTerminal = selectedModelIds.some((id) => {
+		const model = $models.find((candidate) => candidate.id === id);
+		return model?.info?.meta?.capabilities?.terminal ?? false;
+	});
+
+	// KOBY exposes a managed system terminal. Route to it automatically instead of
+	// asking end users to choose infrastructure in the composer.
+	$: if (!$selectedTerminalId && selectedModelSupportsTerminal) {
+		const defaultTerminal = ($terminalServers ?? []).find((terminal) => terminal.id);
+		if (defaultTerminal?.id) selectedTerminalId.set(defaultTerminal.id);
+	}
 
 	$: if (
 		$terminalServers !== null &&
@@ -912,6 +934,15 @@
 			showFileNavDir.set(data.path);
 		} else if (type === 'terminal:run_command') {
 			showFileNavDir.set('/');
+			const terminalId = $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
+			// Historical terminal events are replayed while a chat is restored. Only a live
+			// model run should reveal the right-side terminal workspace.
+			if (generating && terminalId) {
+				workspaceTerminalConnectionId.set(terminalId);
+				artifactCode.set(WORKSPACE_TERMINAL_ID);
+				showArtifacts.set(true);
+				showControls.set(true);
+			}
 		}
 	};
 
@@ -1289,17 +1320,6 @@
 		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
 		audioQueue.set(audioQueueInstance);
 
-		// Restore direct terminal enabled states based on persisted selectedTerminalId
-		if ($settings?.terminalServers?.length) {
-			settings.set({
-				...$settings,
-				terminalServers: ($settings.terminalServers ?? []).map((s) => ({
-					...s,
-					enabled: $selectedTerminalId !== null && s.url === $selectedTerminalId
-				}))
-			});
-		}
-
 		const pageSubscribe = page.subscribe(async (p) => {
 			if (p.url.pathname === '/' || p.url.pathname.startsWith('/folders/')) {
 				await tick();
@@ -1649,15 +1669,35 @@
 			title?: string;
 			canvasId?: string;
 			noteId?: string;
+			previewId?: string;
+			entrypoint?: string;
+			files?: Record<string, any>;
 			titleEdited?: boolean;
 			updatedAt?: number;
 			source?: string;
 		}> = [];
-		const previousCanvasContents = (get(artifactContents) ?? []).filter(
+		const currentWorkspaceArtifacts = (get(artifactContents as any) ?? []) as any[];
+		const previousCanvasContents = currentWorkspaceArtifacts.filter(
 			(content) => content?.type === 'canvas-note'
 		);
 		const persistedCanvasDocuments = (chat?.chat?._canvas_documents ?? {}) as Record<string, any>;
-		const mergeCanvasArtifacts = (artifacts = []) => {
+		const previousWebPreviews = currentWorkspaceArtifacts.filter(
+			(content) => content?.type === 'web-preview'
+		) as WebPreviewArtifact[];
+		const persistedWebPreviews = (chat?.chat?._web_preview_documents ?? {}) as Record<string, any>;
+		const mergeWebPreviews = (previews: WebPreviewArtifact[]) => {
+			for (const preview of previews) {
+				const index = contents.findIndex((content) => content.previewId === preview.previewId);
+				if (index >= 0) {
+					contents = contents.map((content, contentIndex) =>
+						contentIndex === index ? preview : content
+					);
+				} else {
+					contents = [...contents, preview];
+				}
+			}
+		};
+		const mergeCanvasArtifacts = (artifacts: any[] = []) => {
 			for (const artifact of artifacts) {
 				const key = artifact.canvasId || artifact.noteId;
 				const currentIdx = key
@@ -1698,6 +1738,7 @@
 				if (toolCanvasArtifacts.length > 0) {
 					mergeCanvasArtifacts(toolCanvasArtifacts);
 				}
+				mergeWebPreviews(getWebPreviewsFromOutput(message?.output ?? []));
 
 				const messageContent =
 					getOutputText(message?.output) || removeAllDetails(message?.content ?? '');
@@ -1713,7 +1754,7 @@
 				};
 
 				if (htmlGroups && htmlGroups.length > 0) {
-					htmlGroups.forEach((group) => {
+					htmlGroups.forEach((group, groupIndex) => {
 						const renderedContent = `
                         <!DOCTYPE html>
                         <html lang="en">
@@ -1737,7 +1778,24 @@
                         </body>
                         </html>
                     `;
-						contents = [...contents, { type: 'iframe', content: renderedContent }];
+						const files = {
+							'index.html': { content: renderedContent, mime: 'text/html' },
+							...(group.css ? { 'styles.css': { content: group.css, mime: 'text/css' } } : {}),
+							...(group.js ? { 'app.js': { content: group.js, mime: 'text/javascript' } } : {})
+						};
+						const previewId = `legacy-preview-${message.id ?? 'message'}-${groupIndex}`;
+						contents = [
+							...contents,
+							{
+								type: 'web-preview',
+								previewId,
+								title: generateWebPreviewTitle(files, 'index.html'),
+								entrypoint: 'index.html',
+								files,
+								content: renderedContent,
+								source: 'legacy'
+							}
+						];
 					});
 				} else {
 					// Check for SVG content
@@ -1751,6 +1809,12 @@
 		});
 
 		contents = contents.map((content) => {
+			if (content.type === 'web-preview' && content.previewId) {
+				return mergePersistedWebPreview(
+					content as WebPreviewArtifact,
+					persistedWebPreviews[content.previewId]
+				);
+			}
 			if (content.type !== 'canvas-note' || !content.canvasId) {
 				return content;
 			}
@@ -1766,7 +1830,15 @@
 			previousCanvasContents as any,
 			canvasContents as any
 		);
-		artifactContents.set(contents);
+		const webPreviews = contents.filter((content) => content.type === 'web-preview');
+		const newToolPreview = findNewToolWebPreview(
+			webPreviews as WebPreviewArtifact[],
+			knownWebPreviewIds
+		);
+		knownWebPreviewIds = new Set(
+			(webPreviews as WebPreviewArtifact[]).map((preview) => preview.previewId)
+		);
+		(artifactContents as any).set(contents);
 		const selectedArtifactId = get(artifactCode);
 		if (
 			canvasContents.length > 0 &&
@@ -1776,7 +1848,7 @@
 			)
 		) {
 			const latestCanvas = canvasContents.at(-1);
-			artifactCode.set(latestCanvas?.canvasId ?? latestCanvas?.noteId ?? null);
+			(artifactCode as any).set(latestCanvas?.canvasId ?? latestCanvas?.noteId ?? null);
 		}
 
 		if (
@@ -1785,6 +1857,12 @@
 			!$mobile &&
 			$chatId
 		) {
+			showArtifacts.set(true);
+			showControls.set(true);
+		}
+
+		if (newToolPreview && !$mobile && $chatId) {
+			(artifactCode as any).set(newToolPreview.previewId ?? null);
 			showArtifacts.set(true);
 			showControls.set(true);
 		}
@@ -1797,6 +1875,7 @@
 	const initNewChat = async () => {
 		console.log('initNewChat');
 		resetWebSearchConfirmation();
+		knownWebPreviewIds = new Set();
 
 		// Mark the outgoing chat as read before resetting; in-place created chats
 		// keep chatIdProp undefined, so navigateHandler never marks them read.
@@ -2111,6 +2190,9 @@
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
 						: convertMessagesToHistory(chatContent.messages);
+				knownWebPreviewIds = new Set(
+					getWebPreviewsFromHistory(history).map((preview) => preview.previewId)
+				);
 				if (chat?.current_message_id && history?.messages?.[chat.current_message_id]) {
 					history.currentId = chat.current_message_id;
 				}
@@ -3242,9 +3324,7 @@
 				tool_servers: [
 					...($toolServers ?? []).filter(
 						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
-					),
-					// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
-					...($terminalServers ?? []).filter((t) => !t.id)
+					)
 				],
 				features: getFeatures(),
 				variables: {
@@ -3901,7 +3981,7 @@
 				/>
 			{/if}
 
-			<PaneGroup direction="horizontal" class="w-full h-full">
+			<PaneGroup direction="horizontal" class="w-full min-h-0 flex-1">
 				<Pane defaultSize={50} minSize={30} class="h-full flex relative max-w-full flex-col">
 					<FilesOverlay show={dragged} />
 					{#if embedded}

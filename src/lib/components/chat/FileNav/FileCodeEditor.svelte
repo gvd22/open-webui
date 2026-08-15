@@ -12,6 +12,7 @@
 	export let value = '';
 	export let filePath: string | null = null;
 	export let onSave: ((content: string) => Promise<void>) | null = null;
+	export let onChange: ((content: string) => void) | null = null;
 
 	let container: HTMLDivElement;
 	let editor: EditorView | null = null;
@@ -84,6 +85,7 @@
 				if (e.docChanged) {
 					internalValue = e.state.doc.toString();
 					value = internalValue;
+					onChange?.(internalValue);
 				}
 			}),
 			editorTheme.of(isDark ? oneDark : []),

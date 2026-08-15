@@ -5,7 +5,7 @@
 	import { WebLinksAddon } from '@xterm/addon-web-links';
 	import '@xterm/xterm/css/xterm.css';
 
-	import { terminalServers, settings, selectedTerminalId, user } from '$lib/stores';
+	import { terminalServers, selectedTerminalId } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 
@@ -13,6 +13,7 @@
 
 	export let overlay = false;
 	export let chatId: string | null = null;
+	export let terminalId: string | null = null;
 
 	let terminalEl: HTMLDivElement;
 	let term: Terminal | null = null;
@@ -22,30 +23,57 @@
 	export let connecting = false;
 	let resizeObserver: ResizeObserver | null = null;
 	let pingInterval: ReturnType<typeof setInterval> | null = null;
+	let connectedTerminalId: string | null | undefined = undefined;
+	let activeSession: {
+		id: string;
+		serverId: string;
+		baseUrl: string;
+		authToken: string;
+		released?: boolean;
+	} | null = null;
+
+	export const focus = () => term?.focus();
+	$: activeTerminalId = terminalId ?? $selectedTerminalId;
 
 	// Resolve the active terminal server's info for the WebSocket URL
 	const getTerminalInfo = (): { serverId: string; baseUrl: string } | null => {
-		// System terminal (admin-configured, has an `id`)
 		const systemTerminals = ($terminalServers ?? []).filter((t: any) => t.id);
-		const systemMatch = systemTerminals.find((t: any) => t.id === $selectedTerminalId);
+		const systemMatch = systemTerminals.find((t: any) => t.id === activeTerminalId);
 		if (systemMatch) {
-			// For system terminals, WS goes through the Open WebUI backend proxy
 			return { serverId: systemMatch.id, baseUrl: WEBUI_API_BASE_URL };
-		}
-
-		// Direct terminal (user-configured, matched by URL)
-		const directTerminals = ($settings?.terminalServers ?? []).filter((s: any) => s.url);
-		const directMatch = directTerminals.find((s: any) => s.url === $selectedTerminalId);
-		if (directMatch) {
-			// For direct terminals, construct WS URL from the server URL directly
-			return { serverId: '__direct__', baseUrl: directMatch.url };
 		}
 
 		return null;
 	};
 
+	const releaseSession = (session = activeSession) => {
+		if (!session || session.released) return;
+		session.released = true;
+		if (activeSession?.id === session.id) activeSession = null;
+
+		const base = session.baseUrl.replace(/\/$/, '');
+		const url = `${base}/terminals/${session.serverId}/api/terminals/${session.id}`;
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${session.authToken}`
+		};
+		if (chatId) headers['X-Session-Id'] = chatId;
+
+		void (async () => {
+			for (const delay of [150, 500, 1000]) {
+				await new Promise((resolve) => setTimeout(resolve, delay));
+				try {
+					const response = await fetch(url, { method: 'DELETE', headers, keepalive: true });
+					if (response.ok || response.status === 404 || [401, 403].includes(response.status))
+						return;
+				} catch {
+					// Retry briefly while the WebSocket proxy finishes closing the PTY.
+				}
+			}
+		})();
+	};
+
 	const connect = async () => {
-		if (ws) disconnect();
+		if (ws || activeSession) disconnect();
 
 		const info = getTerminalInfo();
 		if (!info) return;
@@ -59,29 +87,7 @@
 			let wsUrl: string;
 			let authToken: string;
 
-			if (info.serverId === '__direct__') {
-				// Direct connection to open-terminal
-				const base = info.baseUrl.replace(/\/$/, '');
-				const directTerminals = ($settings?.terminalServers ?? []).filter((s: any) => s.url);
-				const directMatch = directTerminals.find((s: any) => s.url === $selectedTerminalId);
-				const apiKey = directMatch?.key ?? '';
-				authToken = apiKey;
-
-				// Create session
-				const createHeaders: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
-				if (chatId) createHeaders['X-Session-Id'] = chatId;
-				const res = await fetch(`${base}/api/terminals`, {
-					method: 'POST',
-					headers: createHeaders
-				});
-				if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
-				const session = await res.json();
-				sessionId = session.id;
-
-				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
-				wsUrl = `${wsBase}/api/terminals/${sessionId}`;
-			} else {
-				// System terminal — proxy through Open WebUI backend
+			{
 				const base = info.baseUrl.replace(/\/$/, '');
 				authToken = token;
 
@@ -95,11 +101,18 @@
 				if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
 				const session = await res.json();
 				sessionId = session.id;
+				activeSession = {
+					id: sessionId,
+					serverId: info.serverId,
+					baseUrl: info.baseUrl,
+					authToken
+				};
 
 				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 				wsUrl = `${wsBase}/terminals/${info.serverId}/api/terminals/${sessionId}`;
 			}
 
+			const websocketSession = activeSession;
 			ws = new WebSocket(wsUrl);
 			ws.binaryType = 'arraybuffer';
 
@@ -136,6 +149,8 @@
 			};
 
 			ws.onclose = () => {
+				ws = null;
+				releaseSession(websocketSession);
 				connected = false;
 				connecting = false;
 				if (term) {
@@ -144,6 +159,7 @@
 			};
 
 			ws.onerror = () => {
+				releaseSession(websocketSession);
 				connected = false;
 				connecting = false;
 			};
@@ -164,6 +180,7 @@
 			ws.close();
 			ws = null;
 		}
+		releaseSession();
 		connected = false;
 		connecting = false;
 	};
@@ -258,12 +275,13 @@
 		// handler would write a spurious "[Connection closed]" message.
 	};
 
-	// Reconnect when the selected terminal changes
-	$: if ($selectedTerminalId !== undefined && term) {
+	// Reconnect when this view's explicit connection (or the global fallback) changes.
+	$: if (activeTerminalId !== undefined && term && activeTerminalId !== connectedTerminalId) {
+		connectedTerminalId = activeTerminalId;
 		// Clear the terminal screen and reconnect to the new server
 		disconnect();
 		term.clear();
-		if ($selectedTerminalId) {
+		if (activeTerminalId) {
 			connect();
 		}
 	}

@@ -5,9 +5,9 @@
 
 	import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
 	import { undoLastTransientCanvasAiUpdate, updateTransientCanvasDocument } from '$lib/apis/chats';
-	import { artifactContents } from '$lib/stores';
+	import { artifactContents, config, user } from '$lib/stores';
 	import CanvasEditor from './CanvasEditor.svelte';
-	import { canSynchronizeCanvasDocumentChange } from './canvas';
+	import { canSynchronizeCanvasDocumentChange, canUseNotes } from './canvas';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -20,6 +20,11 @@
 	export let titleEdited = false;
 	export let canUndoAiUpdate = false;
 	export let showClose = true;
+	$: notesAvailable = canUseNotes(
+		Boolean($config?.features?.enable_notes),
+		$user?.role,
+		$user?.permissions?.features?.notes
+	);
 
 	let linkedTitle = title;
 	let linkedContent = content;
@@ -65,10 +70,8 @@
 
 	const updateWorkspaceTitle = (nextTitle: string) => {
 		const isManualChange =
-			canSynchronizeCanvasDocumentChange(
-				isApplyingExternalDocument,
-				suppressWorkspaceSyncUntil
-			) && nextTitle !== linkedTitle;
+			canSynchronizeCanvasDocumentChange(isApplyingExternalDocument, suppressWorkspaceSyncUntil) &&
+			nextTitle !== linkedTitle;
 		linkedTitle = nextTitle;
 		if (!isManualChange) {
 			return;
@@ -129,10 +132,7 @@
 
 	const updateWorkspaceDocument = (updates: { title?: string; content?: string }) => {
 		const isManualChange =
-			canSynchronizeCanvasDocumentChange(
-				isApplyingExternalDocument,
-				suppressWorkspaceSyncUntil
-			) &&
+			canSynchronizeCanvasDocumentChange(isApplyingExternalDocument, suppressWorkspaceSyncUntil) &&
 			((updates.title !== undefined && updates.title !== linkedTitle) ||
 				(updates.content !== undefined && updates.content !== linkedContent));
 		linkedTitle = updates.title ?? linkedTitle;
@@ -205,10 +205,9 @@
 			console.error('Unable to undo Canvas AI update', error);
 		}
 	};
-
 </script>
 
-{#if noteId}
+{#if noteId && notesAvailable}
 	<div class="h-full min-h-0 bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
 		<NoteEditor
 			id={noteId}
@@ -231,6 +230,7 @@
 			{titleEdited}
 			{canUndoAiUpdate}
 			{showClose}
+			{noteId}
 			on:close={() => dispatch('close')}
 		/>
 	{/key}

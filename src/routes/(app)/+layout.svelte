@@ -140,50 +140,16 @@
 		});
 		toolServers.set(toolServersData);
 
-		// Inject enabled terminal servers as always-on tool servers
-		const enabledTerminals = (($settings as any)?.terminalServers ?? []).filter(
-			(s: any) => s.enabled || s.url === $selectedTerminalId
-		);
-
 		// Fetch terminal servers the user has access to (for FileNav + terminal_id)
 		const systemTerminals = await getTerminalServers(localStorage.token);
-		terminalServers.set([
-			...(enabledTerminals.length > 0
-				? (
-						await getToolServersData(
-							enabledTerminals.map((t: any) => ({
-								url: t.url,
-								auth_type: t.auth_type ?? 'bearer',
-								key: t.key ?? '',
-								path: t.path ?? '/openapi.json',
-								config: { enable: true }
-							}))
-						)
-					)
-						.filter((data) => {
-							if (!data || data.error) {
-								toast.error(
-									$i18n.t(`Failed to connect to {{URL}} terminal server`, {
-										URL: data?.url
-									})
-								);
-								return false;
-							}
-							return true;
-						})
-						.map((data, i) => ({
-							...data,
-							key: enabledTerminals[i]?.key ?? ''
-						}))
-				: []),
-			// Store with proxy URL and session key for FileNav file browsing
-			...systemTerminals.map((t) => ({
+		terminalServers.set(
+			systemTerminals.map((t) => ({
 				id: t.id,
 				url: `${WEBUI_API_BASE_URL}/terminals/${t.id}`,
 				name: t.name,
 				key: localStorage.token
 			}))
-		]);
+		);
 	};
 
 	const setBanners = async () => {

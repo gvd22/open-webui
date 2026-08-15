@@ -68,6 +68,12 @@ export const canSynchronizeCanvasDocumentChange = (
 	now = Date.now()
 ) => !isApplyingExternalContent && now >= suppressedUntil;
 
+export const canUseNotes = (
+	enabled: boolean,
+	role: string | undefined,
+	permission: boolean | undefined
+) => enabled && (role === 'admin' || (permission ?? true));
+
 const getToolOutputParts = (item: any) => {
 	const output = item?.output ?? item?.content ?? [];
 	if (typeof output === 'string') {

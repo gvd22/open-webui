@@ -49,6 +49,7 @@
 	let renaming = false;
 	let renameValue = '';
 	let renameInput: HTMLInputElement;
+	let showEntryMenu = false;
 
 	const startRename = async () => {
 		renameValue = entry.name;
@@ -78,15 +79,78 @@
 	// ── Long-press for touch selection ───────────────────────────────────
 	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let didLongPress = false;
+	let mouseStart: { x: number; y: number } | null = null;
+	let mouseMoved = false;
+	let didPointerActivate = false;
+	let dragging = false;
+	let pendingOpenTimer: ReturnType<typeof setTimeout> | null = null;
+	let ignoreSyntheticMouseUntil = 0;
+
+	const cancelPendingOpen = () => {
+		if (pendingOpenTimer) clearTimeout(pendingOpenTimer);
+		pendingOpenTimer = null;
+	};
+
+	const activateFromPointer = () => {
+		cancelPendingOpen();
+		didPointerActivate = true;
+		onOpen(entry);
+	};
 
 	const onPointerDown = (e: PointerEvent) => {
 		if (e.pointerType !== 'touch') return;
+		ignoreSyntheticMouseUntil = Date.now() + 500;
 		didLongPress = false;
 		longPressTimer = setTimeout(() => {
 			didLongPress = true;
 			onLongPress();
 			onSelect(entry, e as any);
 		}, 500);
+	};
+
+	const onMouseDown = (e: MouseEvent) => {
+		if (
+			e.button !== 0 ||
+			Date.now() < ignoreSyntheticMouseUntil ||
+			renaming ||
+			selectionMode ||
+			e.metaKey ||
+			e.ctrlKey ||
+			e.shiftKey
+		) {
+			return;
+		}
+		mouseStart = { x: e.clientX, y: e.clientY };
+		mouseMoved = false;
+		cancelPendingOpen();
+		pendingOpenTimer = setTimeout(activateFromPointer, 100);
+	};
+
+	const onMouseMove = (e: MouseEvent) => {
+		if (!mouseStart) return;
+		if (Math.hypot(e.clientX - mouseStart.x, e.clientY - mouseStart.y) > 5) {
+			mouseMoved = true;
+			cancelPendingOpen();
+		}
+	};
+
+	const onMouseUp = (e: MouseEvent) => {
+		const shouldOpen =
+			e.button === 0 &&
+			!mouseMoved &&
+			!dragging &&
+			!renaming &&
+			!selectionMode &&
+			!e.metaKey &&
+			!e.ctrlKey &&
+			!e.shiftKey;
+		mouseStart = null;
+
+		if (shouldOpen) {
+			activateFromPointer();
+		} else {
+			cancelPendingOpen();
+		}
 	};
 
 	const onPointerUp = () => {
@@ -101,14 +165,22 @@
 			clearTimeout(longPressTimer);
 			longPressTimer = null;
 		}
+		mouseStart = null;
+		mouseMoved = false;
+		cancelPendingOpen();
 	};
 
 	onDestroy(() => {
 		if (longPressTimer) clearTimeout(longPressTimer);
+		cancelPendingOpen();
 	});
 
 	// ── Click handler ────────────────────────────────────────────────────
 	const handleClick = (e: MouseEvent) => {
+		if (didPointerActivate) {
+			didPointerActivate = false;
+			return;
+		}
 		if (renaming) return;
 		if (didLongPress) {
 			didLongPress = false;
@@ -175,6 +247,8 @@
 			class="flex-1 flex items-center gap-2 px-3 py-1.5 text-left min-w-0"
 			draggable={true}
 			on:dragstart={(e) => {
+				dragging = true;
+				cancelPendingOpen();
 				const filePath = `${currentPath}${entry.name}`;
 				// If dragging a selected item, drag all selected
 				if (selected && selectedPaths.size > 1) {
@@ -208,6 +282,13 @@
 					);
 				}
 			}}
+			on:dragend={() => {
+				dragging = false;
+				mouseStart = null;
+			}}
+			on:mousedown={onMouseDown}
+			on:mousemove={onMouseMove}
+			on:mouseup={onMouseUp}
 			on:pointerdown={onPointerDown}
 			on:pointerup={onPointerUp}
 			on:pointercancel={onPointerCancel}
@@ -294,12 +375,16 @@
 			{/if}
 		</button>
 
-		<Dropdown align="end" sideOffset={4}>
+		<Dropdown align="end" sideOffset={4} bind:show={showEntryMenu}>
 			<button
+				type="button"
 				class="shrink-0 p-0.5 mr-1 rounded-lg transition
 					text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-400
 					hover:bg-gray-100 dark:hover:bg-gray-800"
 				aria-label={$i18n.t('More')}
+				aria-expanded={showEntryMenu}
+				on:mousedown|preventDefault|stopPropagation={() => (showEntryMenu = !showEntryMenu)}
+				on:click|stopPropagation
 			>
 				<EllipsisHorizontal className="size-3.5" />
 			</button>

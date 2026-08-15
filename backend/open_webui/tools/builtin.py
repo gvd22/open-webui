@@ -70,6 +70,15 @@ from open_webui.utils.canvas import (
     set_active_canvas_document,
     sync_linked_canvas_note_content,
 )
+from open_webui.utils.web_preview import (
+    WEB_PREVIEW_ACTIVE_DOCUMENT_KEY,
+    WEB_PREVIEW_DOCUMENTS_KEY,
+    WEB_PREVIEW_MAX_DOCUMENT_COUNT,
+    generate_web_preview_title,
+    normalize_web_preview_files,
+    set_active_web_preview,
+    web_preview_timestamp,
+)
 from open_webui.utils.notifications import notify_target
 from open_webui.utils.sanitize import sanitize_code
 
@@ -340,6 +349,186 @@ async def canvas_list_documents(
                     'title': document.get('title', ''),
                     'updatedAt': document.get('updated_at'),
                     'selected': document['canvas_id'] == (chat.chat or {}).get(CANVAS_ACTIVE_DOCUMENT_KEY),
+                }
+                for document in documents.values()
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+# =============================================================================
+# CHAT WEB PREVIEW TOOLS
+# =============================================================================
+
+
+def _web_preview_error(message: str) -> str:
+    return json.dumps({'type': 'web_preview.error', 'message': message}, ensure_ascii=False)
+
+
+def _web_preview_document(document: dict) -> str:
+    return json.dumps(
+        {
+            'type': 'web_preview.document',
+            'previewId': document['preview_id'],
+            'title': document.get('title', ''),
+            'entrypoint': document.get('entrypoint', 'index.html'),
+            'files': document.get('files', {}),
+            'updatedAt': document.get('updated_at'),
+            'exportedPath': document.get('exported_path'),
+            'exportedRuntime': document.get('exported_runtime'),
+        },
+        ensure_ascii=False,
+    )
+
+
+async def _update_web_previews(chat, documents: dict, active_preview_id: str | None = None) -> None:
+    chat_data = dict(chat.chat or {})
+    chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+    if active_preview_id:
+        chat_data = set_active_web_preview(chat_data, active_preview_id)
+    await Chats.update_chat_by_id(chat.id, chat_data)
+
+
+async def web_preview_create(
+    files: dict[str, str],
+    title: str = '',
+    entrypoint: str = 'index.html',
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Create a browser-native Web Preview attached to this chat.
+
+    Use this for HTML, CSS, and JavaScript experiences that run directly in a browser without
+    a package install, build step, shell, or server. Supply every file required by the preview.
+
+    :param files: Complete mapping of relative file paths to text contents.
+    :param title: Optional short title. Leave empty to derive it from the HTML.
+    :param entrypoint: HTML file displayed first, normally index.html.
+    :return: The Web Preview with its stable previewId.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+
+    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+    if len(documents) >= WEB_PREVIEW_MAX_DOCUMENT_COUNT:
+        return _web_preview_error(
+            f'This chat already contains the maximum of {WEB_PREVIEW_MAX_DOCUMENT_COUNT} Web Previews.'
+        )
+    try:
+        normalized_files = normalize_web_preview_files(files)
+    except ValueError as exc:
+        return _web_preview_error(str(exc))
+    if entrypoint not in normalized_files or normalized_files[entrypoint]['mime'] != 'text/html':
+        return _web_preview_error('The entrypoint must reference an HTML file in the preview package.')
+
+    now = web_preview_timestamp()
+    preview_id = f'preview-{uuid.uuid4()}'
+    document = {
+        'preview_id': preview_id,
+        'title': generate_web_preview_title(normalized_files, entrypoint, title),
+        'entrypoint': entrypoint,
+        'files': normalized_files,
+        'created_at': now,
+        'updated_at': now,
+        'exported_path': None,
+        'exported_runtime': None,
+    }
+    documents[preview_id] = document
+    await _update_web_previews(chat, documents, preview_id)
+    return _web_preview_document(document)
+
+
+async def web_preview_update(
+    preview_id: str,
+    files: dict[str, str],
+    title: str | None = None,
+    entrypoint: str | None = None,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Replace the complete file package of an existing Web Preview.
+
+    :param preview_id: Stable ID returned by web_preview_create or web_preview_list.
+    :param files: Complete mapping of relative file paths to updated text contents.
+    :param title: Optional replacement title. Omit to retain the current title.
+    :param entrypoint: Optional replacement HTML entrypoint.
+    :return: The updated Web Preview.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+
+    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+    current = documents.get(preview_id)
+    if not current:
+        return _web_preview_error('Web Preview not found in this chat.')
+    try:
+        normalized_files = normalize_web_preview_files(files)
+    except ValueError as exc:
+        return _web_preview_error(str(exc))
+    next_entrypoint = entrypoint or current.get('entrypoint', 'index.html')
+    if next_entrypoint not in normalized_files or normalized_files[next_entrypoint]['mime'] != 'text/html':
+        return _web_preview_error('The entrypoint must reference an HTML file in the preview package.')
+
+    document = {
+        **current,
+        'title': (
+            generate_web_preview_title(normalized_files, next_entrypoint, title)
+            if title is not None
+            else current.get('title') or generate_web_preview_title(normalized_files, next_entrypoint)
+        ),
+        'entrypoint': next_entrypoint,
+        'files': normalized_files,
+        'updated_at': web_preview_timestamp(current.get('updated_at')),
+    }
+    documents[preview_id] = document
+    await _update_web_previews(chat, documents, preview_id)
+    return _web_preview_document(document)
+
+
+async def web_preview_select(
+    preview_id: str,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Select an existing Web Preview in this chat.
+
+    :param preview_id: Stable ID of the Web Preview to select.
+    :return: The selected Web Preview.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+    document = documents.get(preview_id)
+    if not document:
+        return _web_preview_error('Web Preview not found in this chat.')
+    await _update_web_previews(chat, documents, preview_id)
+    return _web_preview_document(document)
+
+
+async def web_preview_list(
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """List the Web Previews attached to this chat."""
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+    documents = (chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {}
+    active_id = (chat.chat or {}).get(WEB_PREVIEW_ACTIVE_DOCUMENT_KEY)
+    return json.dumps(
+        {
+            'type': 'web_preview.documents',
+            'documents': [
+                {
+                    'previewId': document['preview_id'],
+                    'title': document.get('title', ''),
+                    'entrypoint': document.get('entrypoint', 'index.html'),
+                    'updatedAt': document.get('updated_at'),
+                    'selected': document['preview_id'] == active_id,
                 }
                 for document in documents.values()
             ],

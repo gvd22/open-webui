@@ -36,8 +36,23 @@
 
 	let dragOverCrumb: number | null = null;
 
+	const onKeyboardClick = (event: MouseEvent, action: () => void) => {
+		if (event.detail === 0) action();
+	};
+
 	let uploadInput: HTMLInputElement;
 	let breadcrumbEl: HTMLDivElement;
+	let visibleBreadcrumbs: { label: string; path: string }[] = [];
+	$: {
+		visibleBreadcrumbs =
+			breadcrumbs[0]?.label.toLowerCase() === 'workspace' ? breadcrumbs.slice(1) : breadcrumbs;
+		if (visibleBreadcrumbs[0]?.label === '/') {
+			visibleBreadcrumbs = [
+				{ ...visibleBreadcrumbs[0], label: 'Home' },
+				...visibleBreadcrumbs.slice(1)
+			];
+		}
+	}
 
 	// Scroll breadcrumb to the end after every DOM update
 	afterUpdate(() => {
@@ -45,74 +60,82 @@
 	});
 </script>
 
-<div class="flex items-center px-2 pb-1.5 shrink-0 gap-1">
-	<!-- Back -->
-	<Tooltip content={$i18n.t('Back')}>
-		<button
-			class="shrink-0 p-1 rounded transition {canGoBack
-				? 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-600 dark:hover:text-gray-400'
-				: 'text-gray-200 dark:text-gray-700 cursor-default'}"
-			on:click={onGoBack}
-			disabled={!canGoBack}
-			aria-label={$i18n.t('Back')}
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				viewBox="0 0 20 20"
-				fill="currentColor"
-				class="size-3.5"
+<div
+	class="flex h-11 shrink-0 items-center gap-2 border-b border-gray-100 bg-white px-2.5 dark:border-gray-800 dark:bg-gray-850"
+>
+	<div class="flex shrink-0 items-center gap-0.5">
+		<!-- Back -->
+		<Tooltip content={$i18n.t('Back')}>
+			<button
+				class="flex size-7 shrink-0 items-center justify-center rounded-md transition {canGoBack
+					? 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+					: 'cursor-default text-gray-200 dark:text-gray-700'}"
+				on:mousedown|preventDefault|stopPropagation={onGoBack}
+				on:click={(event) => onKeyboardClick(event, onGoBack)}
+				disabled={!canGoBack}
+				aria-label={$i18n.t('Back')}
 			>
-				<path
-					fill-rule="evenodd"
-					d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-		</button>
-	</Tooltip>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 20 20"
+					fill="currentColor"
+					class="size-3.5"
+				>
+					<path
+						fill-rule="evenodd"
+						d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
+						clip-rule="evenodd"
+					/>
+				</svg>
+			</button>
+		</Tooltip>
 
-	<!-- Forward -->
-	<Tooltip content={$i18n.t('Forward')}>
-		<button
-			class="shrink-0 p-1 rounded transition {canGoForward
-				? 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-600 dark:hover:text-gray-400'
-				: 'text-gray-200 dark:text-gray-700 cursor-default'}"
-			on:click={onGoForward}
-			disabled={!canGoForward}
-			aria-label={$i18n.t('Forward')}
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				viewBox="0 0 20 20"
-				fill="currentColor"
-				class="size-3.5"
+		<!-- Forward -->
+		<Tooltip content={$i18n.t('Forward')}>
+			<button
+				class="flex size-7 shrink-0 items-center justify-center rounded-md transition {canGoForward
+					? 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+					: 'cursor-default text-gray-200 dark:text-gray-700'}"
+				on:mousedown|preventDefault|stopPropagation={onGoForward}
+				on:click={(event) => onKeyboardClick(event, onGoForward)}
+				disabled={!canGoForward}
+				aria-label={$i18n.t('Forward')}
 			>
-				<path
-					fill-rule="evenodd"
-					d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-		</button>
-	</Tooltip>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 20 20"
+					fill="currentColor"
+					class="size-3.5"
+				>
+					<path
+						fill-rule="evenodd"
+						d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
+						clip-rule="evenodd"
+					/>
+				</svg>
+			</button>
+		</Tooltip>
+	</div>
 
 	<div
 		bind:this={breadcrumbEl}
-		class="flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none"
+		class="scrollbar-none flex h-8 min-w-0 flex-1 items-center overflow-x-auto rounded-md bg-gray-50 px-2 dark:bg-gray-800/60"
 	>
-		{#each breadcrumbs as crumb, i}
-			{#if i > 1}
-				<span class="text-gray-300 dark:text-gray-600 text-xs shrink-0 select-none mx-0.5">/</span>
+		<Folder className="mr-1.5 size-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
+		{#each visibleBreadcrumbs as crumb, i}
+			{#if i > 0}
+				<span class="mx-0.5 shrink-0 select-none text-xs text-gray-300 dark:text-gray-600">/</span>
 			{/if}
 			<button
-				class="text-xs shrink-0 px-1 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition
-					{!selectedFile && i === breadcrumbs.length - 1
+				class="shrink-0 rounded px-1 py-0.5 text-xs transition hover:bg-gray-200/60 dark:hover:bg-gray-700/70
+					{!selectedFile && i === visibleBreadcrumbs.length - 1
 					? 'text-gray-700 dark:text-gray-300'
 					: 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400'}
 					{dragOverCrumb === i
 					? 'bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-400 dark:ring-blue-500'
 					: ''}"
-				on:click={() => onNavigate(crumb.path)}
+				on:mousedown|preventDefault|stopPropagation={() => onNavigate(crumb.path)}
+				on:click={(event) => onKeyboardClick(event, () => onNavigate(crumb.path))}
 				on:dragover={(e) => {
 					if (!e.dataTransfer?.types.includes('application/x-terminal-file-move')) return;
 					e.preventDefault();
@@ -139,40 +162,134 @@
 			</button>
 		{/each}
 		{#if selectedFile}
-			<span class="text-gray-300 dark:text-gray-600 text-xs shrink-0 select-none mx-0.5">/</span>
+			{#if visibleBreadcrumbs.length > 0}<span
+					class="mx-0.5 shrink-0 select-none text-xs text-gray-300 dark:text-gray-600">/</span
+				>{/if}
 			<span class="text-xs shrink-0 px-1.5 py-0.5 text-gray-700 dark:text-gray-300">
 				{selectedFile.split('/').pop()}
 			</span>
 		{/if}
 	</div>
 
-	<Tooltip content={$i18n.t('Refresh')}>
-		<button
-			class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-			on:click={onRefresh}
-			aria-label={$i18n.t('Refresh')}
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				viewBox="0 0 20 20"
-				fill="currentColor"
-				class="size-3.5 {loading ? 'animate-spin' : ''}"
+	<div
+		class="flex shrink-0 items-center gap-0.5 border-l border-gray-100 pl-2 dark:border-gray-800"
+	>
+		<Tooltip content={$i18n.t('Refresh')}>
+			<button
+				class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+				on:mousedown|preventDefault|stopPropagation={onRefresh}
+				on:click={(event) => onKeyboardClick(event, onRefresh)}
+				aria-label={$i18n.t('Refresh')}
 			>
-				<path
-					fill-rule="evenodd"
-					d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-		</button>
-	</Tooltip>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 20 20"
+					fill="currentColor"
+					class="size-3.5 {loading ? 'animate-spin' : ''}"
+				>
+					<path
+						fill-rule="evenodd"
+						d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
+						clip-rule="evenodd"
+					/>
+				</svg>
+			</button>
+		</Tooltip>
 
-	{#if !selectedFile}
-		<Dropdown align="end" sideOffset={4}>
-			<Tooltip content={$i18n.t('Sort')}>
+		{#if !selectedFile}
+			<Dropdown align="end" sideOffset={4}>
+				<Tooltip content={$i18n.t('Sort')}>
+					<button
+						class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+						aria-label={$i18n.t('Sort')}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 20 20"
+							fill="currentColor"
+							class="size-3.5"
+						>
+							<path
+								d="M2 3.75A.75.75 0 0 1 2.75 3h11.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75ZM2 7.5a.75.75 0 0 1 .75-.75h7.508a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 7.5ZM14 7a.75.75 0 0 1 .75.75v6.69l1.72-1.72a.75.75 0 1 1 1.06 1.06l-3 3a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 1 1 1.06-1.06l1.72 1.72V7.75A.75.75 0 0 1 14 7ZM2 11.25a.75.75 0 0 1 .75-.75h4.562a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z"
+							/>
+						</svg>
+					</button>
+				</Tooltip>
+
+				<div slot="content">
+					<DropdownMenu className="min-w-[150px] z-[9999999]">
+						<button
+							type="button"
+							class="select-none flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 transition"
+							on:click={() => onSort('name')}
+						>
+							<span class="flex-1 text-left">{$i18n.t('Name')}</span>
+							{#if sortBy === 'name'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									fill="currentColor"
+									class="size-3 text-gray-500 dark:text-gray-400 transition-transform {sortAsc
+										? ''
+										: 'rotate-180'}"
+								>
+									<path
+										fill-rule="evenodd"
+										d="M11.78 9.78a.75.75 0 0 1-1.06 0L8 7.06 5.28 9.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06Z"
+										clip-rule="evenodd"
+									/>
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
+							class="select-none flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 transition"
+							on:click={() => onSort('date')}
+						>
+							<span class="flex-1 text-left">{$i18n.t('Date Modified')}</span>
+							{#if sortBy === 'date'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									fill="currentColor"
+									class="size-3 text-gray-500 dark:text-gray-400 transition-transform {sortAsc
+										? ''
+										: 'rotate-180'}"
+								>
+									<path
+										fill-rule="evenodd"
+										d="M11.78 9.78a.75.75 0 0 1-1.06 0L8 7.06 5.28 9.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06Z"
+										clip-rule="evenodd"
+									/>
+								</svg>
+							{/if}
+						</button>
+					</DropdownMenu>
+				</div>
+			</Dropdown>
+			<Tooltip content={$i18n.t('New Folder')}>
 				<button
-					class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-					aria-label={$i18n.t('Sort')}
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={onNewFolder}
+					aria-label={$i18n.t('New Folder')}
+				>
+					<NewFolderAlt className="size-3.5" />
+				</button>
+			</Tooltip>
+			<Tooltip content={$i18n.t('New File')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={onNewFile}
+					aria-label={$i18n.t('New File')}
+				>
+					<FilePlusAlt className="size-3.5" />
+				</button>
+			</Tooltip>
+			<Tooltip content={$i18n.t('Download')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={onDownloadDir}
+					aria-label={$i18n.t('Download')}
 				>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
@@ -181,136 +298,49 @@
 						class="size-3.5"
 					>
 						<path
-							d="M2 3.75A.75.75 0 0 1 2.75 3h11.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75ZM2 7.5a.75.75 0 0 1 .75-.75h7.508a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 7.5ZM14 7a.75.75 0 0 1 .75.75v6.69l1.72-1.72a.75.75 0 1 1 1.06 1.06l-3 3a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 1 1 1.06-1.06l1.72 1.72V7.75A.75.75 0 0 1 14 7ZM2 11.25a.75.75 0 0 1 .75-.75h4.562a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z"
+							d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z"
+						/>
+						<path
+							d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z"
 						/>
 					</svg>
 				</button>
 			</Tooltip>
-
-			<div slot="content">
-				<DropdownMenu className="min-w-[150px] z-[9999999]">
-					<button
-						type="button"
-						class="select-none flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 transition"
-						on:click={() => onSort('name')}
-					>
-						<span class="flex-1 text-left">{$i18n.t('Name')}</span>
-						{#if sortBy === 'name'}
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 16 16"
-								fill="currentColor"
-								class="size-3 text-gray-500 dark:text-gray-400 transition-transform {sortAsc
-									? ''
-									: 'rotate-180'}"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M11.78 9.78a.75.75 0 0 1-1.06 0L8 7.06 5.28 9.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06Z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-						{/if}
-					</button>
-					<button
-						type="button"
-						class="select-none flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 transition"
-						on:click={() => onSort('date')}
-					>
-						<span class="flex-1 text-left">{$i18n.t('Date Modified')}</span>
-						{#if sortBy === 'date'}
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 16 16"
-								fill="currentColor"
-								class="size-3 text-gray-500 dark:text-gray-400 transition-transform {sortAsc
-									? ''
-									: 'rotate-180'}"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M11.78 9.78a.75.75 0 0 1-1.06 0L8 7.06 5.28 9.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06Z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-						{/if}
-					</button>
-				</DropdownMenu>
-			</div>
-		</Dropdown>
-		<Tooltip content={$i18n.t('New Folder')}>
-			<button
-				class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-				on:click={onNewFolder}
-				aria-label={$i18n.t('New Folder')}
-			>
-				<NewFolderAlt className="size-3.5" />
-			</button>
-		</Tooltip>
-		<Tooltip content={$i18n.t('New File')}>
-			<button
-				class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-				on:click={onNewFile}
-				aria-label={$i18n.t('New File')}
-			>
-				<FilePlusAlt className="size-3.5" />
-			</button>
-		</Tooltip>
-		<Tooltip content={$i18n.t('Download')}>
-			<button
-				class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-				on:click={onDownloadDir}
-				aria-label={$i18n.t('Download')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
+			<Tooltip content={$i18n.t('Upload')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={() => uploadInput?.click()}
+					aria-label={$i18n.t('Upload')}
 				>
-					<path
-						d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z"
-					/>
-					<path
-						d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
-		<Tooltip content={$i18n.t('Upload')}>
-			<button
-				class="shrink-0 p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-				on:click={() => uploadInput?.click()}
-				aria-label={$i18n.t('Upload')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.5"
-					class="size-3.5"
-				>
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
-		<input
-			bind:this={uploadInput}
-			type="file"
-			multiple
-			hidden
-			on:change={async () => {
-				if (!uploadInput?.files?.length) return;
-				onUploadFiles(Array.from(uploadInput.files));
-				uploadInput.value = '';
-			}}
-		/>
-	{:else}
-		<slot />
-	{/if}
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						class="size-3.5"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+			<input
+				bind:this={uploadInput}
+				type="file"
+				multiple
+				hidden
+				on:change={async () => {
+					if (!uploadInput?.files?.length) return;
+					onUploadFiles(Array.from(uploadInput.files));
+					uploadInput.value = '';
+				}}
+			/>
+		{:else}
+			<slot />
+		{/if}
+	</div>
 </div>

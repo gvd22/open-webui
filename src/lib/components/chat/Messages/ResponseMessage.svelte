@@ -38,6 +38,7 @@
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import equal from 'fast-deep-equal';
+	import { getWebPreviewsFromOutput } from '../Artifacts/webPreview';
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -196,6 +197,17 @@
 				.flatMap((previousMessage) =>
 					getCanvasNoteArtifactsFromOutput(previousMessage.output ?? []).map(
 						(artifact) => artifact.canvasId
+					)
+				)
+		)
+	);
+	$: previousWebPreviewIds = Array.from(
+		new Set(
+			createMessagesList(history, message.id)
+				.slice(0, -1)
+				.flatMap((previousMessage) =>
+					getWebPreviewsFromOutput(previousMessage.output ?? []).map(
+						(artifact) => artifact.previewId
 					)
 				)
 		)
@@ -838,6 +850,7 @@
 									content={message.content}
 									output={message.output}
 									{previousCanvasIds}
+									{previousWebPreviewIds}
 									sources={message.sources}
 									floatingButtons={message?.done &&
 										!readOnly &&

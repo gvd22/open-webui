@@ -49,6 +49,13 @@ from open_webui.utils.canvas import (
     set_active_canvas_document,
     sync_linked_canvas_note_content,
 )
+from open_webui.utils.web_preview import (
+    WEB_PREVIEW_DOCUMENTS_KEY,
+    generate_web_preview_title,
+    normalize_web_preview_files,
+    set_active_web_preview,
+    web_preview_timestamp,
+)
 from open_webui.utils.context_compaction import compact_chat_branch, get_chat_context_usage
 from open_webui.utils.misc import get_message_list
 from open_webui.utils.models import get_all_models
@@ -1368,6 +1375,76 @@ class CanvasPromotionForm(BaseModel):
     json: dict | None = None
 
 
+class WebPreviewDocumentForm(BaseModel):
+    title: str
+    entrypoint: str = 'index.html'
+    files: dict
+    exported_path: str | None = None
+    exported_runtime: str | None = None
+
+
+@router.post('/{id}/web-preview/{preview_id}')
+async def update_transient_web_preview(
+    id: str,
+    preview_id: str,
+    form_data: WebPreviewDocumentForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Persist direct edits to a chat-scoped Web Preview."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+    current = documents.get(preview_id)
+    if not current:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Web Preview not found in this chat.')
+    try:
+        files = normalize_web_preview_files(form_data.files)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if form_data.entrypoint not in files or files[form_data.entrypoint]['mime'] != 'text/html':
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid HTML entrypoint.')
+
+    updated = {
+        **current,
+        'title': form_data.title.strip() or generate_web_preview_title(files, form_data.entrypoint),
+        'entrypoint': form_data.entrypoint,
+        'files': files,
+        'exported_path': form_data.exported_path,
+        'exported_runtime': form_data.exported_runtime,
+        'updated_at': web_preview_timestamp(current.get('updated_at')),
+    }
+    documents[preview_id] = updated
+    chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+    chat_data = set_active_web_preview(chat_data, preview_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+    return {'previewId': preview_id, **updated}
+
+
+@router.post('/{id}/web-preview/{preview_id}/select')
+async def select_transient_web_preview(
+    id: str,
+    preview_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Select a Web Preview and return its canonical current state."""
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    chat_data = dict(chat.chat or {})
+    document = (chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {}).get(preview_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Web Preview not found in this chat.')
+    chat_data = set_active_web_preview(chat_data, preview_id)
+    await Chats.update_chat_by_id(id, chat_data, db=db, touch=False)
+    return {'previewId': preview_id, **document}
+
+
 @router.post('/{id}/canvas/{canvas_id}/undo-ai')
 async def undo_last_canvas_ai_update(
     request: Request,
@@ -1519,6 +1596,15 @@ async def promote_transient_canvas_document(
     db: AsyncSession = Depends(get_async_session),
 ):
     """Create exactly one Note from a transient Canvas document on explicit request."""
+    if not await Config.get('notes.enable', True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Notes are disabled.')
+    if getattr(user, 'role', None) != 'admin' and not await has_permission(
+        user.id,
+        'features.notes',
+        await Config.get('user.permissions'),
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Notes are not available for this user.')
+
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if not chat:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)

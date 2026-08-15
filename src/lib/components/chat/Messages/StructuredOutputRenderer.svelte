@@ -6,10 +6,13 @@
 	import Markdown from './Markdown.svelte';
 	import CanvasActivity from './CanvasActivity.svelte';
 	import CanvasPreview from './CanvasPreview.svelte';
+	import WebPreviewCard from './WebPreviewCard.svelte';
+	import WebPreviewActivity from './WebPreviewActivity.svelte';
 	import ConsecutiveDetailsGroup from './Markdown/ConsecutiveDetailsGroup.svelte';
 	import {
 		buildOutputDisplayItems,
 		dedupeCanvasDisplayItems,
+		dedupeWebPreviewDisplayItems,
 		type OutputDetailToken,
 		type OutputDisplayItem,
 		type OutputItem
@@ -27,6 +30,7 @@
 	export let topPadding = false;
 	export let sourceIds: string[] = [];
 	export let previousCanvasIds: string[] = [];
+	export let previousWebPreviewIds: string[] = [];
 	export let formatMessageContent: (content: string) => string = (content) => content;
 	export let onSave: any = () => {};
 	export let onSourceClick: any = () => {};
@@ -40,9 +44,9 @@
 		compactPreview ? 'text-xs' : 'text-[0.9375rem]'
 	} text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition`;
 
-	$: displayItems = dedupeCanvasDisplayItems(
-		buildOutputDisplayItems(output) as OutputDisplayItem[],
-		previousCanvasIds
+	$: displayItems = dedupeWebPreviewDisplayItems(
+		dedupeCanvasDisplayItems(buildOutputDisplayItems(output) as OutputDisplayItem[], previousCanvasIds),
+		previousWebPreviewIds
 	);
 </script>
 
@@ -93,6 +97,15 @@
 		/>
 	{:else if displayItem.type === 'canvas_activity'}
 		<CanvasActivity
+			name={displayItem.name}
+			done={displayItem.done}
+			artifact={displayItem.artifact}
+			error={displayItem.error ?? ''}
+		/>
+	{:else if displayItem.type === 'web_preview'}
+		<WebPreviewCard artifact={displayItem.artifact} />
+	{:else if displayItem.type === 'web_preview_activity'}
+		<WebPreviewActivity
 			name={displayItem.name}
 			done={displayItem.done}
 			artifact={displayItem.artifact}

@@ -3,12 +3,18 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
+import open_webui.routers.chats as chats_router
 from open_webui.models.chats import Chats
+from open_webui.models.config import Config
 from open_webui.models.notes import Notes
 from open_webui.routers.chats import (
+    CanvasPromotionForm,
     CanvasDocumentForm,
+    promote_transient_canvas_document,
     undo_last_canvas_ai_update,
     update_transient_canvas_document,
 )
@@ -27,6 +33,7 @@ from open_webui.utils.canvas import (
     set_active_canvas_document,
     sync_linked_canvas_note_content,
 )
+from open_webui.utils.tools import supports_chat_workspace_tools
 
 
 def test_active_canvas_prompt_targets_existing_document_for_updates():
@@ -237,6 +244,60 @@ def test_canvas_is_not_available_inside_internal_note_chats():
     assert is_internal_note_chat(note_chat) is True
     assert is_internal_note_chat(automation_chat) is False
     assert is_internal_note_chat(None) is False
+
+
+def test_workspace_tools_are_available_in_automation_but_not_notes_chats():
+    chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
+    note_chat = SimpleNamespace(meta={'internal': True, 'type': 'note'})
+    automation_chat = SimpleNamespace(meta={'internal': True, 'type': 'automation'})
+
+    assert supports_chat_workspace_tools(chat_id, automation_chat) is True
+    assert supports_chat_workspace_tools(chat_id, note_chat) is False
+    assert supports_chat_workspace_tools('local:automation', automation_chat) is False
+
+
+def test_canvas_promotion_is_rejected_when_notes_are_disabled(monkeypatch):
+    monkeypatch.setattr(Config, 'get', AsyncMock(return_value=False))
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            promote_transient_canvas_document(
+                Request({'type': 'http', 'method': 'POST', 'path': '/'}),
+                'chat-1',
+                'canvas-1',
+                CanvasPromotionForm(title='Title', content='# Content'),
+                user=SimpleNamespace(id='user-1', role='admin'),
+            )
+        )
+
+    assert error.value.status_code == 403
+    assert error.value.detail == 'Notes are disabled.'
+
+
+def test_canvas_promotion_is_rejected_without_notes_permission(monkeypatch):
+    async def get_config(key, default=None):
+        if key == 'notes.enable':
+            return True
+        if key == 'user.permissions':
+            return {'features': {'notes': False}}
+        return default
+
+    monkeypatch.setattr(Config, 'get', get_config)
+    monkeypatch.setattr(chats_router, 'has_permission', AsyncMock(return_value=False))
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            promote_transient_canvas_document(
+                Request({'type': 'http', 'method': 'POST', 'path': '/'}),
+                'chat-1',
+                'canvas-1',
+                CanvasPromotionForm(title='Title', content='# Content'),
+                user=SimpleNamespace(id='user-1', role='user'),
+            )
+        )
+
+    assert error.value.status_code == 403
+    assert error.value.detail == 'Notes are not available for this user.'
 
 
 def test_linked_note_receives_canvas_content_update(monkeypatch):

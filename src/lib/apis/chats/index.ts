@@ -1398,6 +1398,55 @@ export const promoteTransientCanvasDocument = async (
 	return res.json();
 };
 
+export const updateTransientWebPreview = async (
+	token: string,
+	chatId: string,
+	previewId: string,
+	document: {
+		title: string;
+		entrypoint: string;
+		files: Record<string, unknown>;
+		exported_path?: string | null;
+		exported_runtime?: string | null;
+	}
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/web-preview/${encodeURIComponent(previewId)}`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			},
+			body: JSON.stringify(document)
+		}
+	);
+
+	if (!res.ok) throw await res.json();
+	return res.json();
+};
+
+export const selectTransientWebPreview = async (
+	token: string,
+	chatId: string,
+	previewId: string
+) => {
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/web-preview/${encodeURIComponent(previewId)}/select`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			}
+		}
+	);
+
+	if (!res.ok) throw await res.json();
+	return res.json();
+};
+
 export const compactChatById = async (token: string, id: string, model?: string | null) => {
 	let error = null;
 

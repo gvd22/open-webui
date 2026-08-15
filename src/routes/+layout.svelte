@@ -427,23 +427,8 @@
 
 	const resolveToolServer = (serverUrl) => {
 		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
-		if (!toolServer) {
-			const terminalServer = ($settings?.terminalServers ?? []).find(
-				(server) => server.url === serverUrl
-			);
-			if (terminalServer) {
-				toolServer = {
-					url: terminalServer.url,
-					auth_type: terminalServer.auth_type ?? 'bearer',
-					key: terminalServer.key ?? '',
-					path: terminalServer.path ?? '/openapi.json'
-				};
-			}
-		}
 
-		let toolServerData =
-			$toolServers?.find((server) => server.url === serverUrl) ??
-			$terminalServers?.find((server) => server.url === serverUrl);
+		let toolServerData = $toolServers?.find((server) => server.url === serverUrl);
 
 		let token = null;
 		if (toolServer) {

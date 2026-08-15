@@ -95,15 +95,19 @@
 
 	$: parsedArgs = parseArguments(args);
 	$: parsedResult = parseJSONString(result);
-	$: isCanvasToolCall = [
+	$: isWorkspaceObjectToolCall = [
 		'canvas_create_document',
 		'canvas_update_document',
 		'canvas_select_document',
-		'canvas_list_documents'
+		'canvas_list_documents',
+		'web_preview_create',
+		'web_preview_update',
+		'web_preview_select',
+		'web_preview_list'
 	].includes(attributes?.name ?? '');
 </script>
 
-{#if !isCanvasToolCall}
+{#if !isWorkspaceObjectToolCall}
 	<div {id} class={className}>
 	{#if !grouped && embeds && Array.isArray(embeds) && embeds.length > 0}
 		<!-- Embed Mode: Show iframes without collapsible behavior -->

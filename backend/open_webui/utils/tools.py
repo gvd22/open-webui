@@ -55,6 +55,10 @@ from open_webui.tools.builtin import (
     canvas_list_documents,
     canvas_select_document,
     canvas_update_document,
+    web_preview_create,
+    web_preview_list,
+    web_preview_select,
+    web_preview_update,
     create_automation,
     create_calendar_event,
     create_tasks,
@@ -116,6 +120,15 @@ from pydantic import BaseModel, Field, create_model
 from pydantic.fields import FieldInfo
 
 log = logging.getLogger(__name__)
+
+
+def supports_chat_workspace_tools(chat_id: str, chat: Any) -> bool:
+    """Workspace tools require a persisted non-Notes chat.
+
+    Automation runs use persisted chats and are intentionally supported. Notes
+    chats keep their own editor/tool lifecycle and must not receive these tools.
+    """
+    return is_saved_chat_id(chat_id) and not is_internal_note_chat(chat)
 
 
 def normalize_bearer_token(token: Any) -> str:
@@ -730,8 +743,7 @@ async def get_builtin_tools(
     if (
         is_builtin_tool_enabled('canvas')
         and get_model_capability('canvas', False)
-        and is_saved_chat_id(chat_id)
-        and not is_internal_note_chat(chat)
+        and supports_chat_workspace_tools(chat_id, chat)
     ):
         builtin_functions.extend(
             [
@@ -741,6 +753,13 @@ async def get_builtin_tools(
                 canvas_list_documents,
             ]
         )
+
+    if (
+        is_builtin_tool_enabled('web_preview')
+        and get_model_capability('web_preview', False)
+        and supports_chat_workspace_tools(chat_id, chat)
+    ):
+        builtin_functions.extend([web_preview_create, web_preview_update, web_preview_select, web_preview_list])
 
     # Channels tools - search channels and messages
     if is_builtin_tool_enabled('channels') and config.get('channels.enable') and await has_user_permission('channels'):

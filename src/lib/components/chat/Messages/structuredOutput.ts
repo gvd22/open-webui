@@ -4,6 +4,11 @@ import {
 	getCanvasToolWarningFromOutput,
 	type CanvasNoteArtifact
 } from '../Artifacts/canvas';
+import {
+	getWebPreviewErrorFromOutput,
+	getWebPreviewsFromOutput,
+	type WebPreviewArtifact
+} from '../Artifacts/webPreview';
 
 export type OutputContentPart = {
 	type?: string;
@@ -76,6 +81,19 @@ export type OutputDisplayItem =
 			done: boolean;
 			artifact?: CanvasNoteArtifact;
 			error?: string;
+	  }
+	| {
+			type: 'web_preview';
+			id: string;
+			artifact: WebPreviewArtifact;
+	  }
+	| {
+			type: 'web_preview_activity';
+			id: string;
+			name: string;
+			done: boolean;
+			artifact?: WebPreviewArtifact;
+			error?: string;
 	  };
 
 export function dedupeCanvasDisplayItems(
@@ -94,6 +112,19 @@ export function dedupeCanvasDisplayItems(
 		}
 
 		seenCanvasIds.add(item.artifact.canvasId);
+		return true;
+	});
+}
+
+export function dedupeWebPreviewDisplayItems(
+	items: OutputDisplayItem[],
+	previousPreviewIds: string[] = []
+): OutputDisplayItem[] {
+	const seen = new Set(previousPreviewIds);
+	return items.filter((item) => {
+		if (item.type !== 'web_preview') return true;
+		if (seen.has(item.artifact.previewId)) return false;
+		seen.add(item.artifact.previewId);
 		return true;
 	});
 }
@@ -118,6 +149,12 @@ const CANVAS_TOOL_NAMES = new Set([
 	'canvas_update_document',
 	'canvas_select_document',
 	'canvas_list_documents'
+]);
+const WEB_PREVIEW_TOOL_NAMES = new Set([
+	'web_preview_create',
+	'web_preview_update',
+	'web_preview_select',
+	'web_preview_list'
 ]);
 
 function getTextFromParts(parts: OutputContentPart[] = []): string {
@@ -322,6 +359,9 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	const canvasToolCallIds = new Set<string>();
 	const canvasArtifactByCallId: Record<string, CanvasNoteArtifact> = {};
 	const canvasErrorByCallId: Record<string, string> = {};
+	const webPreviewToolCallIds = new Set<string>();
+	const webPreviewByCallId: Record<string, WebPreviewArtifact> = {};
+	const webPreviewErrorByCallId: Record<string, string> = {};
 
 	for (const item of output) {
 		if (item?.type === 'function_call_output' && item.call_id) {
@@ -337,6 +377,13 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			if (canvasError) {
 				canvasErrorByCallId[item.call_id] = canvasError;
 			}
+			const webPreview = getWebPreviewsFromOutput([item])[0];
+			if (webPreview) {
+				webPreviewToolCallIds.add(item.call_id);
+				webPreviewByCallId[item.call_id] = webPreview;
+			}
+			const webPreviewError = getWebPreviewErrorFromOutput([item]);
+			if (webPreviewError) webPreviewErrorByCallId[item.call_id] = webPreviewError;
 		}
 	}
 
@@ -359,6 +406,22 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 
 	output.forEach((item, index) => {
 		if (item?.type === 'function_call_output') {
+			const webPreviews = getWebPreviewsFromOutput([item]);
+			if (webPreviews.length > 0) {
+				flushDetails();
+				for (const artifact of webPreviews) {
+					displayItems.push({ type: 'web_preview', id: artifact.previewId, artifact });
+				}
+			}
+			const webPreviewError = getWebPreviewErrorFromOutput([item]);
+			if (webPreviewError) {
+				flushDetails();
+				displayItems.push({
+					type: 'message',
+					id: item.id ?? `web-preview-error-${index}`,
+					text: webPreviewError
+				});
+			}
 			const canvasArtifacts = getCanvasNoteArtifactsFromOutput([item]);
 			if (canvasArtifacts.length > 0) {
 				flushDetails();
@@ -390,6 +453,24 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 					text: canvasWarning
 				});
 			}
+			return;
+		}
+
+		if (
+			item?.type === 'function_call' &&
+			(WEB_PREVIEW_TOOL_NAMES.has(item.name ?? '') ||
+				(item.call_id ? webPreviewToolCallIds.has(item.call_id) : false))
+		) {
+			flushDetails();
+			const token = buildToolCallToken(item, toolOutputByCallId);
+			displayItems.push({
+				type: 'web_preview_activity',
+				id: `web-preview-activity-${item.call_id ?? item.id ?? index}`,
+				name: item.name ?? 'web_preview_update',
+				done: token.attributes.done === 'true',
+				artifact: item.call_id ? webPreviewByCallId[item.call_id] : undefined,
+				error: item.call_id ? webPreviewErrorByCallId[item.call_id] : undefined
+			});
 			return;
 		}
 

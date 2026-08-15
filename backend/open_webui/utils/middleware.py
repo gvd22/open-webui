@@ -82,6 +82,7 @@ from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.canvas import get_active_canvas_prompt
+from open_webui.utils.web_preview import get_active_web_preview_prompt
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.context_compaction import compact_messages_for_request
 from open_webui.utils.files import (
@@ -2387,6 +2388,19 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         if canvas_prompt:
             form_data['messages'] = add_or_update_system_message(
                 canvas_prompt,
+                form_data.get('messages', []),
+                append=True,
+            )
+
+    web_preview_capability = model.get('info', {}).get('meta', {}).get('capabilities', {}).get('web_preview', False)
+    if web_preview_capability and is_saved_chat_id(chat_id):
+        web_preview_prompt = await get_active_web_preview_prompt(
+            chat_id,
+            getattr(user, 'id', ''),
+        )
+        if web_preview_prompt:
+            form_data['messages'] = add_or_update_system_message(
+                web_preview_prompt,
                 form_data.get('messages', []),
                 append=True,
             )

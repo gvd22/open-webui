@@ -1,5 +1,5 @@
 <script context="module" lang="ts">
-	let savedTab: 'controls' | 'files' | 'overview' = 'controls';
+	let savedTab: 'controls' | 'overview' = 'controls';
 </script>
 
 <script lang="ts">
@@ -17,10 +17,11 @@
 		showCallOverlay,
 		showArtifacts,
 		showEmbeds,
-		settings,
 		showFileNavPath,
 		selectedTerminalId,
-		user
+		user,
+		artifactCode,
+		workspaceUtilityInstances
 	} from '$lib/stores';
 
 	import { uploadFile } from '$lib/apis/files';
@@ -30,10 +31,14 @@
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
 	import Artifacts from './Artifacts.svelte';
+	import XTerminal from './XTerminal.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
-	import FileNav from './FileNav.svelte';
-	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
+	import {
+		resolveWorkspaceRuntime,
+		WORKSPACE_FILES_ID,
+		WORKSPACE_LAUNCHER_ID
+	} from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
@@ -61,6 +66,7 @@
 	let dragged = false;
 	let minSize = 0;
 	let paneReady = false;
+	let workspaceTerminalComponents: Record<string, XTerminal> = {};
 
 	// Tab state for Controls+Files panel
 	let activeTab = savedTab;
@@ -72,47 +78,42 @@
 	$: hasMessages = history?.messages && Object.keys(history.messages).length > 0;
 
 	$: showControlsTab = $user?.role === 'admin' || ($user?.permissions?.chat?.controls ?? true);
-	$: showFilesTab =
-		($selectedTerminalId &&
-			(($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId) ||
-				$user?.role === 'admin' ||
-				($user?.permissions?.features?.direct_tool_servers ?? true))) ||
-		(codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter');
+	$: workspaceRuntime = resolveWorkspaceRuntime(
+		$terminalServers,
+		$selectedTerminalId,
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
+	);
+	$: showFilesTab = workspaceRuntime.files;
 	$: showOverviewTab = hasMessages;
+
+	const openWorkspaceItem = (id: string) => {
+		artifactCode.set(id);
+		showArtifacts.set(true);
+		showControls.set(true);
+	};
 
 	// Tab fallback: if active tab becomes hidden, switch to next available
 	$: if (!showOverviewTab && activeTab === 'overview') activeTab = 'controls';
-	$: if (!showFilesTab && activeTab === 'files') activeTab = 'controls';
 	$: if (!showControlsTab && activeTab === 'controls') {
-		if (showFilesTab) activeTab = 'files';
-		else if (showOverviewTab) activeTab = 'overview';
+		if (showOverviewTab) activeTab = 'overview';
 	}
 
-	// Auto-close if there are no visible tabs
-	$: if (!showControlsTab && !showFilesTab && !showOverviewTab) {
-		showControls.set(false);
+	// The header button now owns a single end-user surface. Technical Controls stay
+	// in administration and never become the empty-chat default.
+	$: if ($showControls && !$showCallOverlay && !$showEmbeds && !$showArtifacts) {
+		openWorkspaceItem(WORKSPACE_LAUNCHER_ID);
 	}
 
 	// Auto-switch to Files tab when display_file is triggered
 	$: if ($showFileNavPath) {
-		activeTab = 'files';
-		showControls.set(true);
+		openWorkspaceItem(WORKSPACE_FILES_ID);
 	}
 
-	// Auto-open Files tab when a terminal is selected (suppress panel open when full-screen)
-	$: if ($selectedTerminalId && showFilesTab) {
-		activeTab = 'files';
-		if (largeScreen) {
-			showControls.set($settings?.showFilesOnTerminalSelect ?? true);
-		}
-	}
-
-	// Clear selected direct terminal if user lost permission
+	// Drop stale managed selections after an administrator removes the connection.
 	$: if (
 		$selectedTerminalId &&
 		$terminalServers !== null &&
-		!($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId) &&
-		!($user?.role === 'admin' || ($user?.permissions?.features?.direct_tool_servers ?? true))
+		!($terminalServers ?? []).some((t) => t.id === $selectedTerminalId)
 	) {
 		selectedTerminalId.set(null);
 	}
@@ -277,10 +278,14 @@
 		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
-	$: if (paneReady && !chatId) closeHandler();
-
 	// Helper: is a "special" full-screen panel active?
 	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
+	$: activeWorkspaceTerminal = $workspaceUtilityInstances.find(
+		(instance) => instance.kind === 'terminal' && instance.id === $artifactCode
+	);
+	$: if (activeWorkspaceTerminal && workspaceTerminalComponents[activeWorkspaceTerminal.id]) {
+		void tick().then(() => workspaceTerminalComponents[activeWorkspaceTerminal.id]?.focus());
+	}
 </script>
 
 {#if !largeScreen}
@@ -308,7 +313,27 @@
 				{:else if $showEmbeds}
 					<Embeds />
 				{:else if $showArtifacts}
-					<Artifacts {history} />
+					<div class="relative h-full min-h-0">
+						<Artifacts
+							{history}
+							showFiles={showFilesTab}
+							{codeInterpreterEnabled}
+							onAttach={handleTerminalAttach}
+						/>
+						{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
+							<div
+								class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
+								class:invisible={$artifactCode !== instance.id}
+								class:pointer-events-none={$artifactCode !== instance.id}
+							>
+								<XTerminal
+									bind:this={workspaceTerminalComponents[instance.id]}
+									{chatId}
+									terminalId={instance.terminalId}
+								/>
+							</div>
+						{/each}
+					</div>
 				{:else}
 					<!-- Controls + Files tabs -->
 					<div class="flex flex-col h-full min-h-0">
@@ -328,11 +353,8 @@
 								{/if}
 								{#if showFilesTab}
 									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'files'
-											? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-											: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'files')}
+										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300"
+										on:click={() => openWorkspaceItem(WORKSPACE_FILES_ID)}
 									>
 										{$i18n.t('Files')}
 									</button>
@@ -382,10 +404,6 @@
 										showMessage(node.data.message, true);
 									}}
 								/>
-							{:else if activeTab === 'files' && $selectedTerminalId}
-								<FileNav onAttach={handleTerminalAttach} {chatId} />
-							{:else if activeTab === 'files' && codeInterpreterEnabled}
-								<PyodideFileNav />
 							{:else}
 								<Controls embed={true} {models} bind:chatFiles bind:params />
 							{/if}
@@ -432,9 +450,7 @@
 				<div
 					class="w-full {specialPanel && !$showCallOverlay
 						? ' '
-						: 'bg-white dark:bg-gray-900'} z-40 pointer-events-auto {activeTab === 'files'
-						? ''
-						: 'overflow-y-auto'} scrollbar-hidden"
+						: 'bg-white dark:bg-gray-900'} z-40 pointer-events-auto overflow-y-auto scrollbar-hidden"
 					id="controls-container"
 				>
 					{#if $showCallOverlay}
@@ -452,7 +468,28 @@
 					{:else if $showEmbeds}
 						<Embeds overlay={dragged} />
 					{:else if $showArtifacts}
-						<Artifacts {history} overlay={dragged} />
+						<div class="relative h-full min-h-0">
+							<Artifacts
+								{history}
+								overlay={dragged}
+								showFiles={showFilesTab}
+								{codeInterpreterEnabled}
+								onAttach={handleTerminalAttach}
+							/>
+							{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
+								<div
+									class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
+									class:invisible={$artifactCode !== instance.id}
+									class:pointer-events-none={$artifactCode !== instance.id}
+								>
+									<XTerminal
+										bind:this={workspaceTerminalComponents[instance.id]}
+										{chatId}
+										terminalId={instance.terminalId}
+									/>
+								</div>
+							{/each}
+						</div>
 					{:else}
 						<!-- Controls + Files tabs -->
 						<div class="flex flex-col h-full min-h-0">
@@ -472,11 +509,8 @@
 									{/if}
 									{#if showFilesTab}
 										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'files'
-												? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-												: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'files')}
+											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300"
+											on:click={() => openWorkspaceItem(WORKSPACE_FILES_ID)}
 										>
 											{$i18n.t('Files')}
 										</button>
@@ -531,10 +565,6 @@
 											showMessage(node.data.message, true);
 										}}
 									/>
-								{:else if activeTab === 'files' && $selectedTerminalId}
-									<FileNav onAttach={handleTerminalAttach} overlay={dragged} {chatId} />
-								{:else if activeTab === 'files' && codeInterpreterEnabled}
-									<PyodideFileNav overlay={dragged} />
 								{:else}
 									<Controls embed={true} {models} bind:chatFiles bind:params />
 								{/if}

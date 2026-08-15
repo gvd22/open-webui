@@ -122,132 +122,138 @@
 <div class="flex flex-col h-full min-h-0">
 	<!-- Browser chrome -->
 	<div
-		class="flex items-center gap-1 px-1.5 py-1 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 shrink-0"
+		class="flex h-11 shrink-0 items-center gap-2 border-b border-gray-100 bg-white px-2.5 dark:border-gray-800 dark:bg-gray-850"
 	>
-		<!-- Back -->
-		<Tooltip content={$i18n.t('Back')}>
-			<button
-				class="p-1 rounded transition {canGoBack
-					? 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300'
-					: 'text-gray-300 dark:text-gray-700 cursor-default'}"
-				on:click={goBack}
-				disabled={!canGoBack}
-				aria-label={$i18n.t('Back')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
+		<div class="flex shrink-0 items-center gap-0.5">
+			<!-- Back -->
+			<Tooltip content={$i18n.t('Back')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md transition {canGoBack
+						? 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+						: 'cursor-default text-gray-200 dark:text-gray-700'}"
+					on:click={goBack}
+					disabled={!canGoBack}
+					aria-label={$i18n.t('Back')}
 				>
-					<path
-						fill-rule="evenodd"
-						d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3.5"
+					>
+						<path
+							fill-rule="evenodd"
+							d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
+							clip-rule="evenodd"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
 
-		<!-- Forward -->
-		<Tooltip content={$i18n.t('Forward')}>
-			<button
-				class="p-1 rounded transition {canGoForward
-					? 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300'
-					: 'text-gray-300 dark:text-gray-700 cursor-default'}"
-				on:click={goForward}
-				disabled={!canGoForward}
-				aria-label={$i18n.t('Forward')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
+			<!-- Forward -->
+			<Tooltip content={$i18n.t('Forward')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md transition {canGoForward
+						? 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+						: 'cursor-default text-gray-200 dark:text-gray-700'}"
+					on:click={goForward}
+					disabled={!canGoForward}
+					aria-label={$i18n.t('Forward')}
 				>
-					<path
-						fill-rule="evenodd"
-						d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
-
-		<!-- Refresh -->
-		<Tooltip content={$i18n.t('Refresh')}>
-			<button
-				class="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300 transition"
-				on:click={refresh}
-				aria-label={$i18n.t('Refresh')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
-					class:animate-spin={isLoading}
-				>
-					<path
-						fill-rule="evenodd"
-						d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3.5"
+					>
+						<path
+							fill-rule="evenodd"
+							d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
+							clip-rule="evenodd"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+		</div>
 
 		<!-- URL bar -->
-		<form class="flex-1 min-w-0" on:submit|preventDefault={navigateUrl}>
+		<form class="h-8 min-w-0 flex-1" on:submit|preventDefault={navigateUrl}>
 			<input
 				type="text"
 				bind:value={urlInput}
-				class="w-full text-[11px] font-mono bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full px-3 py-1 outline-none focus:border-blue-400 dark:focus:border-blue-500 focus:ring-1 focus:ring-blue-400/20 text-gray-600 dark:text-gray-300 transition"
+				class="h-8 w-full rounded-md bg-gray-50 px-2.5 font-mono text-xs text-gray-600 outline-none transition placeholder:text-gray-300 focus:bg-gray-100 focus:ring-1 focus:ring-gray-300 dark:bg-gray-800/60 dark:text-gray-300 dark:placeholder:text-gray-600 dark:focus:bg-gray-800 dark:focus:ring-gray-700"
 				placeholder="localhost:{port}"
 			/>
 		</form>
 
-		<!-- Open in new tab -->
-		<Tooltip content={$i18n.t('Open in new tab')}>
-			<button
-				class="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300 transition"
-				on:click={openExternal}
-				aria-label={$i18n.t('Open in new tab')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
+		<div
+			class="flex shrink-0 items-center gap-0.5 border-l border-gray-100 pl-2 dark:border-gray-800"
+		>
+			<!-- Refresh -->
+			<Tooltip content={$i18n.t('Refresh')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={refresh}
+					aria-label={$i18n.t('Refresh')}
 				>
-					<path
-						fill-rule="evenodd"
-						d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.5-3.5a.75.75 0 0 0 0 1.5h2.69l-4.72 4.72a.75.75 0 0 0 1.06 1.06l4.72-4.72v2.69a.75.75 0 0 0 1.5 0v-5.25a.75.75 0 0 0-.75-.75h-5.25Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3.5"
+						class:animate-spin={isLoading}
+					>
+						<path
+							fill-rule="evenodd"
+							d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
+							clip-rule="evenodd"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
 
-		<!-- Close -->
-		<Tooltip content={$i18n.t('Close')}>
-			<button
-				class="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300 transition"
-				on:click={onClose}
-				aria-label={$i18n.t('Close')}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
+			<!-- Open in new tab -->
+			<Tooltip content={$i18n.t('Open in new tab')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={openExternal}
+					aria-label={$i18n.t('Open in new tab')}
 				>
-					<path
-						d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
-					/>
-				</svg>
-			</button>
-		</Tooltip>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3.5"
+					>
+						<path
+							fill-rule="evenodd"
+							d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.5-3.5a.75.75 0 0 0 0 1.5h2.69l-4.72 4.72a.75.75 0 0 0 1.06 1.06l4.72-4.72v2.69a.75.75 0 0 0 1.5 0v-5.25a.75.75 0 0 0-.75-.75h-5.25Z"
+							clip-rule="evenodd"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+
+			<!-- Close -->
+			<Tooltip content={$i18n.t('Close')}>
+				<button
+					class="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+					on:click={onClose}
+					aria-label={$i18n.t('Close')}
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3.5"
+					>
+						<path
+							d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+		</div>
 	</div>
 
 	<!-- Loading bar -->
