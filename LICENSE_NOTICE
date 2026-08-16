@@ -12,7 +12,8 @@ For details on which commits are covered by which license, refer to LICENSE_HIST
 
 ## Bundled third-party notices
 
-The document viewer includes Apache ECharts through `@aiden0z/pptx-renderer`:
+The document viewer includes Apache ECharts and its BSD 3-Clause dependency
+zrender through `@aiden0z/pptx-renderer`:
 
 > Apache ECharts
 > Copyright 2017-2026 The Apache Software Foundation
@@ -21,4 +22,14 @@ The document viewer includes Apache ECharts through `@aiden0z/pptx-renderer`:
 
 `@aiden0z/pptx-renderer` and `docx-preview` are distributed under the Apache
 License 2.0. Their complete license texts remain available in their respective
-package distributions.
+package distributions. The complete notices for Apache ECharts and zrender are
+also distributed in the container under `/app/legal`.
+
+The document viewer also bundles these verified package notices:
+
+- `pdfjs-dist/LICENSE` (Apache-2.0)
+- `docx-preview/LICENSE` (Apache-2.0)
+- `@aiden0z/pptx-renderer/LICENSE` (Apache-2.0)
+- `jszip/LICENSE.markdown` (MIT OR GPL-3.0-or-later)
+- `echarts/LICENSE` and `echarts/NOTICE` (Apache-2.0)
+- `zrender/LICENSE` (BSD-3-Clause)

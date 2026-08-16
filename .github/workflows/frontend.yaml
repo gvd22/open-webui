@@ -30,7 +30,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --force
+        run: npm ci --force
 
       - name: Verify code formatting
         run: npm run format
@@ -45,6 +45,12 @@ jobs:
         run: npm run build
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+
+      - name: Verify viewer dependency licenses
+        run: node scripts/check-viewer-dependencies.mjs
+
+      - name: Verify viewer bundle ceilings
+        run: npm run check:viewer:bundle
 
   # ── Vitest unit tests ────────────────────────────────────────────────────
   unit-tests:
@@ -63,3 +69,18 @@ jobs:
 
       - name: Execute test suite
         run: npm run test:frontend
+
+      - name: Execute focused viewer tests
+        run: npm run test:viewer
+
+      - name: Install Chromium for viewer browser tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Execute viewer browser tests
+        run: npm run test:viewer:e2e
+
+      - name: Execute viewer contract tests
+        run: npm run test:viewer:contracts
+
+      - name: Run audit diagnostic
+        run: npm audit --omit=dev --audit-level=high || echo "npm audit baseline is non-blocking until existing findings are resolved"

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
+	import { getContext, tick } from 'svelte';
 
 	import CodeBracket from '$lib/components/icons/CodeBracket.svelte';
 	import Document from '$lib/components/icons/Document.svelte';
@@ -23,7 +23,7 @@
 	export let filesAvailable = false;
 	export let onSelect: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onClose: () => void = () => {};
-	export let onCloseTab: (tab: WorkspaceTab) => void = () => {};
+	export let onCloseTab: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onReorder: (sourceId: string, targetId: string) => void = () => {};
 	export let onOpenFiles: () => void = () => {};
 	export let onOpenTerminal: () => void = () => {};
@@ -33,6 +33,7 @@
 	let dragTargetId = '';
 	let pressedTabId = '';
 	let pointerStart = { x: 0, y: 0 };
+	let tabList: HTMLDivElement;
 	$: hasAddActions = hasWorkspaceAddActions(terminalId, filesAvailable);
 
 	const onKeyboardClick = (event: MouseEvent, action: () => void) => {
@@ -70,6 +71,49 @@
 		} finally {
 			selectingTabId = '';
 		}
+	};
+
+	const getTabButton = (index: number) =>
+		tabList?.querySelector<HTMLButtonElement>(`[data-workspace-tab-index="${index}"]`);
+
+	const focusSelectedTab = async () => {
+		await tick();
+		getTabButton(selectedIndex)?.focus();
+	};
+
+	const selectAndFocusTab = async (index: number) => {
+		const tab = tabs[index];
+		if (!tab) return;
+		await selectTab(tab);
+		await focusSelectedTab();
+	};
+
+	const handleTabKeydown = (event: KeyboardEvent, tab: WorkspaceTab) => {
+		if (event.altKey || event.ctrlKey || event.metaKey) return;
+		let index: number | null = null;
+		switch (event.key) {
+			case 'ArrowLeft':
+				index = (tab.index - 1 + tabs.length) % tabs.length;
+				break;
+			case 'ArrowRight':
+				index = (tab.index + 1) % tabs.length;
+				break;
+			case 'Home':
+				index = 0;
+				break;
+			case 'End':
+				index = tabs.length - 1;
+				break;
+			default:
+				return;
+		}
+		event.preventDefault();
+		void selectAndFocusTab(index);
+	};
+
+	const closeTab = async (tab: WorkspaceTab) => {
+		await onCloseTab(tab);
+		await focusSelectedTab();
 	};
 
 	const openFiles = () => {
@@ -141,6 +185,7 @@
 >
 	<div class="flex min-h-8 items-center gap-1">
 		<div
+			bind:this={tabList}
 			class="scrollbar-hidden flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
 			role="tablist"
 			aria-label={$i18n.t('Open documents')}
@@ -161,15 +206,19 @@
 						type="button"
 						draggable="false"
 						role="tab"
+						id={`workspace-tab-${tab.index}`}
 						aria-selected={tab.index === selectedIndex}
-						aria-controls="workspace-active-content"
+						aria-controls={`workspace-panel-${tab.index}`}
+						tabindex={tab.index === selectedIndex ? 0 : -1}
 						title={tab.title}
 						data-workspace-id={tab.id}
+						data-workspace-tab-index={tab.index}
 						class="flex h-8 w-full min-w-0 items-center gap-2 px-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 dark:focus-visible:ring-gray-500 {tab.closable
 							? 'pr-8'
 							: 'pr-3'}"
 						on:mousedown|stopPropagation={(event) => beginTabMouse(event, tab)}
 						on:click|stopPropagation={() => void selectTab(tab)}
+						on:keydown={(event) => handleTabKeydown(event, tab)}
 					>
 						<span
 							class="shrink-0 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300"
@@ -197,7 +246,7 @@
 							aria-label={`${$i18n.t('Close')}: ${tab.title}`}
 							title={`${$i18n.t('Close')}: ${tab.title}`}
 							on:mousedown|preventDefault|stopPropagation={() => {}}
-							on:click|preventDefault|stopPropagation={() => onCloseTab(tab)}
+							on:click|preventDefault|stopPropagation={() => void closeTab(tab)}
 						>
 							<XMark className="size-3.5" />
 						</button>

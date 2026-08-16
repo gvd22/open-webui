@@ -1,10 +1,14 @@
 <script lang="ts">
-	import { getContext, onDestroy, onMount } from 'svelte';
+	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import ChevronLeft from '$lib/components/icons/ChevronLeft.svelte';
 	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
-	import { hardenDocumentLinks, PPTX_ZIP_LIMITS } from './security';
+	import { hardenDocumentLinks, PPTX_ZIP_LIMITS, validatePptxArchive } from './security';
 	const i18n = getContext('i18n');
+	const dispatch = createEventDispatcher<{
+		'preview-rendered': { data: ArrayBuffer };
+		'preview-failed': { data: ArrayBuffer };
+	}>();
 
 	export let data: ArrayBuffer;
 
@@ -40,10 +44,20 @@
 		);
 		candidateLinkObserver.observe(candidateContainer, { childList: true, subtree: true });
 		candidateContainer.className = 'presentation-render-surface';
+		candidateContainer.setAttribute('aria-hidden', 'true');
+		candidateContainer.inert = true;
+		candidateContainer.style.pointerEvents = 'none';
+		candidateContainer.style.transform = 'translateX(-200vw)';
 		candidateContainer.style.visibility = 'hidden';
 		host.appendChild(candidateContainer);
 
 		try {
+			await validatePptxArchive(candidateData);
+			if (generation !== renderGeneration) {
+				candidateLinkObserver.disconnect();
+				candidateContainer.remove();
+				return;
+			}
 			const { PptxViewer } = await import('@aiden0z/pptx-renderer');
 			if (generation !== renderGeneration) {
 				candidateLinkObserver.disconnect();
@@ -86,6 +100,10 @@
 			viewer = candidateViewer;
 			viewerContainer = candidateContainer;
 			viewerLinkObserver = candidateLinkObserver;
+			candidateContainer.removeAttribute('aria-hidden');
+			candidateContainer.inert = false;
+			candidateContainer.style.pointerEvents = '';
+			candidateContainer.style.transform = '';
 			candidateContainer.style.visibility = 'visible';
 			previousViewer?.destroy();
 			previousLinkObserver?.disconnect();
@@ -93,6 +111,7 @@
 			slideCount = candidateSlideCount;
 			currentSlide = candidateViewer.currentSlideIndex;
 			renderedData = candidateData;
+			dispatch('preview-rendered', { data: candidateData });
 		} catch (cause) {
 			candidateViewer?.destroy();
 			candidateLinkObserver.disconnect();
@@ -100,6 +119,7 @@
 			if (generation !== renderGeneration) return;
 			console.error('PPTX render failed:', cause);
 			error = $i18n.t('This PowerPoint presentation could not be displayed.');
+			dispatch('preview-failed', { data: candidateData });
 		} finally {
 			if (generation === renderGeneration) loading = false;
 		}
@@ -111,6 +131,38 @@
 		if (next === currentSlide) return;
 		await viewer.goToSlide(next);
 		currentSlide = viewer.currentSlideIndex;
+	};
+
+	const goToSlide = async (index: number) => {
+		if (!viewer) return;
+		await viewer.goToSlide(Math.max(0, Math.min(slideCount - 1, index)));
+		currentSlide = viewer.currentSlideIndex;
+	};
+
+	const handlePresentationKeydown = (event: KeyboardEvent) => {
+		if (event.altKey || event.ctrlKey || event.metaKey) {
+			return;
+		}
+		switch (event.key) {
+			case 'ArrowLeft':
+			case 'PageUp':
+				event.preventDefault();
+				void changeSlide(-1);
+				break;
+			case 'ArrowRight':
+			case 'PageDown':
+				event.preventDefault();
+				void changeSlide(1);
+				break;
+			case 'Home':
+				event.preventDefault();
+				void goToSlide(0);
+				break;
+			case 'End':
+				event.preventDefault();
+				void goToSlide(slideCount - 1);
+				break;
+		}
 	};
 
 	onMount(() => {
@@ -137,8 +189,21 @@
 >
 	<div
 		bind:this={host}
+		role="slider"
+		tabindex={slideCount > 0 ? 0 : -1}
+		aria-disabled={slideCount === 0}
+		aria-label={$i18n.t('PowerPoint presentation')}
+		aria-valuemin="1"
+		aria-valuemax={Math.max(1, slideCount)}
+		aria-valuenow={Math.min(Math.max(1, currentSlide + 1), Math.max(1, slideCount))}
+		aria-valuetext={$i18n.t('Slide {{current}} of {{total}}', {
+			current: Math.min(Math.max(1, currentSlide + 1), Math.max(1, slideCount)),
+			total: Math.max(1, slideCount)
+		})}
+		aria-keyshortcuts="ArrowLeft ArrowRight PageUp PageDown Home End"
 		class="presentation-container relative h-full w-full"
 		data-testid="powerpoint-document-viewport"
+		on:keydown={handlePresentationKeydown}
 	></div>
 
 	{#if loading && !renderedData}

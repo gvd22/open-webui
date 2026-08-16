@@ -15,11 +15,12 @@
 	import Spinner from '../common/Spinner.svelte';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
+	import { getWorkspaceFileOpenTarget } from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
 	export let overlay = false;
-	export let onOpenFile: (path: string) => void = () => {};
+	export let onOpenFile: (path: string) => boolean = () => false;
 
 	// ── State ─────────────────────────────────────────────────────────────
 	let currentPath = savedPyodidePath;
@@ -178,11 +179,9 @@
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
-		if (notifyWorkspace && /\.(pdf|docx|pptx)$/i.test(filePath)) {
-			onOpenFile(filePath);
-			return;
-		}
-		if (notifyWorkspace) onOpenFile(filePath);
+		const fileOpenTarget = getWorkspaceFileOpenTarget(filePath);
+		if (notifyWorkspace && fileOpenTarget === 'document-viewer' && onOpenFile(filePath)) return;
+		if (notifyWorkspace && fileOpenTarget === 'files') onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 		selectedFile = filePath;
 		fileLoading = true;
@@ -253,6 +252,11 @@
 	const doDelete = async () => {
 		try {
 			await sendWorkerMessage({ type: 'fs:delete', path: deletePath });
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: { paths: [deletePath], kind: 'deleted' }
+				})
+			);
 			if (selectedFile === deletePath) {
 				selectedFile = null;
 				clearPreview();

@@ -41,3 +41,14 @@ jobs:
 
       - name: Detect logic errors
         run: ruff check --select=F --ignore=F401,F403,F405,F541,F811,F841 --output-format=github .
+
+      - name: Install backend test dependencies
+        run: pip install -r backend/requirements.txt pytest-asyncio
+
+      - name: Run backend workspace tests
+        run: pytest -q backend/tests -p pytest_asyncio.plugin
+        env:
+          PYTHONPATH: backend
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          WEBUI_SECRET_KEY: ci-only-document-viewer-test-key
+          DATA_DIR: ${{ runner.temp }}/open-webui-document-viewer

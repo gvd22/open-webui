@@ -6,6 +6,37 @@ from open_webui.utils import middleware
 from open_webui.utils.middleware import has_workspace_runtime_access, validate_workspace_file_reference
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('tool_name', 'params', 'expected'),
+    [
+        (
+            'write_file',
+            {'path': '/workspace/report.docx'},
+            {'type': 'terminal:write_file', 'data': {'path': '/workspace/report.docx', 'kind': 'changed'}},
+        ),
+        (
+            'replace_file_content',
+            {'path': '/workspace/report.docx'},
+            {
+                'type': 'terminal:replace_file_content',
+                'data': {'path': '/workspace/report.docx', 'kind': 'changed'},
+            },
+        ),
+        ('run_command', {'command': 'python revise.py'}, {'type': 'terminal:run_command', 'data': {'kind': 'unknown'}}),
+    ],
+)
+async def test_terminal_file_events_distinguish_known_and_unknown_changes(tool_name, params, expected):
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await middleware.terminal_event_handler(tool_name, params, {}, emit)
+
+    assert events == [expected]
+
+
 def test_workspace_file_reference_requires_an_active_runtime():
     reference = {'path': '/workspace/brief.docx', 'format': 'docx'}
 

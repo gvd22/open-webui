@@ -27,6 +27,16 @@ export default defineConfig({
 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build')
 	},
 	build: {
+		manifest: true,
+		rollupOptions: {
+			output: {
+				manualChunks(id) {
+					if (id.includes('/node_modules/pdfjs-dist/')) return 'pdfjs-dist';
+					if (id.includes('/node_modules/docx-preview/')) return 'docx-preview';
+					if (id.includes('/node_modules/@aiden0z/pptx-renderer/')) return 'pptx-renderer';
+				}
+			}
+		},
 		sourcemap: true
 	},
 	server: {

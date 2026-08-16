@@ -932,7 +932,7 @@
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
 			if ($workspaceOpenFilePaths.includes(data.path)) {
-				workspaceFileUpdate.set({ path: data.path, revision: Date.now() });
+				workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
 			} else {
 				displayFileHandler(data.path, { showControls, showFileNavPath });
 			}
@@ -940,15 +940,23 @@
 			if (!data?.path) return;
 			if (isWorkspaceDocumentPath(data.path)) {
 				if ($workspaceOpenFilePaths.includes(data.path)) {
-					workspaceFileUpdate.set({ path: data.path, revision: Date.now() });
+					workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
 				} else {
 					displayFileHandler(data.path, { showControls, showFileNavPath });
 				}
 			}
 			showFileNavDir.set(data.path);
 		} else if (type === 'terminal:run_command') {
+			// A shell command can change any path (including rename/delete). Mark open
+			// viewers for a cheap verify on activation instead of guessing changed paths.
+			const terminalId =
+				data?.terminal_id ?? $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
+			workspaceFileUpdate.set({
+				kind: 'unknown',
+				terminalId: terminalId ?? null,
+				revision: Date.now()
+			});
 			showFileNavDir.set('/');
-			const terminalId = $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
 			// Historical terminal events are replayed while a chat is restored. Only a live
 			// model run should reveal the right-side terminal workspace.
 			if (generating && terminalId) {

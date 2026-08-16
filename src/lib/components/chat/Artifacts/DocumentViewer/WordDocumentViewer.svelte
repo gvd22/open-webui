@@ -1,8 +1,12 @@
 <script lang="ts">
-	import { getContext, onDestroy, onMount, tick } from 'svelte';
+	import { createEventDispatcher, getContext, onDestroy, onMount, tick } from 'svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { hardenDocumentLinks, validateDocxArchive } from './security';
 	const i18n = getContext('i18n');
+	const dispatch = createEventDispatcher<{
+		'preview-rendered': { data: ArrayBuffer };
+		'preview-failed': { data: ArrayBuffer };
+	}>();
 
 	export let data: ArrayBuffer;
 
@@ -14,6 +18,30 @@
 	let renderedData: ArrayBuffer | null = null;
 	let attemptedData: ArrayBuffer | null = null;
 	let renderGeneration = 0;
+	let documentScale = 1;
+	let resizeObserver: ResizeObserver | null = null;
+	let resizeFrame = 0;
+
+	const fitDocumentToViewport = () => {
+		const pages = Array.from(
+			documentRoot?.querySelectorAll<HTMLElement>('section.koby-docx') ?? []
+		);
+		if (!viewport || pages.length === 0) return;
+		const viewportStyle = getComputedStyle(viewport);
+		const availableWidth =
+			viewport.clientWidth -
+			parseFloat(viewportStyle.paddingLeft) -
+			parseFloat(viewportStyle.paddingRight);
+		const widestPage = Math.max(
+			...pages.map((page) => page.getBoundingClientRect().width / Math.max(documentScale, 0.01))
+		);
+		documentScale = Math.min(1, availableWidth / widestPage);
+	};
+
+	const scheduleFitToWidth = () => {
+		cancelAnimationFrame(resizeFrame);
+		resizeFrame = requestAnimationFrame(fitDocumentToViewport);
+	};
 
 	const renderDocument = async () => {
 		if (!mounted || !documentRoot || data === renderedData) return;
@@ -51,11 +79,15 @@
 			documentRoot.replaceChildren(...stagingRoot.childNodes);
 			renderedData = candidateData;
 			await tick();
+			if (generation !== renderGeneration) return;
 			if (viewport) viewport.scrollTop = previousScrollTop;
+			fitDocumentToViewport();
+			dispatch('preview-rendered', { data: candidateData });
 		} catch (cause) {
 			if (generation !== renderGeneration) return;
 			console.error('DOCX render failed:', cause);
 			error = $i18n.t('This Word document could not be displayed.');
+			dispatch('preview-failed', { data: candidateData });
 		} finally {
 			if (generation === renderGeneration) rendering = false;
 		}
@@ -63,11 +95,15 @@
 
 	onMount(() => {
 		mounted = true;
+		resizeObserver = new ResizeObserver(scheduleFitToWidth);
+		resizeObserver.observe(viewport);
 	});
 
 	onDestroy(() => {
 		mounted = false;
 		renderGeneration += 1;
+		resizeObserver?.disconnect();
+		cancelAnimationFrame(resizeFrame);
 	});
 
 	$: if (mounted && data !== attemptedData) void renderDocument();
@@ -79,7 +115,11 @@
 		class="word-viewport h-full overflow-auto px-5 pb-20 pt-12 sm:px-8"
 		data-testid="word-document-viewport"
 	>
-		<div bind:this={documentRoot} class="mx-auto min-h-full"></div>
+		<div
+			bind:this={documentRoot}
+			class="mx-auto min-h-full min-w-0"
+			style:--docx-scale={documentScale}
+		></div>
 	</div>
 
 	{#if rendering}
@@ -122,6 +162,7 @@
 
 	:global(section.koby-docx) {
 		margin: 0 auto 20px !important;
+		zoom: var(--docx-scale, 1);
 		box-shadow: 0 18px 46px rgba(25, 24, 22, 0.12) !important;
 		border-radius: 3px;
 		overflow: hidden;
@@ -135,11 +176,5 @@
 	:global(section.koby-docx p[class*='_listbullet']::before) {
 		content: '•\9 ' !important;
 		font-family: Arial, sans-serif !important;
-	}
-
-	@media (max-width: 640px) {
-		:global(section.koby-docx) {
-			transform-origin: top center;
-		}
 	}
 </style>

@@ -9,20 +9,25 @@ import {
 	getWorkspaceInstanceId,
 	getNextWorkspaceInstanceTitle,
 	getWorkspaceFileRefreshAction,
+	getWorkspaceFileUpdateAction,
 	hasWorkspaceAddActions,
 	isKeyboardActivationClick,
 	limitWorkspaceFileContents,
 	moveWorkspaceContent,
+	nextDocumentLoadSequence,
 	orderWorkspaceContents,
 	upsertWorkspaceFileContent,
 	getWorkspaceDocumentFormat,
+	getWorkspaceDocumentFormatForViewer,
+	getWorkspaceFileOpenTarget,
 	isWorkspaceDocumentPath,
 	resolveWorkspaceRuntime,
 	shouldResetWorkspaceForChatChange,
 	shouldShowWorkspaceTabs,
 	WORKSPACE_FILES_ID,
 	WORKSPACE_TERMINAL_ID,
-	WORKSPACE_BROWSER_ID
+	WORKSPACE_BROWSER_ID,
+	type WorkspaceContent
 } from './workspace';
 
 describe('workspace tabs', () => {
@@ -181,12 +186,44 @@ describe('workspace tabs', () => {
 		]);
 	});
 
-	it('evicts the oldest document tabs when the memory budget is reached', () => {
-		const opened = ['/one.pdf', '/two.docx', '/three.pptx'].map(buildWorkspaceFileContent);
-		const limited = limitWorkspaceFileContents(opened, 2);
+	it('keeps four documents across ten opens without evicting the active document', () => {
+		let contents: WorkspaceContent[] = [];
+		let recency: string[] = [];
+		const activeId = 'workspace:file:/workspace/0.pdf';
+		const evictedIds: string[] = [];
 
-		expect(limited.contents.map((content) => content.path)).toEqual(['/two.docx', '/three.pptx']);
-		expect(limited.evictedIds).toEqual(['workspace:file:/one.pdf']);
+		for (let index = 0; index < 10; index += 1) {
+			const path = `/workspace/${index}.pdf`;
+			const id = `workspace:file:${path}`;
+			contents = upsertWorkspaceFileContent(contents, path);
+			recency = [...recency.filter((candidate) => candidate !== id), id];
+			const limited = limitWorkspaceFileContents(contents, recency, activeId, 4);
+
+			expect(limited.evictedIds).not.toContain(activeId);
+			contents = limited.contents;
+			recency = limited.recency;
+			evictedIds.push(...limited.evictedIds);
+		}
+
+		expect(contents.map((content) => content.path)).toEqual([
+			'/workspace/0.pdf',
+			'/workspace/7.pdf',
+			'/workspace/8.pdf',
+			'/workspace/9.pdf'
+		]);
+		expect(evictedIds).toEqual([
+			'workspace:file:/workspace/1.pdf',
+			'workspace:file:/workspace/2.pdf',
+			'workspace:file:/workspace/3.pdf',
+			'workspace:file:/workspace/4.pdf',
+			'workspace:file:/workspace/5.pdf',
+			'workspace:file:/workspace/6.pdf'
+		]);
+	});
+
+	it('keeps refresh generations monotonic so stale renders cannot win', () => {
+		expect(nextDocumentLoadSequence(9)).toBe(10);
+		expect(nextDocumentLoadSequence(10)).toBe(11);
 	});
 
 	it('refreshes active Pyodide documents and defers inactive matching documents', () => {
@@ -196,12 +233,56 @@ describe('workspace tabs', () => {
 		expect(getWorkspaceFileRefreshAction(undefined, '/one.docx', false)).toBe('defer');
 	});
 
+	it('keeps deletion and rename lifecycle events distinct from refreshes', () => {
+		expect(
+			getWorkspaceFileUpdateAction({ path: '/one.docx', kind: 'deleted' }, '/one.docx', true)
+		).toBe('deleted');
+		expect(
+			getWorkspaceFileUpdateAction(
+				{ path: '/renamed.docx', previousPath: '/one.docx', kind: 'renamed' },
+				'/one.docx',
+				true
+			)
+		).toBe('renamed');
+		expect(getWorkspaceFileUpdateAction({ kind: 'unknown' }, '/one.docx', false)).toBe('defer');
+	});
+
 	it('routes only the lightweight document formats to the document viewer', () => {
 		expect(getWorkspaceDocumentFormat('/workspace/report.PDF')).toBe('pdf');
 		expect(getWorkspaceDocumentFormat('/workspace/report.docx')).toBe('docx');
 		expect(getWorkspaceDocumentFormat('/workspace/slides.pptx')).toBe('pptx');
-		expect(getWorkspaceDocumentFormat('/workspace/report.odt')).toBeNull();
-		expect(isWorkspaceDocumentPath('/workspace/table.xlsx')).toBe(false);
+		for (const path of [
+			'/workspace/table.xlsx',
+			'/workspace/legacy.xls',
+			'/workspace/data.csv',
+			'/workspace/report.odt',
+			'/workspace/table.ods',
+			'/workspace/slides.odp',
+			'/workspace/legacy.doc',
+			'/workspace/legacy.ppt'
+		]) {
+			expect(getWorkspaceDocumentFormat(path)).toBeNull();
+			expect(isWorkspaceDocumentPath(path)).toBe(false);
+		}
+	});
+
+	it('routes dedicated document formats only when the rollout is enabled', () => {
+		for (const path of ['/workspace/report.pdf', '/workspace/report.docx', '/workspace/deck.pptx']) {
+			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
+			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBe(getWorkspaceDocumentFormat(path));
+		}
+
+		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
+			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBeNull();
+		}
+	});
+
+	it('keeps unsupported formats in Files for both Terminal and Pyodide callers', () => {
+		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+			expect(getWorkspaceFileOpenTarget(path)).toBe('files');
+		}
+		expect(getWorkspaceFileOpenTarget('/workspace/report.pdf')).toBe('document-viewer');
 	});
 
 	it('preserves a custom tab order and appends unknown items', () => {

@@ -132,7 +132,17 @@ export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentForma
 	return extension === 'pdf' || extension === 'docx' || extension === 'pptx' ? extension : null;
 };
 
+export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boolean) =>
+	enabled ? getWorkspaceDocumentFormat(path) : null;
+
 export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFormat(path) !== null;
+
+/**
+ * Shared by the Terminal and Pyodide Files views before either delegates to a
+ * workspace tab. Formats outside the narrow viewer contract stay in Files.
+ */
+export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
+	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
 
 export const buildWorkspaceFileContent = (path: string): WorkspaceContent => ({
 	type: 'workspace-file',
@@ -204,14 +214,37 @@ export const upsertWorkspaceFileContent = (
 		: [...contents, buildWorkspaceFileContent(path)];
 };
 
-export const limitWorkspaceFileContents = (contents: WorkspaceContent[], maximum: number) => {
-	const overflow = Math.max(0, contents.length - Math.max(1, maximum));
-	const evicted = contents.slice(0, overflow);
+export const limitWorkspaceFileContents = (
+	contents: WorkspaceContent[],
+	recency: string[],
+	activeId: string,
+	maximum: number
+) => {
+	const ids = contents.map((content, index) => getWorkspaceContentId(content, index));
+	const contentIds = new Set(ids);
+	const orderedIds = [
+		...new Set(recency.filter((id) => contentIds.has(id))),
+		...ids.filter((id) => !recency.includes(id))
+	];
+	const remainingIds = new Set(ids);
+	const evictedIds: string[] = [];
+
+	for (const id of orderedIds) {
+		if (remainingIds.size <= Math.max(1, maximum)) break;
+		if (id !== activeId) {
+			remainingIds.delete(id);
+			evictedIds.push(id);
+		}
+	}
+
 	return {
-		contents: contents.slice(overflow),
-		evictedIds: evicted.map((content, index) => getWorkspaceContentId(content, index))
+		contents: contents.filter((content, index) => remainingIds.has(getWorkspaceContentId(content, index))),
+		recency: orderedIds.filter((id) => remainingIds.has(id)),
+		evictedIds
 	};
 };
+
+export const nextDocumentLoadSequence = (current: number) => current + 1;
 
 export const getWorkspaceFileRefreshAction = (
 	changedPaths: string[] | undefined,
@@ -219,6 +252,25 @@ export const getWorkspaceFileRefreshAction = (
 	isActive: boolean
 ): 'ignore' | 'refresh' | 'defer' => {
 	if (changedPaths?.length && !changedPaths.includes(path)) return 'ignore';
+	return isActive ? 'refresh' : 'defer';
+};
+
+export type WorkspaceFileChange = {
+	path?: string;
+	previousPath?: string;
+	kind?: 'changed' | 'deleted' | 'renamed' | 'unknown';
+};
+
+export const getWorkspaceFileUpdateAction = (
+	update: WorkspaceFileChange | null,
+	path: string,
+	isActive: boolean
+): 'ignore' | 'refresh' | 'defer' | 'deleted' | 'renamed' => {
+	if (!update) return 'ignore';
+	const refersToPath = update.path === path || update.previousPath === path;
+	if (update.kind === 'deleted' && refersToPath) return 'deleted';
+	if (update.kind === 'renamed' && update.previousPath === path) return 'renamed';
+	if (update.kind !== 'unknown' && !refersToPath) return 'ignore';
 	return isActive ? 'refresh' : 'defer';
 };
 

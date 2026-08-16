@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { downloadFileBlob, getListeningPorts } from './index';
+import { downloadFileBlob, downloadFileBlobDetailed, getListeningPorts } from './index';
 
 describe('getListeningPorts', () => {
 	afterEach(() => vi.unstubAllGlobals());
@@ -84,5 +84,45 @@ describe('downloadFileBlob', () => {
 		expect(result?.filename).toBe('ok.pdf');
 		expect(result?.blob.size).toBe(4);
 		expect(result?.blob.type).toBe('application/pdf');
+	});
+
+	it('keeps a streamed subarray within its exact byte range', async () => {
+		const source = new Uint8Array([9, 1, 2, 3, 9]);
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(source.subarray(1, 4));
+				controller.close();
+			}
+		});
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)));
+
+		const result = await downloadFileBlob('/terminal', 'token', '/range.pdf', undefined, 8);
+		expect([...new Uint8Array(await result!.blob.arrayBuffer())]).toEqual([1, 2, 3]);
+	});
+
+	it('distinguishes a missing file from an unavailable terminal for viewer recovery', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+		await expect(downloadFileBlobDetailed('/terminal', 'token', '/gone.pdf')).resolves.toEqual({
+			ok: false,
+			reason: 'missing'
+		});
+
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+		await expect(downloadFileBlobDetailed('/terminal', 'token', '/report.pdf')).resolves.toEqual({
+			ok: false,
+			reason: 'unavailable'
+		});
+	});
+
+	it('sends only the established authentication and session headers for viewer downloads', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array([1])));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await downloadFileBlobDetailed('/terminal', ' token ', '/report.pdf', 'session-1', 8);
+
+		expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+			Authorization: 'Bearer token',
+			'X-Session-Id': 'session-1'
+		});
 	});
 });
