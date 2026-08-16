@@ -89,10 +89,16 @@ test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page
 		await expect(link).toHaveAttribute('rel', /noopener/);
 	}
 	await page.goto('/?format=pptx');
-	await expect(page.getByText('KOBY-BASIC-PPTX-2-SLIDES')).toBeVisible();
+	const firstSlideTitle = page.getByText('KOBY-BASIC-PPTX-2-SLIDES');
+	await expect(firstSlideTitle).toBeVisible();
+	// A zero-sized shape remains accessible but produces a visually blank slide.
+	expect((await firstSlideTitle.boundingBox())?.width).toBeGreaterThan(20);
 	await page.getByLabel('PowerPoint presentation').focus();
 	await page.keyboard.press('ArrowRight');
 	await expect(page.getByText('2 / 2')).toBeVisible();
+	const secondSlideTitle = page.getByText('KOBY profiling slide 2');
+	await expect(secondSlideTitle).toBeVisible();
+	expect((await secondSlideTitle.boundingBox())?.width).toBeGreaterThan(20);
 });
 
 test('keeps the last valid DOCX and its download when an update is corrupt', async ({ page }) => {

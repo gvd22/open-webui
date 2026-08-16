@@ -61,7 +61,10 @@ class LargeProfileGeneratorTests(unittest.TestCase):
                 self.assertIn("ppt/presentation.xml", names)
                 slide_names = {name for name in names if name.startswith("ppt/slides/slide") and name.endswith(".xml")}
                 self.assertEqual(len(slide_names), 200)
-                self.assertIn(b"KOBY-LARGE-PPTX-200-SLIDES", archive.read("ppt/slides/slide1.xml"))
+                first_slide = archive.read("ppt/slides/slide1.xml")
+                self.assertIn(b"KOBY-LARGE-PPTX-200-SLIDES", first_slide)
+                self.assertIn(b'<a:xfrm><a:off x="914400" y="548640"/>', first_slide)
+                self.assertIn(b'<a:ext cx="10058400" cy="1097280"/>', first_slide)
 
             hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (pdf, docx, pptx)]
             subprocess.run(
