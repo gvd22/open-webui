@@ -13,6 +13,7 @@
 ## Task 1: Mount only the active document renderer and preserve workspace contracts
 
 **Files:**
+
 - Modify: `src/lib/components/chat/Artifacts.svelte:668-783`
 - Modify: `src/lib/components/chat/Artifacts/workspace.ts:197-214`
 - Test: `src/lib/components/chat/Artifacts/workspace.test.ts`
@@ -24,44 +25,50 @@ Add tests with these exact assertions:
 
 ```ts
 it('renders only the selected document viewer and leaves inactive owners empty', () => {
-  const source = readFileSync(new URL('../Artifacts.svelte', import.meta.url), 'utf8');
-  expect(source).toContain('hidden={selectedContentId !== getWorkspaceContentId(content, index)}');
-  expect(source).toContain("{#if selectedContentId === getWorkspaceContentId(content, index)}");
-  expect(source).toContain('id={`workspace-panel-${index}`}');
-  expect(source).toContain('<div class="absolute inset-0"></div>');
+	const source = readFileSync(new URL('../Artifacts.svelte', import.meta.url), 'utf8');
+	expect(source).toContain('hidden={selectedContentId !== getWorkspaceContentId(content, index)}');
+	expect(source).toContain('{#if selectedContentId === getWorkspaceContentId(content, index)}');
+	expect(source).toContain('id={`workspace-panel-${index}`}');
+	expect(source).toContain('<div class="absolute inset-0"></div>');
 });
 
 it('keeps four documents across ten opens without evicting the active document', () => {
-  let contents: WorkspaceContent[] = [];
-  let recency: string[] = [];
-  const activeId = 'workspace:file:/workspace/0.pdf';
-  const evictedIds: string[] = [];
+	let contents: WorkspaceContent[] = [];
+	let recency: string[] = [];
+	const activeId = 'workspace:file:/workspace/0.pdf';
+	const evictedIds: string[] = [];
 
-  for (let index = 0; index < 10; index += 1) {
-    const path = `/workspace/${index}.pdf`;
-    const id = `workspace:file:${path}`;
-    contents = upsertWorkspaceFileContent(contents, path);
-    recency = [...recency.filter((candidate) => candidate !== id), id];
-    const limited = limitWorkspaceFileContents(contents, recency, activeId, 4);
-    expect(limited.evictedIds).not.toContain(activeId);
-    contents = limited.contents;
-    recency = limited.recency;
-    evictedIds.push(...limited.evictedIds);
-  }
+	for (let index = 0; index < 10; index += 1) {
+		const path = `/workspace/${index}.pdf`;
+		const id = `workspace:file:${path}`;
+		contents = upsertWorkspaceFileContent(contents, path);
+		recency = [...recency.filter((candidate) => candidate !== id), id];
+		const limited = limitWorkspaceFileContents(contents, recency, activeId, 4);
+		expect(limited.evictedIds).not.toContain(activeId);
+		contents = limited.contents;
+		recency = limited.recency;
+		evictedIds.push(...limited.evictedIds);
+	}
 
-  expect(contents.map((content) => content.path)).toEqual([
-    '/workspace/0.pdf', '/workspace/7.pdf', '/workspace/8.pdf', '/workspace/9.pdf'
-  ]);
-  expect(evictedIds).toEqual([
-    'workspace:file:/workspace/1.pdf', 'workspace:file:/workspace/2.pdf',
-    'workspace:file:/workspace/3.pdf', 'workspace:file:/workspace/4.pdf',
-    'workspace:file:/workspace/5.pdf', 'workspace:file:/workspace/6.pdf'
-  ]);
+	expect(contents.map((content) => content.path)).toEqual([
+		'/workspace/0.pdf',
+		'/workspace/7.pdf',
+		'/workspace/8.pdf',
+		'/workspace/9.pdf'
+	]);
+	expect(evictedIds).toEqual([
+		'workspace:file:/workspace/1.pdf',
+		'workspace:file:/workspace/2.pdf',
+		'workspace:file:/workspace/3.pdf',
+		'workspace:file:/workspace/4.pdf',
+		'workspace:file:/workspace/5.pdf',
+		'workspace:file:/workspace/6.pdf'
+	]);
 });
 
 it('keeps refresh generations monotonic so stale renders cannot win', () => {
-  expect(nextDocumentLoadSequence(9)).toBe(10);
-  expect(nextDocumentLoadSequence(10)).toBe(11);
+	expect(nextDocumentLoadSequence(9)).toBe(10);
+	expect(nextDocumentLoadSequence(10)).toBe(11);
 });
 ```
 
@@ -109,6 +116,7 @@ git commit -m "fix(viewer): mount only the active document renderer"
 ## Task 2: Add the reversible `ENABLE_DOCUMENT_VIEWER` rollout flag
 
 **Files:**
+
 - Modify: `backend/open_webui/env.py:900-925`
 - Modify: `backend/open_webui/main.py:2165-2218`
 - Modify: `src/lib/stores/index.ts:329-361`
@@ -167,7 +175,7 @@ In `workspace.ts`, add:
 
 ```ts
 export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boolean) =>
-  enabled ? getWorkspaceDocumentFormat(path) : null;
+	enabled ? getWorkspaceDocumentFormat(path) : null;
 ```
 
 Use that helper in `Artifacts.svelte`. When false, keep the workspace file in the existing Files/FileNav flow and never mount `DocumentFileViewer`; when true, only PDF/DOCX/PPTX use the dedicated viewer. The flag must not alter terminal authorization or file acquisition.
@@ -196,6 +204,7 @@ git commit -m "feat(viewer): add reversible document viewer rollout flag"
 ## Task 3: Add focused package scripts and CI gates
 
 **Files:**
+
 - Modify: `package.json:5-23`
 - Modify: `.github/workflows/frontend.yaml:19-65`
 - Modify: `.github/workflows/backend.yaml:19-43`
@@ -248,6 +257,7 @@ git commit -m "ci(viewer): add focused viewer build and test gates"
 ## Task 4: Verify viewer dependencies and legal notices
 
 **Files:**
+
 - Modify: `package.json:5-23`
 - Modify: `LICENSE_NOTICE:13-30`
 - Modify: `Dockerfile:183-190`
@@ -261,12 +271,12 @@ Create a test fixture with these exact approved direct packages and SPDX license
 
 ```js
 const required = {
-  'pdfjs-dist': 'Apache-2.0',
-  'docx-preview': 'Apache-2.0',
-  '@aiden0z/pptx-renderer': 'Apache-2.0',
-  jszip: '(MIT OR GPL-3.0-or-later)',
-  echarts: 'Apache-2.0',
-  zrender: 'BSD-3-Clause'
+	'pdfjs-dist': 'Apache-2.0',
+	'docx-preview': 'Apache-2.0',
+	'@aiden0z/pptx-renderer': 'Apache-2.0',
+	jszip: '(MIT OR GPL-3.0-or-later)',
+	echarts: 'Apache-2.0',
+	zrender: 'BSD-3-Clause'
 };
 ```
 
@@ -312,6 +322,7 @@ git commit -m "build(viewer): verify renderer licenses and notices"
 ## Task 5: Emit a Vite manifest and enforce a measured minimal bundle ceiling
 
 **Files:**
+
 - Modify: `vite.config.ts`
 - Modify: `package.json`
 - Create: `scripts/check-viewer-bundle.mjs`
@@ -324,9 +335,9 @@ Create source-map fixtures and a stale server-manifest fixture; assert the check
 
 ```js
 const ceilings = {
-  'pdfjs-dist': 2_252_800,
-  'docx-preview': 204_800,
-  '@aiden0z/pptx-renderer': 1_126_400
+	'pdfjs-dist': 2_252_800,
+	'docx-preview': 204_800,
+	'@aiden0z/pptx-renderer': 1_126_400
 };
 ```
 
@@ -368,6 +379,7 @@ git commit -m "build(viewer): enforce measured renderer chunk ceilings"
 ## Task 6: Add a narrow deterministic Playwright harness
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `package-lock.json`
 - Create: `playwright.config.ts`
@@ -384,23 +396,23 @@ Add tests for these exact selectors and outcomes:
 
 ```ts
 test('opens a PDF by pointer click and mounts only the active panel', async ({ page }) => {
-  await page.goto('/viewer-test?format=pdf&flag=true');
-  await page.getByRole('button', { name: 'Open report.pdf' }).click();
-  await expect(page.getByTestId('document-file-viewer')).toBeVisible();
-  await expect(page.locator('[data-testid="document-file-viewer"]')).toHaveCount(1);
-  await expect(page.getByRole('tabpanel').filter({ hasText: 'Inactive' })).toBeEmpty();
+	await page.goto('/viewer-test?format=pdf&flag=true');
+	await page.getByRole('button', { name: 'Open report.pdf' }).click();
+	await expect(page.getByTestId('document-file-viewer')).toBeVisible();
+	await expect(page.locator('[data-testid="document-file-viewer"]')).toHaveCount(1);
+	await expect(page.getByRole('tabpanel').filter({ hasText: 'Inactive' })).toBeEmpty();
 });
 
 test('rejects egress and preserves keyboard focus', async ({ page }) => {
-  await installNoEgress(page);
-  await page.goto('/viewer-test?format=pptx&flag=true');
-  await page.getByRole('button', { name: 'Open deck.pptx' }).press('Enter');
-  await expect(page.getByRole('slider', { name: 'PowerPoint presentation' })).toBeFocused();
-  await expect(page.getByTestId('egress-attempts')).toHaveText('0');
+	await installNoEgress(page);
+	await page.goto('/viewer-test?format=pptx&flag=true');
+	await page.getByRole('button', { name: 'Open deck.pptx' }).press('Enter');
+	await expect(page.getByRole('slider', { name: 'PowerPoint presentation' })).toBeFocused();
+	await expect(page.getByTestId('egress-attempts')).toHaveText('0');
 });
 ```
 
-Add narrow tests for PDF search/page controls, DOCX safe links, PPTX arrow-key navigation, unsupported format fallback, 4-file LRU, stale refresh sequence, and no third-party requests. They must fail before the harness and test route exist.
+Add narrow tests for PDF page/zoom controls and the absence of in-viewer search, DOCX safe links, PPTX arrow-key navigation, unsupported format fallback, 4-file LRU, stale refresh sequence, and no third-party requests. They must fail before the harness and test route exist.
 
 - [x] **Step 2: Run the failing browser tests**
 
@@ -439,6 +451,7 @@ git commit -m "test(viewer): add deterministic browser harness"
 ## Task 7: Add small sanitized fixtures and temporary large profiles
 
 **Files:**
+
 - Create: `tests/fixtures/document-viewer/manifest.json`
 - Create: `tests/fixtures/document-viewer/pdf/basic.pdf`
 - Create: `tests/fixtures/document-viewer/docx/basic.docx`
@@ -462,13 +475,17 @@ Use this manifest shape:
 
 ```json
 {
-  "fixtures": [
-    { "path": "pdf/basic.pdf", "format": "pdf", "purpose": "ordinary multi-page PDF" },
-    { "path": "docx/basic.docx", "format": "docx", "purpose": "ordinary Word layout with safe links" },
-    { "path": "pptx/basic.pptx", "format": "pptx", "purpose": "ordinary two-slide deck" }
-  ],
-  "maxCheckedInBytes": 262144,
-  "prohibitedContent": ["personal data", "credentials", "external media", "tracking URLs"]
+	"fixtures": [
+		{ "path": "pdf/basic.pdf", "format": "pdf", "purpose": "ordinary multi-page PDF" },
+		{
+			"path": "docx/basic.docx",
+			"format": "docx",
+			"purpose": "ordinary Word layout with safe links"
+		},
+		{ "path": "pptx/basic.pptx", "format": "pptx", "purpose": "ordinary two-slide deck" }
+	],
+	"maxCheckedInBytes": 262144,
+	"prohibitedContent": ["personal data", "credentials", "external media", "tracking URLs"]
 }
 ```
 
@@ -498,6 +515,7 @@ git commit -m "test(viewer): add sanitized fixtures and bounded large profiles"
 ## Task 8: Document support limits, fidelity, pilot, rollback, and privacy
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-08-16-koby-document-viewer-support.md`
 - Create: `docs/superpowers/specs/2026-08-16-koby-document-viewer-production-readiness.md`
 - Modify: `README.md` only if the support document is linked from the feature index
@@ -551,6 +569,7 @@ git commit -m "docs(viewer): add support and production pilot runbook"
 ## Task 9: Fix and validate the release version gate
 
 **Files:**
+
 - Modify: `.github/workflows/release.yml:26-55`
 - Test: `scripts/validate-release-workflow.test.mjs`
 
@@ -650,6 +669,7 @@ advisory URLs, credentials, or secrets are included here.
 ## Task 10: Final plan self-review and clean handoff
 
 **Files:**
+
 - Review only: `docs/superpowers/plans/2026-08-16-document-viewer-production-readiness.md`
 
 - [x] **Step 1: Verify requirement coverage**

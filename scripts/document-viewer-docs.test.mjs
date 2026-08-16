@@ -22,11 +22,11 @@ test('documents the supported formats, exact limits, and fallback behavior', asy
 		'48 MiB',
 		'1,500 archive entries',
 		'96 MiB uncompressed',
-		'24,000,000 text-index bytes',
 		'24,000,000 canvas pixels',
 		'1,000 pages',
 		'4x zoom',
 		'read-only',
+		'does not provide in-viewer search',
 		'download',
 		'last valid preview',
 		'Files/FileNav',
@@ -37,6 +37,7 @@ test('documents the supported formats, exact limits, and fallback behavior', asy
 	]) {
 		assert.match(support, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
 	}
+	assert.doesNotMatch(support, /text-index/i);
 });
 
 test('documents fidelity limits, pilot gates, rollback, privacy, and sign-off evidence', async () => {

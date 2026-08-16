@@ -4,11 +4,9 @@
 	import panzoom, { type PanZoom } from 'panzoom';
 	import Spinner from './Spinner.svelte';
 	import {
-		findMatchingPages,
 		getOwnedPreviousPdfToDestroy,
 		getPageAnchor,
 		getScrollTopForPageAnchor,
-		scanPdfText,
 		type PdfPageMetric
 	} from './pdfViewerHelpers';
 
@@ -36,21 +34,13 @@
 	let loadedData: ArrayBuffer | Uint8Array | null = null;
 	let loadedUrl: string | null = null;
 	let loadGeneration = 0;
-	let textIndexGeneration = 0;
-	let searchGeneration = 0;
 	let resizeObserver: ResizeObserver | null = null;
 	let currentPage = 1;
-	let searchQuery = '';
-	let searchResults: number[] = [];
-	let searchResultIndex = -1;
-	let searchIndexing = false;
 
 	let pageObserver: IntersectionObserver | null = null;
 	const pageTextLayers = new Map<HTMLElement, any>();
 	const pageRenderTasks = new Map<HTMLElement, any>();
 	const pageRenderTokens = new WeakMap<HTMLElement, symbol>();
-	const pageTextIndex = new Map<number, string>();
-	const maxIndexedTextBytes = 24_000_000;
 
 	const getPageMetrics = (): PdfPageMetric[] =>
 		[...(sceneElement?.querySelectorAll<HTMLElement>('.pdf-page-wrapper') ?? [])].map(
@@ -249,143 +239,6 @@
 		targetScene.appendChild(placeholders);
 	};
 
-	const publishSearchResults = (matches: number[]) => {
-		const selectedPage = searchResults[searchResultIndex];
-		searchResults = matches;
-		searchResultIndex = searchResults.indexOf(selectedPage);
-		if (searchResultIndex === -1 && searchResults.length) {
-			searchResultIndex = Math.max(
-				0,
-				searchResults.findIndex((page) => page >= currentPage)
-			);
-		}
-	};
-
-	const yieldToBrowser = () =>
-		new Promise<void>((resolve) => {
-			if ('requestIdleCallback' in window) {
-				(
-					window as Window & {
-						requestIdleCallback: (callback: () => void, options: { timeout: number }) => number;
-					}
-				).requestIdleCallback(resolve, { timeout: 50 });
-			} else setTimeout(resolve, 0);
-		});
-
-	const buildTextIndex = async (documentToIndex: any, generation: number) => {
-		const indexGeneration = ++textIndexGeneration;
-		let indexedBytes = [...pageTextIndex.values()].reduce(
-			(total, text) => total + text.length * 2,
-			0
-		);
-		for (let pageNumber = 1; pageNumber <= documentToIndex.numPages; pageNumber++) {
-			if (
-				generation !== loadGeneration ||
-				indexGeneration !== textIndexGeneration ||
-				documentToIndex !== pdfDoc
-			)
-				return;
-			if (pageTextIndex.has(pageNumber)) continue;
-			const page = await documentToIndex.getPage(pageNumber);
-			if (
-				generation !== loadGeneration ||
-				indexGeneration !== textIndexGeneration ||
-				documentToIndex !== pdfDoc
-			) {
-				page.cleanup?.();
-				return;
-			}
-			try {
-				const textContent = await page.getTextContent();
-				if (
-					generation !== loadGeneration ||
-					indexGeneration !== textIndexGeneration ||
-					documentToIndex !== pdfDoc
-				)
-					return;
-				const text = textContent.items
-					.map((item: { str?: string }) => item.str ?? '')
-					.join(' ')
-					.toLocaleLowerCase();
-				const nextIndexedBytes = indexedBytes + text.length * 2;
-				if (nextIndexedBytes > maxIndexedTextBytes) return;
-				indexedBytes = nextIndexedBytes;
-				pageTextIndex.set(pageNumber, text);
-				if (pageNumber % 4 === 0 || pageNumber === documentToIndex.numPages) {
-					await yieldToBrowser();
-					if (
-						generation !== loadGeneration ||
-						indexGeneration !== textIndexGeneration ||
-						documentToIndex !== pdfDoc
-					)
-						return;
-				}
-			} finally {
-				page.cleanup?.();
-			}
-		}
-	};
-
-	const runSearch = async () => {
-		const query = searchQuery.trim();
-		const queryGeneration = ++searchGeneration;
-		const documentGeneration = loadGeneration;
-		const documentToSearch = pdfDoc;
-		textIndexGeneration += 1;
-		if (!query || !documentToSearch) {
-			searchResults = [];
-			searchResultIndex = -1;
-			searchIndexing = false;
-			if (documentToSearch) void buildTextIndex(documentToSearch, documentGeneration);
-			return;
-		}
-
-		const isCurrent = () =>
-			queryGeneration === searchGeneration &&
-			documentGeneration === loadGeneration &&
-			documentToSearch === pdfDoc &&
-			query === searchQuery.trim();
-		searchIndexing = true;
-		publishSearchResults(findMatchingPages(pageTextIndex, query));
-		try {
-			const result = await scanPdfText({
-				pageCount: documentToSearch.numPages,
-				query,
-				cachedPages: pageTextIndex,
-				isCurrent,
-				yieldToBrowser,
-				onProgress: (matches) => {
-					if (isCurrent()) publishSearchResults(matches);
-				},
-				readPage: async (pageNumber) => {
-					if (!isCurrent()) throw new DOMException('Search superseded', 'AbortError');
-					const page = await documentToSearch.getPage(pageNumber);
-					if (!isCurrent()) {
-						page.cleanup?.();
-						throw new DOMException('Search superseded', 'AbortError');
-					}
-					try {
-						const textContent = await page.getTextContent();
-						if (!isCurrent()) throw new DOMException('Search superseded', 'AbortError');
-						return textContent.items.map((item: { str?: string }) => item.str ?? '').join(' ');
-					} finally {
-						page.cleanup?.();
-					}
-				}
-			});
-			if (isCurrent() && !result.cancelled) publishSearchResults(result.matches);
-		} catch (cause) {
-			if (isCurrent() && (cause as { name?: string })?.name !== 'AbortError') {
-				console.error('PDF search failed:', cause);
-			}
-		} finally {
-			if (isCurrent()) {
-				searchIndexing = false;
-				void buildTextIndex(documentToSearch, documentGeneration);
-			}
-		}
-	};
-
 	const scrollToPage = (pageNumber: number, behavior: ScrollBehavior = 'smooth') => {
 		const page = sceneElement?.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
 		if (!page || !outerContainer) return;
@@ -397,14 +250,6 @@
 		if (!pdfDoc) return;
 		scrollToPage(Math.max(1, Math.min(pdfDoc.numPages, currentPage + change)));
 	};
-
-	const moveSearchResult = (change: number) => {
-		if (!searchResults.length) return;
-		searchResultIndex = (searchResultIndex + change + searchResults.length) % searchResults.length;
-		scrollToPage(searchResults[searchResultIndex]);
-	};
-
-	const handleSearchInput = () => void runSearch();
 
 	const handleResize = () => {
 		if (!pdfDoc || !outerContainer) return;
@@ -424,8 +269,6 @@
 	const loadPdf = async () => {
 		if (!url && !data) return;
 		const generation = ++loadGeneration;
-		searchGeneration += 1;
-		searchIndexing = false;
 		const previousAnchor = getPageAnchor(getPageMetrics(), outerContainer?.scrollTop ?? 0);
 		const previousZoom = zoomLevel;
 		let candidatePdfDoc: any = null;
@@ -474,9 +317,6 @@
 			}
 			outerContainer.scrollTop = getScrollTopForPageAnchor(getPageMetrics(), previousAnchor);
 			updateCurrentPage();
-			pageTextIndex.clear();
-			searchResults = [];
-			searchResultIndex = -1;
 			const firstPage = sceneElement.querySelector<HTMLElement>('.pdf-page-wrapper');
 			if (!firstPage || !(await renderPage(firstPage)))
 				throw new Error('Failed to render PDF first page');
@@ -485,8 +325,6 @@
 				return;
 			}
 			observePages();
-			void buildTextIndex(candidatePdfDoc, generation);
-			if (searchQuery.trim()) void runSearch();
 			dispatch('preview-rendered', data);
 			releaseOwnedPreviousPdf();
 		} catch (cause) {
@@ -511,7 +349,6 @@
 			} else if (candidatePdfDoc && candidatePdfDoc !== pdfDoc) await candidatePdfDoc.destroy();
 			console.error('PDF render error:', cause);
 			error = 'Failed to load PDF.';
-			if (pdfDoc && searchQuery.trim()) void runSearch();
 			dispatch('preview-failed', data);
 		} finally {
 			if (generation === loadGeneration) loading = false;
@@ -527,8 +364,6 @@
 	onDestroy(() => {
 		mounted = false;
 		loadGeneration += 1;
-		textIndexGeneration += 1;
-		searchGeneration += 1;
 		if (rerenderTimer) clearTimeout(rerenderTimer);
 		if (resizeTimer) clearTimeout(resizeTimer);
 		if (resizeFrame) cancelAnimationFrame(resizeFrame);
@@ -605,36 +440,6 @@
 					disabled={currentPage >= pdfDoc.numPages}>›</button
 				>
 			</div>
-			<label class="sr-only" for="pdf-search">Search this PDF</label>
-			<input
-				id="pdf-search"
-				class="w-24 rounded-md bg-transparent px-1.5 py-1 text-[11px] text-gray-700 outline-none placeholder:text-gray-400 focus:bg-gray-100 dark:text-gray-200 dark:focus:bg-gray-800"
-				bind:value={searchQuery}
-				on:input={handleSearchInput}
-				placeholder="Search"
-				aria-label="Search this PDF"
-			/>
-			{#if searchQuery.trim()}
-				<span class="text-[10px] tabular-nums text-gray-700 dark:text-gray-200" aria-live="polite"
-					>{searchResults.length
-						? `${searchResultIndex + 1}/${searchResults.length}`
-						: searchIndexing
-							? 'Searching…'
-							: 'No match'}</span
-				>
-				<button
-					class="p-1.5 text-gray-500 transition hover:bg-gray-100 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-800"
-					on:click={() => moveSearchResult(-1)}
-					aria-label="Previous search result"
-					disabled={!searchResults.length}>⌃</button
-				>
-				<button
-					class="mr-1 border-r border-gray-200/60 p-1.5 pr-2 text-gray-500 transition hover:bg-gray-100 disabled:opacity-40 dark:border-gray-700/60 dark:text-gray-400 dark:hover:bg-gray-800"
-					on:click={() => moveSearchResult(1)}
-					aria-label="Next search result"
-					disabled={!searchResults.length}>⌄</button
-				>
-			{/if}
 			<button
 				class="rounded-md p-1.5 text-gray-500 transition hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
 				on:click={zoomOut}

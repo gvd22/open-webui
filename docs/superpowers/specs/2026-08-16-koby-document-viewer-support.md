@@ -27,11 +27,11 @@ large-file acceptance checks, and explicit support-table update.
 These are implementation limits, not guarantees that every file below the
 limit will render successfully:
 
-| Format | Input limit | Additional renderer limits |
-| --- | ---: | --- |
-| PDF | 64 MiB | Maximum 1,000 pages; text search indexes at most 24,000,000 text-index bytes; each canvas is capped at 24,000,000 canvas pixels; maximum 4x zoom. |
-| DOCX | 48 MiB | Maximum 1,500 archive entries; each entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; compression ratio is at most 120:1. |
-| PPTX | 64 MiB | Maximum 1,500 archive entries; each uncompressed entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; slide media work is limited to four concurrent operations. |
+| Format | Input limit | Additional renderer limits                                                                                                                                                                                              |
+| ------ | ----------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PDF    |      64 MiB | Maximum 1,000 pages; each canvas is capped at 24,000,000 canvas pixels; maximum 4x zoom.                                                                                                                                |
+| DOCX   |      48 MiB | Maximum 1,500 archive entries; each entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; compression ratio is at most 120:1.                                     |
+| PPTX   |      64 MiB | Maximum 1,500 archive entries; each uncompressed entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; slide media work is limited to four concurrent operations. |
 
 The input limit is enforced while acquiring runtime files. The archive and
 render limits are checked before DOCX/PPTX rendering. A limit failure is shown
@@ -40,8 +40,8 @@ as a non-sensitive error and does not initiate an external fetch.
 ## Read-only and version behavior
 
 The dedicated tab is read-only. It supports navigation appropriate to the
-format, PDF search and zoom, fullscreen, and download of the displayed byte
-version. It does not provide Word or PowerPoint editing controls.
+format, PDF zoom, fullscreen, and download of the displayed byte version. It
+does not provide in-viewer search or Word or PowerPoint editing controls.
 
 When a file changes, the new bytes become a candidate. The candidate replaces
 the visible preview only after the renderer confirms a successful render. If a

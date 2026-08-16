@@ -74,7 +74,7 @@ Automated browser evidence must cover pointer and keyboard opening, active-only
 mounting, hidden inactive panel owners, stable workspace IDs, the active-safe
 four-document LRU sequence, stale refresh ordering and displayed-download
 version, unsupported-format fallback,
-PDF search/navigation/zoom, DOCX safe links, PPTX slide navigation, malformed or
+PDF navigation/zoom without an in-viewer search control, DOCX safe links, PPTX slide navigation, malformed or
 oversized terminal header rejection before allocation, missing/unavailable runtime responses, and the
 absence of third-party requests.
 
@@ -108,11 +108,11 @@ thresholds, not claims about the renderer for every document:
 
 All formats: normal refresh <= 3 seconds.
 
-| Format | First visible result | Repeat interaction | Peak renderer memory | Five-sample stability |
-| --- | --- | --- | --- | --- |
-| PDF | PDF: first visible page <= 5 seconds | search result <= 2 seconds after the text index is available | PDF peak renderer memory <= 500 MiB | no more than 20% peak-memory growth; retain the 24,000,000 text-index-byte, 24,000,000 canvas-pixel, 1,000-page, and 4x-zoom implementation limits |
-| DOCX | DOCX: complete preview <= 5 seconds | retry or refresh <= 3 seconds after bytes arrive | DOCX peak renderer memory <= 400 MiB | no more than 20% peak-memory growth; remain within the 48 MiB input, 1,500-entry, 96 MiB uncompressed, 64 MiB media, and 120:1 compression-ratio limits |
-| PPTX | PPTX: first slide <= 5 seconds | next slide visible <= 2 seconds after selection | PPTX peak renderer memory <= 500 MiB | no more than 20% peak-memory growth; remain within the 64 MiB input, 1,500-entry, 96 MiB uncompressed, 64 MiB media, and four-concurrent-media-operation limits |
+| Format | First visible result                 | Repeat interaction                                           | Peak renderer memory                 | Five-sample stability                                                                                                                                           |
+| ------ | ------------------------------------ | ------------------------------------------------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PDF    | PDF: first visible page <= 5 seconds | next page visible <= 2 seconds after selection               | PDF peak renderer memory <= 500 MiB  | no more than 20% peak-memory growth; retain the 24,000,000 canvas-pixel, 1,000-page, and 4x-zoom implementation limits                                        |
+| DOCX   | DOCX: complete preview <= 5 seconds  | retry or refresh <= 3 seconds after bytes arrive             | DOCX peak renderer memory <= 400 MiB | no more than 20% peak-memory growth; remain within the 48 MiB input, 1,500-entry, 96 MiB uncompressed, 64 MiB media, and 120:1 compression-ratio limits         |
+| PPTX   | PPTX: first slide <= 5 seconds       | next slide visible <= 2 seconds after selection              | PPTX peak renderer memory <= 500 MiB | no more than 20% peak-memory growth; remain within the 64 MiB input, 1,500-entry, 96 MiB uncompressed, 64 MiB media, and four-concurrent-media-operation limits |
 
 Record cold-load and warm-refresh measurements separately. A failed sample,
 browser crash, visible egress request, content/path-bearing log, or limit

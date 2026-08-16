@@ -22,7 +22,11 @@ test.beforeEach(async ({ page }) => {
 	}, runtimeSessionId);
 	await page.route('**/*', async (route) => {
 		const url = route.request().url();
-		if (new URL(url).origin === 'http://127.0.0.1:4173' || url.startsWith('blob:') || url.startsWith('data:')) {
+		if (
+			new URL(url).origin === 'http://127.0.0.1:4173' ||
+			url.startsWith('blob:') ||
+			url.startsWith('data:')
+		) {
 			return route.continue();
 		}
 		blockedRequests.push(url);
@@ -77,9 +81,11 @@ test('renders the real PDF viewer fixture', async ({ page }) => {
 	await page.getByLabel('Zoom in').click();
 	await page.getByLabel('Reset zoom').click();
 	await expect(resetZoom).toHaveText('100%');
-	await page.getByLabel('Search this PDF').fill('KOBY-BASIC-PDF-2-PAGES');
 	await expect(page.getByLabel('Next page')).toBeVisible();
-	await expect(new AxeBuilder({ page }).include('[data-testid="document-file-viewer"]').analyze()).resolves.toMatchObject({ violations: [] });
+	await expect(page.getByLabel('Search this PDF')).toHaveCount(0);
+	await expect(
+		new AxeBuilder({ page }).include('[data-testid="document-file-viewer"]').analyze()
+	).resolves.toMatchObject({ violations: [] });
 });
 
 test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page }) => {
@@ -117,10 +123,14 @@ test('keeps the last valid DOCX and its download when an update is corrupt', asy
 	await page.getByLabel('Download displayed version').click();
 	const download = await downloadPromise;
 	const downloaded = await readFile(await download.path());
-	expect(createHash('sha256').update(downloaded).digest('hex')).toBe('7f18f33dc6768681a70cbc1e101335136bbb9580f8ac97e745e0f8624ca489a9');
+	expect(createHash('sha256').update(downloaded).digest('hex')).toBe(
+		'7f18f33dc6768681a70cbc1e101335136bbb9580f8ac97e745e0f8624ca489a9'
+	);
 });
 
-test('clears a missing document and refreshes after an unavailable runtime reconnects', async ({ page }) => {
+test('clears a missing document and refreshes after an unavailable runtime reconnects', async ({
+	page
+}) => {
 	await page.goto('/?format=pdf');
 	await expect(page.getByText('KOBY-BASIC-PDF-2-PAGES')).toBeVisible();
 	const viewer = page.getByTestId('document-file-viewer');
@@ -129,7 +139,9 @@ test('clears a missing document and refreshes after an unavailable runtime recon
 	const unavailableResponse = viewerResponse(page, paths.pdf, 2);
 	await page.getByTestId('refresh-viewer').click();
 	await unavailableResponse;
-	await expect(page.getByText('The latest version could not be loaded. Showing the previous version.')).toBeVisible();
+	await expect(
+		page.getByText('The latest version could not be loaded. Showing the previous version.')
+	).toBeVisible();
 	await setRuntime(page, paths.pdf, 'valid');
 	const reconnectedResponse = viewerResponse(page, paths.pdf, 3);
 	await page.getByTestId('refresh-viewer').click();
@@ -140,7 +152,9 @@ test('clears a missing document and refreshes after an unavailable runtime recon
 	await expect(page.getByText('This file is no longer available.')).toBeVisible();
 });
 
-test('workspace document panels have one active owner and restore tab focus on close', async ({ page }) => {
+test('workspace document panels have one active owner and restore tab focus on close', async ({
+	page
+}) => {
 	await page.goto('/?workspace-panels=1');
 
 	const tabs = page.getByRole('tab');
@@ -155,7 +169,9 @@ test('workspace document panels have one active owner and restore tab focus on c
 	const secondPanel = page.locator('#workspace-panel-1');
 	await expect(firstPanel).not.toHaveAttribute('hidden', '');
 	await expect(secondPanel).toHaveAttribute('hidden', '');
-	expect(await secondPanel.locator('a, button, input, select, textarea, [tabindex]').count()).toBe(0);
+	expect(await secondPanel.locator('a, button, input, select, textarea, [tabindex]').count()).toBe(
+		0
+	);
 
 	await tabs.nth(0).focus();
 	await page.keyboard.press('ArrowRight');
@@ -175,14 +191,17 @@ test('workspace document panels have one active owner and restore tab focus on c
 	await expect(page.getByTestId('document-file-viewer')).toContainText('KOBY-BASIC-DOCX-2-PAGES');
 });
 
-test('limits production workspace files to four with active-safe inactive LRU eviction', async ({ page }) => {
+test('limits production workspace files to four with active-safe inactive LRU eviction', async ({
+	page
+}) => {
 	await page.goto('/?workspace-lru=1');
 
 	for (let index = 1; index <= 10; index += 1) {
 		await page.getByRole('button', { name: `Open sequence-${index}.pdf` }).click();
 		const expected = Array.from(
 			{ length: Math.min(index, 4) },
-			(_, offset) => `workspace:file:/workspace/sequence-${index - Math.min(index, 4) + offset + 1}.pdf`
+			(_, offset) =>
+				`workspace:file:/workspace/sequence-${index - Math.min(index, 4) + offset + 1}.pdf`
 		);
 		await expect(page.getByTestId('lru-open-file-ids')).toHaveText(expected.join(','));
 		await expect(page.getByTestId('lru-active-file-id')).toHaveText(expected.at(-1)!);
@@ -194,7 +213,9 @@ test('limits production workspace files to four with active-safe inactive LRU ev
 	);
 });
 
-test('commits only the latest delayed refresh candidate for rendering and download', async ({ page }) => {
+test('commits only the latest delayed refresh candidate for rendering and download', async ({
+	page
+}) => {
 	await page.goto('/?format=pdf');
 	await expect(page.getByText('KOBY-BASIC-PDF-2-PAGES')).toBeVisible();
 	await setRuntime(page, paths.pdf, { mode: 'valid', revision: 'a', delayMs: 600 });
@@ -222,7 +243,9 @@ test('commits only the latest delayed refresh candidate for rendering and downlo
 	expect(downloaded.toString()).not.toContain('KOBY-REFRESH-VERSION-A');
 });
 
-test('keeps unsupported office and data formats in the visible Files fallback', async ({ page }) => {
+test('keeps unsupported office and data formats in the visible Files fallback', async ({
+	page
+}) => {
 	for (const extension of ['xlsx', 'xls', 'csv', 'odt', 'ods', 'odp', 'doc', 'ppt']) {
 		await page.goto(`/?unsupported=${extension}`);
 		await expect(page.getByTestId('files-fallback-state')).toHaveAttribute(
@@ -235,7 +258,9 @@ test('keeps unsupported office and data formats in the visible Files fallback', 
 	}
 });
 
-test('rejects an oversized terminal response from its header before rendering', async ({ page }) => {
+test('rejects an oversized terminal response from its header before rendering', async ({
+	page
+}) => {
 	await setRuntime(page, paths.pdf, { mode: 'oversized' });
 	const oversizedResponse = viewerResponse(page, paths.pdf, 1);
 	await page.goto('/?format=pdf');
