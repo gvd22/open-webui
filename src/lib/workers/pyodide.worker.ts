@@ -279,7 +279,18 @@ self.onmessage = async (event) => {
 
 		case 'fs:read': {
 			try {
+				const stat = self.pyodide.FS.stat(data.path);
+				if (self.pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+				if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+					throw new Error('File metadata is invalid');
+				}
+				if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+					throw new Error('File exceeds the read limit');
+				}
 				const buffer = fsRead(data.path);
+				if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+					throw new Error('File exceeds the read limit');
+				}
 				self.postMessage({ id, type: 'fs:read', data: buffer }, { transfer: [buffer] });
 			} catch (err: unknown) {
 				self.postMessage({

@@ -128,6 +128,11 @@ export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
 export const showFileNavPath: Writable<string | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
+export type WorkspaceFileUpdate = { path: string; revision: number };
+export const workspaceFileUpdate: Writable<WorkspaceFileUpdate | null> = writable(null);
+export const workspaceActiveFile: Writable<{ path: string; format: string } | null> =
+	writable(null);
+export const workspaceOpenFilePaths: Writable<string[]> = writable([]);
 export const selectedTerminalId: Writable<string | null> = writable(null);
 export const workspaceTerminalConnectionId: Writable<string | null> = writable(null);
 export const workspaceChatContextId: Writable<string> = writable('');

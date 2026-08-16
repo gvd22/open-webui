@@ -133,7 +133,8 @@ export const downloadFileBlob = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
-	sessionId?: string
+	sessionId?: string,
+	maxBytes?: number
 ): Promise<{ blob: Blob; filename: string } | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
@@ -141,9 +142,37 @@ export const downloadFileBlob = async (
 	const res = await fetch(url, { headers }).catch(() => null);
 
 	if (!res || !res.ok) return null;
+	const declaredBytes = Number(res.headers.get('content-length'));
+	if (maxBytes && Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+		await res.body?.cancel();
+		return null;
+	}
 
 	const filename = path.split('/').pop() ?? 'file';
-	const blob = await res.blob().catch(() => null);
+	let blob: Blob | null = null;
+	if (maxBytes && res.body) {
+		const reader = res.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let receivedBytes = 0;
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				receivedBytes += value.byteLength;
+				if (receivedBytes > maxBytes) {
+					await reader.cancel();
+					return null;
+				}
+				chunks.push(value);
+			}
+			blob = new Blob(chunks, { type: res.headers.get('content-type') ?? undefined });
+		} catch {
+			await reader.cancel().catch(() => undefined);
+			return null;
+		}
+	} else {
+		blob = await res.blob().catch(() => null);
+	}
 	if (!blob) return null;
 	return { blob, filename };
 };

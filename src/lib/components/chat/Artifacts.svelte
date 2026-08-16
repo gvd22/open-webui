@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { onMount, getContext, createEventDispatcher } from 'svelte';
+	import { onMount, onDestroy, getContext, createEventDispatcher } from 'svelte';
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
 
@@ -16,7 +16,9 @@
 		terminalServers,
 		workspaceChatContextId,
 		workspaceTerminalConnectionId,
-		workspaceUtilityInstances
+		workspaceUtilityInstances,
+		workspaceActiveFile,
+		workspaceOpenFilePaths
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 	import { injectCsp } from '$lib/utils/csp';
@@ -34,13 +36,16 @@
 	import WorkspaceBrowser from './Artifacts/WorkspaceBrowser.svelte';
 	import WorkspaceLauncher from './Artifacts/WorkspaceLauncher.svelte';
 	import WebPreviewRenderer from './Artifacts/WebPreviewRenderer.svelte';
+	import DocumentFileViewer from './Artifacts/DocumentViewer/DocumentFileViewer.svelte';
 	import { getCanvasNoteArtifactsFromHistory } from './Artifacts/canvas';
 	import { getWebPreviewsFromHistory } from './Artifacts/webPreview';
 	import { selectTransientCanvasDocument } from '$lib/apis/chats';
 	import {
 		buildWorkspaceTabs,
-		replaceWorkspaceFileContent,
+		upsertWorkspaceFileContent,
 		buildWorkspaceUtilityContents,
+		getWorkspaceDocumentFormat,
+		limitWorkspaceFileContents,
 		getWorkspaceContentId,
 		getWorkspaceInstanceId,
 		getNextWorkspaceInstanceTitle,
@@ -48,6 +53,7 @@
 		moveWorkspaceContent,
 		orderWorkspaceContents,
 		resolveWorkspaceRuntime,
+		isWorkspaceDocumentPath,
 		shouldShowWorkspaceTabs,
 		shouldResetWorkspaceForChatChange,
 		type WorkspaceContent,
@@ -72,6 +78,8 @@
 	let workspaceContentOrder: string[] = [];
 	let selectedContentIdx = 0;
 	let closedWorkspaceContentIds = new Set<string>();
+	let activeFileContextKey = '';
+	let openedFileRuntimeKey = '';
 	$: selectedContent = contents[selectedContentIdx];
 	$: selectedContentId = selectedContent
 		? getWorkspaceContentId(selectedContent, selectedContentIdx)
@@ -83,6 +91,7 @@
 
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
+	const MAX_OPEN_DOCUMENTS = 4;
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
@@ -90,6 +99,32 @@
 	);
 	$: workspaceTerminalId = workspaceRuntime.terminalId;
 	$: workspaceFilesAvailable = showFiles && workspaceRuntime.files;
+	$: {
+		const nextRuntimeKey = `${workspaceRuntime.kind}:${workspaceRuntime.terminalId ?? ''}`;
+		if (nextRuntimeKey !== openedFileRuntimeKey) {
+			const previousRuntimeKey = openedFileRuntimeKey;
+			openedFileRuntimeKey = nextRuntimeKey;
+			if (previousRuntimeKey && openedFileContents.length > 0) {
+				const previousFileIds = openedFileContents.map((content, index) =>
+					getWorkspaceContentId(content, index)
+				);
+				openedFileContents = [];
+				workspaceContentOrder = workspaceContentOrder.filter((id) => !previousFileIds.includes(id));
+			}
+		}
+	}
+	$: {
+		const activePath =
+			selectedContent?.type === 'workspace-file' ? (selectedContent.path ?? '') : '';
+		const activeFormat = activePath ? getWorkspaceDocumentFormat(activePath) : null;
+		const nextContextKey = activePath && activeFormat ? `${activeFormat}:${activePath}` : '';
+		if (nextContextKey !== activeFileContextKey) {
+			activeFileContextKey = nextContextKey;
+			workspaceActiveFile.set(
+				activePath && activeFormat ? { path: activePath, format: activeFormat } : null
+			);
+		}
+	}
 
 	function navigateContent(direction: 'prev' | 'next') {
 		selectedContentIdx =
@@ -135,6 +170,11 @@
 
 	function syncVisibleWorkspaceContents() {
 		const newContents = getVisibleWorkspaceContents(sourceContents, closedWorkspaceContentIds);
+		workspaceOpenFilePaths.set(
+			newContents
+				.filter((content) => content.type === 'workspace-file' && content.path)
+				.map((content) => content.path as string)
+		);
 
 		if (newContents.length === 0) {
 			contents = [];
@@ -183,7 +223,7 @@
 		const nextSourceContents = [
 			...utilityContents.filter((content) => content.workspaceId === WORKSPACE_FILES_ID),
 			...artifactSourceContents,
-			...openedFileContents,
+			...(workspaceRuntime.files ? openedFileContents : []),
 			...utilityInstanceContents,
 			...utilityContents.filter((content) => content.workspaceId !== WORKSPACE_FILES_ID)
 		];
@@ -238,11 +278,15 @@
 	}
 
 	function openWorkspaceFile(path: string) {
-		const previousFileIds = openedFileContents.map((content, index) =>
-			getWorkspaceContentId(content, index)
-		);
-		workspaceContentOrder = workspaceContentOrder.filter((id) => !previousFileIds.includes(id));
-		openedFileContents = replaceWorkspaceFileContent(openedFileContents, path);
+		if (!workspaceRuntime.files || !isWorkspaceDocumentPath(path)) return;
+		openedFileContents = upsertWorkspaceFileContent(openedFileContents, path);
+		if (openedFileContents.length > MAX_OPEN_DOCUMENTS) {
+			const limited = limitWorkspaceFileContents(openedFileContents, MAX_OPEN_DOCUMENTS);
+			openedFileContents = limited.contents;
+			workspaceContentOrder = workspaceContentOrder.filter(
+				(id) => !limited.evictedIds.includes(id)
+			);
+		}
 		const id = `workspace:file:${path}`;
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
 		closedWorkspaceContentIds.delete(id);
@@ -392,6 +436,11 @@
 			unsubscribeArtifactCode();
 			unsubscribeArtifactContents();
 		};
+	});
+
+	onDestroy(() => {
+		workspaceActiveFile.set(null);
+		workspaceOpenFilePaths.set([]);
 	});
 
 	$: {
@@ -573,6 +622,21 @@
 				{#if contents.length > 0}
 					<div class="relative max-w-full w-full h-full">
 						{#each contents as content, index (getWorkspaceContentId(content, index))}
+							{#if content.type === 'workspace-file' && content.path && content.fileFormat}
+								<div
+									class="absolute inset-0"
+									class:invisible={selectedContentId !== getWorkspaceContentId(content, index)}
+									class:pointer-events-none={selectedContentId !==
+										getWorkspaceContentId(content, index)}
+								>
+									<DocumentFileViewer
+										path={content.path}
+										format={content.fileFormat}
+										runtime={workspaceRuntime}
+										chatId={$chatId}
+									/>
+								</div>
+							{/if}
 							{#if content.type === 'workspace-browser'}
 								<div
 									class="absolute inset-0"
@@ -586,12 +650,16 @@
 						{/each}
 						<div
 							class="absolute inset-0"
-							class:invisible={['workspace-terminal', 'workspace-browser'].includes(
-								contents[selectedContentIdx].type
-							)}
-							class:pointer-events-none={['workspace-terminal', 'workspace-browser'].includes(
-								contents[selectedContentIdx].type
-							)}
+							class:invisible={[
+								'workspace-terminal',
+								'workspace-browser',
+								'workspace-file'
+							].includes(contents[selectedContentIdx].type)}
+							class:pointer-events-none={[
+								'workspace-terminal',
+								'workspace-browser',
+								'workspace-file'
+							].includes(contents[selectedContentIdx].type)}
 						>
 							{#if contents[selectedContentIdx].type === 'workspace-terminal'}
 								<!-- The persistent terminal renderer is owned by ChatControls. -->
@@ -640,7 +708,7 @@
 										sandboxAllowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
 									/>
 								{/key}
-							{:else if contents[selectedContentIdx].type === 'workspace-files' || contents[selectedContentIdx].type === 'workspace-file'}
+							{:else if contents[selectedContentIdx].type === 'workspace-files'}
 								{#if workspaceRuntime.kind === 'terminal'}
 									<FileNav
 										{onAttach}
@@ -651,7 +719,7 @@
 										onOpenFile={openWorkspaceFile}
 									/>
 								{:else if workspaceRuntime.kind === 'pyodide'}
-									<PyodideFileNav {overlay} />
+									<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
 								{/if}
 							{:else if contents[selectedContentIdx].type === 'workspace-browser'}
 								<!-- Browser instances stay mounted above so each tab preserves its preview. -->

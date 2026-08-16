@@ -9,3 +9,16 @@ This repository contains code governed by multiple licenses based on the date an
 3. All code contributed or modified after commit 60d84a3aae9802339705826e9095e272e3c83623 is licensed under the Open WebUI License (see LICENSE).
 
 For details on which commits are covered by which license, refer to LICENSE_HISTORY.
+
+## Bundled third-party notices
+
+The document viewer includes Apache ECharts through `@aiden0z/pptx-renderer`:
+
+> Apache ECharts
+> Copyright 2017-2026 The Apache Software Foundation
+> This product includes software developed at The Apache Software Foundation
+> (https://www.apache.org/).
+
+`@aiden0z/pptx-renderer` and `docx-preview` are distributed under the Apache
+License 2.0. Their complete license texts remain available in their respective
+package distributions.

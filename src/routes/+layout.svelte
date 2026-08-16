@@ -34,6 +34,8 @@
 		showControls,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceFileUpdate,
+		workspaceOpenFilePaths,
 		pyodideWorker,
 		desktopEvent
 	} from '$lib/stores';
@@ -71,6 +73,7 @@
 		removeAllDetails
 	} from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
+	import { isWorkspaceDocumentPath } from '$lib/components/chat/Artifacts/workspace';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
@@ -459,12 +462,24 @@
 
 			if (data?.name === 'display_file' && data?.params?.path) {
 				if (res?.exists !== false) {
-					displayFileHandler(data.params.path, { showControls, showFileNavPath });
+					if ($workspaceOpenFilePaths.includes(data.params.path)) {
+						workspaceFileUpdate.set({ path: data.params.path, revision: Date.now() });
+					} else {
+						displayFileHandler(data.params.path, { showControls, showFileNavPath });
+					}
 				}
 			}
 
-			if (['write_file'].includes(data?.name) && data?.params?.path) {
-				showFileNavDir.set(res?.path ?? data.params.path);
+			if (['write_file', 'replace_file_content'].includes(data?.name) && data?.params?.path) {
+				const path = res?.path ?? data.params.path;
+				if (isWorkspaceDocumentPath(path)) {
+					if ($workspaceOpenFilePaths.includes(path)) {
+						workspaceFileUpdate.set({ path, revision: Date.now() });
+					} else {
+						displayFileHandler(path, { showControls, showFileNavPath });
+					}
+				}
+				showFileNavDir.set(path);
 			}
 
 			if (cb) {

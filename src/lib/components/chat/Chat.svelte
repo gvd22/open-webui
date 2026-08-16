@@ -47,6 +47,9 @@
 		workspaceTerminalConnectionId,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceFileUpdate,
+		workspaceActiveFile,
+		workspaceOpenFilePaths,
 		chatRequestQueues,
 		desktopEvent
 	} from '$lib/stores';
@@ -120,7 +123,7 @@
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
-	import { WORKSPACE_TERMINAL_ID } from './Artifacts/workspace';
+	import { isWorkspaceDocumentPath, WORKSPACE_TERMINAL_ID } from './Artifacts/workspace';
 	import EventConfirmDialog from '../common/ConfirmDialog.svelte';
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
@@ -928,9 +931,20 @@
 	const terminalEventHandler = (type: string, data: any) => {
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
-			displayFileHandler(data.path, { showControls, showFileNavPath });
+			if ($workspaceOpenFilePaths.includes(data.path)) {
+				workspaceFileUpdate.set({ path: data.path, revision: Date.now() });
+			} else {
+				displayFileHandler(data.path, { showControls, showFileNavPath });
+			}
 		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
 			if (!data?.path) return;
+			if (isWorkspaceDocumentPath(data.path)) {
+				if ($workspaceOpenFilePaths.includes(data.path)) {
+					workspaceFileUpdate.set({ path: data.path, revision: Date.now() });
+				} else {
+					displayFileHandler(data.path, { showControls, showFileNavPath });
+				}
+			}
 			showFileNavDir.set(data.path);
 		} else if (type === 'terminal:run_command') {
 			showFileNavDir.set('/');
@@ -3321,6 +3335,7 @@
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
 				terminal_id: terminalEnabled ? (activeTerminalId ?? undefined) : undefined,
+				workspace_file: $workspaceActiveFile ?? undefined,
 				tool_servers: [
 					...($toolServers ?? []).filter(
 						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)

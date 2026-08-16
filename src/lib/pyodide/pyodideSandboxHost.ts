@@ -163,7 +163,18 @@ const sandboxScript = String.raw`
 					break;
 				case 'fs:read':
 					try {
+						const stat = pyodide.FS.stat(data.path);
+						if (pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+						if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+							throw new Error('File metadata is invalid');
+						}
+						if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
 						const buffer = pyodide.FS.readFile(data.path).buffer;
+						if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
 						post({ id: id, type: data.type, data: buffer }, [buffer]);
 					} catch (error) {
 						post({ id: id, type: data.type, error: error && error.message ? error.message : String(error) });

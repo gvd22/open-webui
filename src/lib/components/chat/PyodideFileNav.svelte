@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
-	import { pyodideWorker } from '$lib/stores';
+	import { pyodideWorker, showFileNavPath } from '$lib/stores';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import type { FileEntry } from '$lib/apis/terminal';
 
@@ -19,6 +19,7 @@
 	const i18n = getContext('i18n');
 
 	export let overlay = false;
+	export let onOpenFile: (path: string) => void = () => {};
 
 	// ── State ─────────────────────────────────────────────────────────────
 	let currentPath = savedPyodidePath;
@@ -170,13 +171,18 @@
 		loading = false;
 	};
 
-	const openEntry = async (entry: FileEntry) => {
+	const openEntry = async (entry: FileEntry, notifyWorkspace = true) => {
 		if (entry.type === 'directory') {
 			await loadDir(`${currentPath}${entry.name}/`);
 			return;
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
+		if (notifyWorkspace && /\.(pdf|docx|pptx)$/i.test(filePath)) {
+			onOpenFile(filePath);
+			return;
+		}
+		if (notifyWorkspace) onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 		selectedFile = filePath;
 		fileLoading = true;
@@ -201,6 +207,16 @@
 			fileContent = 'Failed to read file';
 		}
 		fileLoading = false;
+	};
+
+	const openRequestedFile = async (filePath: string) => {
+		const normalized = filePath.startsWith('/') ? filePath : `${currentPath}${filePath}`;
+		const separator = normalized.lastIndexOf('/');
+		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
+		const name = normalized.slice(separator + 1);
+		if (!name) return;
+		await loadDir(directory);
+		await openEntry({ name, type: 'file', size: 0 });
 	};
 
 	const clearPreview = () => {
@@ -337,14 +353,22 @@
 		loadDir(currentPath);
 	};
 
+	let unsubscribeDisplayFile: (() => void) | null = null;
+
 	onMount(() => {
 		ensureWorker();
 		loadDir(currentPath);
 		window.addEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile = showFileNavPath.subscribe((filePath) => {
+			if (!filePath) return;
+			showFileNavPath.set(null);
+			void openRequestedFile(filePath);
+		});
 	});
 
 	onDestroy(() => {
 		window.removeEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile?.();
 	});
 </script>
 

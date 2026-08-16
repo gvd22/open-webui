@@ -8,11 +8,15 @@ import {
 	getWorkspaceContentId,
 	getWorkspaceInstanceId,
 	getNextWorkspaceInstanceTitle,
+	getWorkspaceFileRefreshAction,
 	hasWorkspaceAddActions,
 	isKeyboardActivationClick,
+	limitWorkspaceFileContents,
 	moveWorkspaceContent,
 	orderWorkspaceContents,
-	replaceWorkspaceFileContent,
+	upsertWorkspaceFileContent,
+	getWorkspaceDocumentFormat,
+	isWorkspaceDocumentPath,
 	resolveWorkspaceRuntime,
 	shouldResetWorkspaceForChatChange,
 	shouldShowWorkspaceTabs,
@@ -158,21 +162,46 @@ describe('workspace tabs', () => {
 		expect(getNextWorkspaceInstanceTitle('browser', ['Browser 2'])).toBe('Browser 3');
 	});
 
-	it('keeps exactly one file object tab and replaces it in place', () => {
-		const first = replaceWorkspaceFileContent([], '/workspace/reports/brief.md');
-		const repeated = replaceWorkspaceFileContent(first, '/workspace/reports/brief.md');
-		const second = replaceWorkspaceFileContent(repeated, '/workspace/data.csv');
+	it('keeps one stable tab per open document file', () => {
+		const first = upsertWorkspaceFileContent([], '/workspace/reports/brief.docx');
+		const repeated = upsertWorkspaceFileContent(first, '/workspace/reports/brief.docx');
+		const second = upsertWorkspaceFileContent(repeated, '/workspace/slides/update.pptx');
 
 		expect(repeated).toBe(first);
-		expect(buildWorkspaceFileContent('/workspace/reports/brief.md')).toMatchObject({
+		expect(buildWorkspaceFileContent('/workspace/reports/brief.docx')).toMatchObject({
 			type: 'workspace-file',
-			workspaceId: 'workspace:file:/workspace/reports/brief.md',
-			title: 'brief.md',
-			path: '/workspace/reports/brief.md'
+			workspaceId: 'workspace:file:/workspace/reports/brief.docx',
+			title: 'brief.docx',
+			path: '/workspace/reports/brief.docx',
+			fileFormat: 'docx'
 		});
 		expect(buildWorkspaceTabs(second).map(({ id, title }) => ({ id, title }))).toEqual([
-			{ id: 'workspace:file:/workspace/data.csv', title: 'data.csv' }
+			{ id: 'workspace:file:/workspace/reports/brief.docx', title: 'brief.docx' },
+			{ id: 'workspace:file:/workspace/slides/update.pptx', title: 'update.pptx' }
 		]);
+	});
+
+	it('evicts the oldest document tabs when the memory budget is reached', () => {
+		const opened = ['/one.pdf', '/two.docx', '/three.pptx'].map(buildWorkspaceFileContent);
+		const limited = limitWorkspaceFileContents(opened, 2);
+
+		expect(limited.contents.map((content) => content.path)).toEqual(['/two.docx', '/three.pptx']);
+		expect(limited.evictedIds).toEqual(['workspace:file:/one.pdf']);
+	});
+
+	it('refreshes active Pyodide documents and defers inactive matching documents', () => {
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', true)).toBe('refresh');
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', false)).toBe('defer');
+		expect(getWorkspaceFileRefreshAction(['/other.docx'], '/one.docx', true)).toBe('ignore');
+		expect(getWorkspaceFileRefreshAction(undefined, '/one.docx', false)).toBe('defer');
+	});
+
+	it('routes only the lightweight document formats to the document viewer', () => {
+		expect(getWorkspaceDocumentFormat('/workspace/report.PDF')).toBe('pdf');
+		expect(getWorkspaceDocumentFormat('/workspace/report.docx')).toBe('docx');
+		expect(getWorkspaceDocumentFormat('/workspace/slides.pptx')).toBe('pptx');
+		expect(getWorkspaceDocumentFormat('/workspace/report.odt')).toBeNull();
+		expect(isWorkspaceDocumentPath('/workspace/table.xlsx')).toBe(false);
 	});
 
 	it('preserves a custom tab order and appends unknown items', () => {

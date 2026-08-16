@@ -180,6 +180,9 @@ RUN if [ "$USE_OLLAMA" = "true" ]; then \
 COPY --chown=$UID:$GID --from=build /app/build /app/build
 COPY --chown=$UID:$GID --from=build /app/CHANGELOG.md /app/CHANGELOG.md
 COPY --chown=$UID:$GID --from=build /app/package.json /app/package.json
+COPY --chown=$UID:$GID --from=build /app/LICENSE_NOTICE /app/legal/LICENSE_NOTICE
+COPY --chown=$UID:$GID --from=build /app/node_modules/@aiden0z/pptx-renderer/LICENSE /app/legal/pptx-renderer-LICENSE
+COPY --chown=$UID:$GID --from=build /app/node_modules/docx-preview/LICENSE /app/legal/docx-preview-LICENSE
 
 # copy backend files
 COPY --chown=$UID:$GID ./backend .

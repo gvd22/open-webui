@@ -16,7 +16,10 @@ export type WorkspaceContent = {
 	source?: string;
 	path?: string;
 	terminalId?: string;
+	fileFormat?: WorkspaceDocumentFormat;
 };
+
+export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx';
 
 export type WorkspaceTab = {
 	id: string;
@@ -124,12 +127,20 @@ export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: st
 export const hasWorkspaceAddActions = (terminalId: string | null, filesAvailable: boolean) =>
 	Boolean(terminalId || filesAvailable);
 
+export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentFormat | null => {
+	const extension = path.split('.').pop()?.toLowerCase();
+	return extension === 'pdf' || extension === 'docx' || extension === 'pptx' ? extension : null;
+};
+
+export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFormat(path) !== null;
+
 export const buildWorkspaceFileContent = (path: string): WorkspaceContent => ({
 	type: 'workspace-file',
 	workspaceId: getWorkspaceFileId(path),
 	title: path.split('/').filter(Boolean).at(-1) || 'File',
 	content: '',
-	path
+	path,
+	fileFormat: getWorkspaceDocumentFormat(path) ?? undefined
 });
 
 export const buildWorkspaceUtilityContents = ({
@@ -183,14 +194,32 @@ const fallbackTitle = (kind: string) => {
 	return 'Preview';
 };
 
-export const replaceWorkspaceFileContent = (
+export const upsertWorkspaceFileContent = (
 	contents: WorkspaceContent[],
 	path: string
 ): WorkspaceContent[] => {
 	const id = getWorkspaceFileId(path);
-	return contents.length === 1 && getWorkspaceContentId(contents[0], 0) === id
+	return contents.some((content, index) => getWorkspaceContentId(content, index) === id)
 		? contents
-		: [buildWorkspaceFileContent(path)];
+		: [...contents, buildWorkspaceFileContent(path)];
+};
+
+export const limitWorkspaceFileContents = (contents: WorkspaceContent[], maximum: number) => {
+	const overflow = Math.max(0, contents.length - Math.max(1, maximum));
+	const evicted = contents.slice(0, overflow);
+	return {
+		contents: contents.slice(overflow),
+		evictedIds: evicted.map((content, index) => getWorkspaceContentId(content, index))
+	};
+};
+
+export const getWorkspaceFileRefreshAction = (
+	changedPaths: string[] | undefined,
+	path: string,
+	isActive: boolean
+): 'ignore' | 'refresh' | 'defer' => {
+	if (changedPaths?.length && !changedPaths.includes(path)) return 'ignore';
+	return isActive ? 'refresh' : 'defer';
 };
 
 export const getWorkspaceContentId = (content: WorkspaceContent, index: number) =>

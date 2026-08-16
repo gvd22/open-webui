@@ -52,6 +52,7 @@
 	},
 	"type": "module",
 	"dependencies": {
+		"@aiden0z/pptx-renderer": "^1.2.4",
 		"@azure/msal-browser": "^4.5.0",
 		"@codemirror/lang-javascript": "^6.2.2",
 		"@codemirror/lang-python": "^6.1.6",
@@ -96,6 +97,7 @@
 		"codemirror-lang-hcl": "^0.1.0",
 		"crc-32": "^1.2.2",
 		"dayjs": "^1.11.10",
+		"docx-preview": "^0.3.7",
 		"dompurify": "^3.2.6",
 		"eventsource-parser": "^1.1.2",
 		"fast-deep-equal": "^3.1.3",

@@ -444,6 +444,10 @@
 
 		const filePath = `${currentPath}${entry.name}`;
 		appliedInitialFilePath = filePath;
+		if (notifyWorkspace && ['pdf', 'docx', 'pptx'].includes(getFileExt(filePath))) {
+			onOpenFile(filePath);
+			return;
+		}
 		if (notifyWorkspace) onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 

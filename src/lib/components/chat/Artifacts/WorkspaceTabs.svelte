@@ -49,6 +49,7 @@
 
 	const iconKind = (kind: string) => {
 		if (kind === 'canvas-note') return 'document';
+		if (kind === 'workspace-file') return 'document';
 		if (kind === 'web-preview') return 'browser';
 		if (kind.includes('terminal')) return 'terminal';
 		if (kind.includes('browser')) return 'browser';
@@ -97,6 +98,9 @@
 		showAddMenu = false;
 		pressedTabId = tab.id;
 		pointerStart = { x: event.clientX, y: event.clientY };
+		// Select on pointer-down so an active preview cannot consume the final click.
+		// The drag listeners below still handle reordering after the pointer moves.
+		void selectTab(tab);
 
 		const move = (moveEvent: MouseEvent) => {
 			if (!pressedTabId) return;
