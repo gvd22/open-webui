@@ -480,8 +480,10 @@ CODE_INTERPRETER_PYODIDE_PROMPT = """
 
 ##### Persistent File System
 
-- User-uploaded files are available at `/mnt/uploads/`. When the user asks you to work with their files, read from this directory.
-- You can also write output files to `/mnt/uploads/` so the user can access and download them from the file browser.
+- `/mnt/uploads/` is the user's Home directory and the working directory at the start of every execution.
+- User-uploaded files are available there. When the user asks you to work with their files, read from this directory.
+- Create every user-facing output file inside `/mnt/uploads/` or one of its subdirectories. Never save user files elsewhere in the Pyodide file system.
+- Prefer relative output paths so generated files automatically stay in the user's Home directory and remain accessible from the file browser.
 - The file system persists across code executions within the same session.
 - Use `import os; os.listdir('/mnt/uploads')` to discover available files."""
 

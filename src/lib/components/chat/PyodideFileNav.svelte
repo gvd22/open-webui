@@ -1,11 +1,18 @@
 <script context="module">
-	let savedPyodidePath = '/mnt/uploads';
+	import { PYODIDE_WORKSPACE_DIRECTORY } from '$lib/pyodide/workspace';
+
+	let savedPyodidePath = PYODIDE_WORKSPACE_DIRECTORY;
 </script>
 
 <script lang="ts">
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import { pyodideWorker, showFileNavPath } from '$lib/stores';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import {
+		asPyodideWorkspaceDirectory,
+		getPyodideWorkspaceBreadcrumbs,
+		getPyodideWorkspacePath
+	} from '$lib/pyodide/workspace';
 	import type { FileEntry } from '$lib/apis/terminal';
 
 	import FileNavToolbar from './FileNav/FileNavToolbar.svelte';
@@ -131,19 +138,7 @@
 
 	// ── Breadcrumbs ───────────────────────────────────────────────────────
 
-	const buildBreadcrumbs = (path: string) => {
-		const parts = path.split('/').filter(Boolean);
-		return parts.reduce(
-			(acc, part) => {
-				const prev = acc[acc.length - 1];
-				acc.push({ label: part, path: `${prev.path}${part}/` });
-				return acc;
-			},
-			[{ label: '/', path: '/' }]
-		);
-	};
-
-	$: breadcrumbs = buildBreadcrumbs(currentPath);
+	$: breadcrumbs = getPyodideWorkspaceBreadcrumbs(currentPath);
 
 	// ── Operations ────────────────────────────────────────────────────────
 
@@ -152,7 +147,7 @@
 		error = null;
 		selectedFile = null;
 		clearPreview();
-		currentPath = path.endsWith('/') ? path : path + '/';
+		currentPath = asPyodideWorkspaceDirectory(path);
 		savedPyodidePath = currentPath;
 		pushNavHistory(currentPath);
 
@@ -209,7 +204,10 @@
 	};
 
 	const openRequestedFile = async (filePath: string) => {
-		const normalized = filePath.startsWith('/') ? filePath : `${currentPath}${filePath}`;
+		const normalized = getPyodideWorkspacePath(
+			filePath.startsWith('/') ? filePath : `${currentPath}${filePath}`
+		);
+		if (!normalized) return;
 		const separator = normalized.lastIndexOf('/');
 		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
 		const name = normalized.slice(separator + 1);

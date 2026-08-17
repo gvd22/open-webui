@@ -4,6 +4,20 @@ type PyodideFileWorker = {
 	postMessage: (message: { type: 'fs:read'; path: string; id: string; maxBytes: number }) => void;
 };
 
+export const DOCUMENT_TOO_LARGE_ERROR = 'too-large';
+
+const PYODIDE_READ_LIMIT_ERROR = 'File exceeds the read limit';
+
+export const normalizePyodideReadError = (cause: unknown): Error => {
+	const message = cause instanceof Error ? cause.message : String(cause);
+	return new Error(message === PYODIDE_READ_LIMIT_ERROR ? DOCUMENT_TOO_LARGE_ERROR : message);
+};
+
+export const assertDocumentSize = (data: ArrayBuffer, maxBytes: number): ArrayBuffer => {
+	if (data.byteLength > maxBytes) throw new Error(DOCUMENT_TOO_LARGE_ERROR);
+	return data;
+};
+
 const createAbortError = () => new DOMException('The operation was aborted.', 'AbortError');
 
 export const readPyodideWorkerFile = (
@@ -35,7 +49,7 @@ export const readPyodideWorkerFile = (
 		const handler = (event: MessageEvent) => {
 			if (event.data?.id !== id || !cleanup()) return;
 			if (event.data?.error) {
-				reject(new Error(event.data.error));
+				reject(normalizePyodideReadError(event.data.error));
 				return;
 			}
 			const bytes = event.data?.data;

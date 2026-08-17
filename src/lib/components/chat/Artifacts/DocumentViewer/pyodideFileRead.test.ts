@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readPyodideWorkerFile } from './pyodideFileRead';
+import {
+	assertDocumentSize,
+	DOCUMENT_TOO_LARGE_ERROR,
+	normalizePyodideReadError,
+	readPyodideWorkerFile
+} from './pyodideFileRead';
 
 const createWorker = () => {
 	const listeners = new Set<(event: MessageEvent) => void>();
@@ -71,5 +76,34 @@ describe('readPyodideWorkerFile', () => {
 
 		await expect(read).rejects.toThrow('File request timed out');
 		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+	});
+
+	it('normalizes the worker size-limit error to the viewer error code', () => {
+		expect(normalizePyodideReadError('File exceeds the read limit').message).toBe(
+			DOCUMENT_TOO_LARGE_ERROR
+		);
+		expect(normalizePyodideReadError(new Error('File exceeds the read limit')).message).toBe(
+			DOCUMENT_TOO_LARGE_ERROR
+		);
+	});
+
+	it('maps a worker size-limit reply to the viewer error code', async () => {
+		const { worker, emit } = createWorker();
+		const read = readPyodideWorkerFile(
+			worker,
+			'/workspace/large.pdf',
+			1024,
+			new AbortController().signal
+		);
+		const [[{ id }]] = worker.postMessage.mock.calls;
+
+		emit({ id, error: 'File exceeds the read limit' });
+
+		await expect(read).rejects.toThrow(DOCUMENT_TOO_LARGE_ERROR);
+	});
+
+	it('uses the same viewer error code for a defensive post-read size check', () => {
+		expect(() => assertDocumentSize(new ArrayBuffer(1025), 1024)).toThrow(DOCUMENT_TOO_LARGE_ERROR);
+		expect(assertDocumentSize(new ArrayBuffer(1024), 1024).byteLength).toBe(1024);
 	});
 });
