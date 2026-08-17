@@ -66,6 +66,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+pytest-of-*/
+data-gym-cache/
 
 # Translations
 *.mo

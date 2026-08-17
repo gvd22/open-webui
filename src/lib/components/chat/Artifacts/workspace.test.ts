@@ -6,6 +6,7 @@ import {
 	buildWorkspaceUtilityContents,
 	getVisibleWorkspaceContents,
 	getWorkspaceContentId,
+	getWorkspaceModelFocus,
 	getWorkspaceInstanceId,
 	getNextWorkspaceInstanceTitle,
 	hasWorkspaceAddActions,
@@ -13,6 +14,7 @@ import {
 	moveWorkspaceContent,
 	orderWorkspaceContents,
 	replaceWorkspaceFileContent,
+	resolveBoundWorkspaceTerminal,
 	resolveWorkspaceRuntime,
 	shouldResetWorkspaceForChatChange,
 	shouldShowWorkspaceTabs,
@@ -42,9 +44,29 @@ describe('workspace tabs', () => {
 		);
 	});
 
-	it('uses Pyodide only without a managed terminal', () => {
+	it('does not fall back while the managed Terminal catalog is unresolved', () => {
+		expect(resolveWorkspaceRuntime(null, null, true)).toEqual({
+			kind: 'unavailable',
+			terminalId: null,
+			files: false,
+			writable: false,
+			shell: false,
+			ports: false
+		});
+	});
+
+	it('uses Pyodide only without a managed terminal and with a non-Jupyter interpreter', () => {
 		expect(resolveWorkspaceRuntime([], null, true).kind).toBe('pyodide');
+		// Jupyter callers pass false because it does not expose the Pyodide Files runtime.
 		expect(resolveWorkspaceRuntime([], null, false).kind).toBe('none');
+	});
+
+	it('keeps Browser tabs bound to their original managed Terminal', () => {
+		const terminals = [{ id: 'terminal-1' }, { id: 'terminal-2' }];
+
+		expect(resolveBoundWorkspaceTerminal(terminals, 'terminal-2')).toEqual({ id: 'terminal-2' });
+		expect(resolveBoundWorkspaceTerminal(terminals, 'removed-terminal')).toBeNull();
+		expect(resolveBoundWorkspaceTerminal(terminals, null)).toBeNull();
 	});
 
 	it('shows the add control only when at least one action is available', () => {
@@ -101,7 +123,26 @@ describe('workspace tabs', () => {
 		]);
 	});
 
-	it('provides readable labels and deterministic ids for legacy artifacts', () => {
+	it('exposes only the visible Canvas or Web Preview as model focus', () => {
+		const contents = [
+			{ type: 'canvas-note', content: '# Plan', canvasId: 'canvas-1' },
+			{ type: 'web-preview', content: '<h1>App</h1>', previewId: 'preview-1' },
+			{ type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID }
+		];
+
+		expect(getWorkspaceModelFocus(contents, 'canvas-1', true)).toEqual({
+			kind: 'canvas',
+			id: 'canvas-1'
+		});
+		expect(getWorkspaceModelFocus(contents, 'preview-1', true)).toEqual({
+			kind: 'web_preview',
+			id: 'preview-1'
+		});
+		expect(getWorkspaceModelFocus(contents, WORKSPACE_FILES_ID, true)).toBeUndefined();
+		expect(getWorkspaceModelFocus(contents, 'canvas-1', false)).toBeUndefined();
+	});
+
+	it('provides readable labels and stable ids for legacy artifacts', () => {
 		const contents = [
 			{ type: 'canvas-note', content: '' },
 			{ type: 'terminal', content: '' },
@@ -113,7 +154,15 @@ describe('workspace tabs', () => {
 			'Terminal',
 			'Preview'
 		]);
-		expect(getWorkspaceContentId(contents[2], 2)).toBe('iframe:2');
+		const legacyId = getWorkspaceContentId(contents[2], 2);
+		expect(legacyId).toMatch(/^iframe:[a-z0-9]+$/);
+		expect(getWorkspaceContentId(contents[2], 99)).toBe(legacyId);
+		expect(
+			getWorkspaceContentId(
+				{ type: 'iframe', title: 'Renamed preview', content: '<main></main>' },
+				0
+			)
+		).toBe(legacyId);
 	});
 
 	it('keeps the workspace tab strip visible whenever a renderer is open', () => {

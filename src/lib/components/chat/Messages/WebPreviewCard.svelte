@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, tick } from 'svelte';
+	import { getContext } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { toast } from 'svelte-sonner';
@@ -12,7 +12,8 @@
 		chatId,
 		showArtifacts,
 		showControls,
-		showEmbeds
+		showEmbeds,
+		workspaceOpenRequestId
 	} from '$lib/stores';
 	import type { WebPreviewArtifact } from '../Artifacts/webPreview';
 
@@ -25,13 +26,6 @@
 	$: title = current?.title ?? artifact.title;
 
 	const openPreview = async () => {
-		(artifactCode as any).set(null);
-		await tick();
-		(artifactCode as any).set(artifact.previewId);
-		showEmbeds.set(false);
-		showArtifacts.set(true);
-		showControls.set(true);
-
 		if ($chatId && artifact.source === 'tool') {
 			try {
 				const document = await selectTransientWebPreview(
@@ -48,15 +42,23 @@
 									entrypoint: document.entrypoint,
 									files: document.files,
 									content: document.files?.[document.entrypoint]?.content ?? '',
-									updatedAt: document.updated_at
+									updatedAt: document.updated_at,
+									contentHash: document.contentHash
 								}
 							: item
 					)
 				);
 			} catch {
 				toast.error($i18n.t('Preview could not be refreshed'));
+				return;
 			}
 		}
+
+		workspaceOpenRequestId.set(artifact.previewId);
+		(artifactCode as any).set(artifact.previewId);
+		showEmbeds.set(false);
+		showArtifacts.set(true);
+		showControls.set(true);
 	};
 </script>
 

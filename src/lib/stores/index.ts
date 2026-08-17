@@ -105,7 +105,15 @@ export const settings: Writable<Settings> = writable({});
 
 export const audioQueue = writable<AudioQueue | null>(null);
 export const chatRequestQueues: Writable<
-	Record<string, { id: string; prompt: string; files: any[] }[]>
+	Record<
+		string,
+		{
+			id: string;
+			prompt: string;
+			files: any[];
+			workspaceFocus?: { kind: 'canvas' | 'web_preview'; id: string };
+		}[]
+	>
 > = writable({});
 
 export const sidebarWidth = writable(245);
@@ -131,6 +139,7 @@ export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedTerminalId: Writable<string | null> = writable(null);
 export const workspaceTerminalConnectionId: Writable<string | null> = writable(null);
 export const workspaceChatContextId: Writable<string> = writable('');
+export const workspaceOpenRequestId: Writable<string | null> = writable(null);
 export type WorkspaceUtilityInstance = {
 	id: string;
 	kind: 'terminal' | 'browser';

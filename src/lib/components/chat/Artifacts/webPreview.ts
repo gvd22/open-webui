@@ -9,8 +9,10 @@ export type WebPreviewArtifact = {
 	entrypoint: string;
 	files: Record<string, WebPreviewFile>;
 	updatedAt?: number;
+	contentHash?: string;
 	exportedPath?: string;
 	exportedRuntime?: 'terminal' | 'pyodide';
+	hasFilePayload?: boolean;
 	source: 'tool' | 'legacy';
 };
 
@@ -49,9 +51,10 @@ export const generateWebPreviewTitle = (
 };
 
 const normalizeDocument = (value: any): WebPreviewArtifact | null => {
-	if (value?.type !== 'web_preview.document' || !value?.previewId || !value?.files) return null;
+	if (value?.type !== 'web_preview.document' || !value?.previewId) return null;
+	const hasFilePayload = Boolean(value.files && Object.keys(value.files).length > 0);
 	const files = Object.fromEntries(
-		Object.entries(value.files).map(([path, file]: [string, any]) => [
+		Object.entries(value.files ?? {}).map(([path, file]: [string, any]) => [
 			path,
 			{
 				content: typeof file === 'string' ? file : String(file?.content ?? ''),
@@ -68,8 +71,10 @@ const normalizeDocument = (value: any): WebPreviewArtifact | null => {
 		entrypoint,
 		files,
 		updatedAt: Number(value.updatedAt ?? 0),
+		contentHash: value.contentHash ?? undefined,
 		exportedPath: value.exportedPath ?? undefined,
 		exportedRuntime: value.exportedRuntime ?? undefined,
+		hasFilePayload,
 		source: 'tool'
 	};
 };
@@ -108,7 +113,14 @@ export const getWebPreviewsFromHistory = (history: any): WebPreviewArtifact[] =>
 	for (const message of createMessagesList(history, history.currentId)) {
 		if (message?.role === 'user') continue;
 		for (const preview of getWebPreviewsFromOutput(message?.output ?? [])) {
-			previews.set(preview.previewId, preview);
+			const previous = previews.get(preview.previewId);
+			const files = preview.hasFilePayload ? preview.files : (previous?.files ?? {});
+			previews.set(preview.previewId, {
+				...previous,
+				...preview,
+				files,
+				content: files[preview.entrypoint]?.content ?? previous?.content ?? ''
+			});
 		}
 	}
 	return Array.from(previews.values());
@@ -126,10 +138,8 @@ export const dedupeWebPreviewArtifacts = (
 	});
 };
 
-export const findNewToolWebPreview = (
-	items: WebPreviewArtifact[],
-	knownIds: ReadonlySet<string>
-) => items.find((item) => item.source === 'tool' && !knownIds.has(item.previewId));
+export const findNewToolWebPreview = (items: WebPreviewArtifact[], knownIds: ReadonlySet<string>) =>
+	items.find((item) => item.source === 'tool' && !knownIds.has(item.previewId));
 
 const dataUrl = (file: WebPreviewFile) =>
 	`data:${file.mime || 'text/plain'};charset=utf-8,${encodeURIComponent(file.content)}`;
@@ -199,7 +209,7 @@ export const mergePersistedWebPreview = (
 	artifact: WebPreviewArtifact,
 	persisted: Record<string, any> | undefined
 ): WebPreviewArtifact => {
-	if (!persisted || Number(persisted.updated_at ?? 0) <= Number(artifact.updatedAt ?? 0))
+	if (!persisted || Number(persisted.updated_at ?? 0) < Number(artifact.updatedAt ?? 0))
 		return artifact;
 	const files = persisted.files ?? artifact.files;
 	const entrypoint = persisted.entrypoint ?? artifact.entrypoint;
@@ -210,7 +220,18 @@ export const mergePersistedWebPreview = (
 		files,
 		content: files[entrypoint]?.content ?? '',
 		updatedAt: Number(persisted.updated_at ?? artifact.updatedAt ?? 0),
+		contentHash: artifact.contentHash,
 		exportedPath: persisted.exported_path ?? artifact.exportedPath,
-		exportedRuntime: persisted.exported_runtime ?? artifact.exportedRuntime
+		exportedRuntime: persisted.exported_runtime ?? artifact.exportedRuntime,
+		hasFilePayload: true
 	};
 };
+
+export const mergeLocalWebPreviewDraft = (
+	artifact: WebPreviewArtifact,
+	draft: Pick<WebPreviewArtifact, 'title' | 'entrypoint' | 'files'>
+): WebPreviewArtifact => ({
+	...artifact,
+	...draft,
+	content: draft.files[draft.entrypoint]?.content ?? ''
+});

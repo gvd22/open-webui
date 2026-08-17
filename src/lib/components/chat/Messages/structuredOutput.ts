@@ -148,13 +148,17 @@ const CANVAS_TOOL_NAMES = new Set([
 	'canvas_create_document',
 	'canvas_update_document',
 	'canvas_select_document',
-	'canvas_list_documents'
+	'canvas_list_documents',
+	'canvas_read_document',
+	'canvas_replace_text'
 ]);
 const WEB_PREVIEW_TOOL_NAMES = new Set([
 	'web_preview_create',
 	'web_preview_update',
 	'web_preview_select',
-	'web_preview_list'
+	'web_preview_list',
+	'web_preview_read_file',
+	'web_preview_replace_text'
 ]);
 
 function getTextFromParts(parts: OutputContentPart[] = []): string {

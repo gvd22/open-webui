@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { createEventDispatcher, getContext, onDestroy } from 'svelte';
+	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { toast } from 'svelte-sonner';
@@ -11,10 +12,17 @@
 	import { artifactContents, config, socket, user } from '$lib/stores';
 	import {
 		promoteTransientCanvasDocument,
+		selectTransientCanvasDocument,
 		undoLastTransientCanvasAiUpdate,
 		updateTransientCanvasDocument
 	} from '$lib/apis/chats';
 	import { canSynchronizeCanvasDocumentChange, canUseNotes, generateCanvasTitle } from './canvas';
+	import {
+		createSerializedSaveQueue,
+		registerWorkspaceSaveBarrier,
+		resetWorkspaceSaveVersion,
+		runWorkspaceOptimisticSave
+	} from './serializedSaveQueue';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -46,21 +54,12 @@
 		$user?.permissions?.features?.notes
 	);
 	let lastContentProp = content;
-	let transientSaveTimer: ReturnType<typeof setTimeout> | null = null;
 	let transientSaveError = false;
 	let lastLocalContent = '';
-	let pendingTransientSave: { title: string; content: string; titleEdited: boolean } | null = null;
 	let isApplyingExternalContent = false;
 	let suppressExternalSaveUntil = Date.now() + 300;
-	onDestroy(() => {
-		if (transientSaveTimer) {
-			clearTimeout(transientSaveTimer);
-			transientSaveTimer = null;
-			if (pendingTransientSave) {
-				void saveTransientCanvas(pendingTransientSave);
-			}
-		}
-	});
+	let initializedEditorCanvasId = '';
+	let unregisterSaveBarrier = () => {};
 
 	$: generatedTitle = titleValue || generateCanvasTitle(md || value || content, title);
 	$: if (title !== lastTitleProp && title !== titleValue) {
@@ -119,47 +118,99 @@
 		title: string;
 		content: string;
 		titleEdited: boolean;
+		expectedUpdatedAt?: number;
+		expectedContentHash?: string;
 	}) => {
 		if (!chatId || !canvasId) {
 			return;
 		}
 
 		try {
-			const document = await updateTransientCanvasDocument(localStorage.token, chatId, canvasId, {
-				title: nextSave.title || generateCanvasTitle(nextSave.content, title),
-				content: nextSave.content,
-				title_edited: nextSave.titleEdited
-			});
+			const document = await runWorkspaceOptimisticSave(
+				{ kind: 'canvas', id: canvasId },
+				{ updatedAt: nextSave.expectedUpdatedAt, contentHash: nextSave.expectedContentHash },
+				async (version) => {
+					const saved = await updateTransientCanvasDocument(localStorage.token, chatId, canvasId, {
+						title: nextSave.title || generateCanvasTitle(nextSave.content, title),
+						content: nextSave.content,
+						title_edited: nextSave.titleEdited,
+						expected_updated_at: version.updatedAt ?? null,
+						expected_content_hash: version.contentHash ?? null
+					});
+					return { ...saved, updatedAt: saved.updated_at };
+				}
+			);
 			updateCanvasState({
 				updatedAt: document.updated_at,
+				contentHash: document.contentHash,
 				titleEdited: Boolean(document.title_edited)
 			});
-			if (pendingTransientSave === nextSave) {
-				pendingTransientSave = null;
-			}
 			transientSaveError = false;
-		} catch (error) {
+		} catch (error: any) {
 			transientSaveError = true;
+			if (error?.status === 409) {
+				try {
+					const document = await selectTransientCanvasDocument(
+						localStorage.token,
+						chatId,
+						canvasId
+					);
+					applyExternalContent(document.content ?? '');
+					titleValue = document.title ?? titleValue;
+					titleEdited = Boolean(document.title_edited);
+					updateCanvasState({
+						title: titleValue,
+						content: document.content ?? '',
+						titleEdited,
+						canUndoAiUpdate: Boolean(document.last_ai_update),
+						updatedAt: document.updated_at,
+						contentHash: document.contentHash
+					});
+					resetWorkspaceSaveVersion(
+						{ kind: 'canvas', id: canvasId },
+						{ updatedAt: document.updated_at, contentHash: document.contentHash }
+					);
+					transientSaveError = false;
+				} catch {
+					// Keep the conflict visible when the canonical refresh also fails.
+				}
+				toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
+				return;
+			}
 			console.error('Unable to save Canvas edit', error);
 		}
 	};
+	const transientSaveQueue = createSerializedSaveQueue(saveTransientCanvas);
 
 	const queueTransientSave = (nextTitle: string, nextContent: string, titleEdited: boolean) => {
 		if (!chatId || !canvasId) {
 			return;
 		}
-		const nextSave = { title: nextTitle, content: nextContent, titleEdited };
-		pendingTransientSave = nextSave;
-
-		if (transientSaveTimer) {
-			clearTimeout(transientSaveTimer);
-		}
-
-		transientSaveTimer = setTimeout(async () => {
-			transientSaveTimer = null;
-			await saveTransientCanvas(nextSave);
-		}, 500);
+		const current = ((get(artifactContents) ?? []) as any[]).find(
+			(item) => item?.canvasId === canvasId
+		);
+		transientSaveQueue.enqueue({
+			title: nextTitle,
+			content: nextContent,
+			titleEdited,
+			expectedUpdatedAt: current?.updatedAt,
+			expectedContentHash: current?.contentHash
+		});
 	};
+
+	onMount(() => {
+		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
+			{ kind: 'canvas', id: canvasId },
+			async () => {
+				await transientSaveQueue.flush();
+				return !transientSaveError;
+			}
+		);
+	});
+
+	onDestroy(() => {
+		void transientSaveQueue.flush().finally(unregisterSaveBarrier);
+	});
 
 	const addToNotes = async () => {
 		if (saving || !notesAvailable) {
@@ -168,11 +219,18 @@
 
 		saving = true;
 		try {
+			await transientSaveQueue.flush();
+			if (transientSaveError) return;
+			const current = ((get(artifactContents) ?? []) as any[]).find(
+				(item) => item?.canvasId === canvasId
+			);
 			const note = await promoteTransientCanvasDocument(localStorage.token, chatId, canvasId, {
 				title: titleValue || generatedTitle,
 				content: md || value || content,
 				html,
-				json
+				json,
+				expected_updated_at: current?.updatedAt ?? null,
+				expected_content_hash: current?.contentHash ?? null
 			});
 			linkedNoteId = note?.id ?? '';
 
@@ -203,7 +261,8 @@
 				content: document.content,
 				titleEdited: Boolean(document.title_edited),
 				canUndoAiUpdate: false,
-				updatedAt: document.updated_at
+				updatedAt: document.updated_at,
+				contentHash: document.contentHash
 			});
 			toast.success($i18n.t('AI change undone'));
 		} catch (error) {
@@ -313,11 +372,15 @@
 				placeholder={$i18n.t('Write something...')}
 				editable={true}
 				onChange={(nextContent: any) => {
+					const isInitialEditorChange = initializedEditorCanvasId !== canvasId;
+					initializedEditorCanvasId = canvasId;
 					const isManualChange =
+						!isInitialEditorChange &&
 						canSynchronizeCanvasDocumentChange(
 							isApplyingExternalContent,
 							suppressExternalSaveUntil
-						) && nextContent.md !== md;
+						) &&
+						nextContent.md !== md;
 					html = nextContent.html;
 					md = nextContent.md;
 					json = nextContent.json;

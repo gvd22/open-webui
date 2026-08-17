@@ -179,7 +179,7 @@
 
 							{#if defaultCapabilities.builtin_tools}
 								<div class="mt-4">
-									<BuiltinTools bind:builtinTools />
+									<BuiltinTools bind:builtinTools capabilities={defaultCapabilities} />
 								</div>
 							{/if}
 						</div>

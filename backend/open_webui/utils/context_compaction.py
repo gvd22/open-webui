@@ -471,7 +471,18 @@ def _estimate_messages_tokens(messages: list[dict]) -> int:
     return total
 
 
-def _estimate_tokens(value: Any) -> int:
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    """Conservative shared estimate for request budgeting."""
+    return _estimate_messages_tokens(messages)
+
+
+def estimate_tokens(value: Any) -> int:
+    """Estimate tokens without undercounting UTF-8-heavy text.
+
+    ASCII prose keeps the established four-characters-per-token estimate.
+    Non-ASCII bytes are counted individually because a Unicode code point can
+    expand to several provider tokens.
+    """
     if value is None:
         return 0
 
@@ -484,4 +495,10 @@ def _estimate_tokens(value: Any) -> int:
     if not value:
         return 0
 
-    return max(1, len(value) // 4)
+    ascii_chars = sum(1 for char in value if char.isascii())
+    non_ascii_bytes = len(value.encode('utf-8')) - ascii_chars
+    return max(1, (ascii_chars + 3) // 4 + non_ascii_bytes)
+
+
+def _estimate_tokens(value: Any) -> int:
+    return estimate_tokens(value)

@@ -38,14 +38,25 @@ export type TerminalServer = {
 	name: string;
 };
 
-export const getTerminalServers = async (token: string): Promise<TerminalServer[]> => {
-	const res = await fetch(`${WEBUI_API_BASE_URL}/terminals/`, {
-		headers: {
-			Authorization: `Bearer ${token}`
+export const getTerminalServers = async (
+	token: string,
+	options: { throwOnError?: boolean } = {}
+): Promise<TerminalServer[]> => {
+	try {
+		const res = await fetch(`${WEBUI_API_BASE_URL}/terminals/`, {
+			headers: {
+				Authorization: `Bearer ${token}`
+			}
+		});
+		if (!res.ok) {
+			if (options.throwOnError) throw new Error(`Terminal catalog request failed: ${res.status}`);
+			return [];
 		}
-	}).catch(() => null);
-	if (!res || !res.ok) return [];
-	return res.json().catch(() => []);
+		return await res.json();
+	} catch (error) {
+		if (options.throwOnError) throw error;
+		return [];
+	}
 };
 
 export const getTerminalConfig = async (
@@ -63,12 +74,13 @@ export const getTerminalConfig = async (
 export const getCwd = async (
 	baseUrl: string,
 	apiKey: string,
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<TerminalCwd | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/cwd`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers }).catch(() => null);
+	const res = await fetch(url, { headers, signal }).catch(() => null);
 	if (!res || !res.ok) return null;
 	const json = await res.json().catch(() => null);
 	if (!json) return null;
@@ -83,13 +95,14 @@ export const listFiles = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string = '/',
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<FileEntry[] | null> => {
 	// The endpoint uses `directory` as the query param name
 	const url = `${baseUrl.replace(/\/$/, '')}/files/list?directory=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers })
+	const res = await fetch(url, { headers, signal })
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
 			return res.json();
@@ -105,12 +118,13 @@ export const readFile = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<string | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/read?path=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers }).catch((err) => {
+	const res = await fetch(url, { headers, signal }).catch((err) => {
 		console.error('open-terminal readFile error:', err);
 		return null;
 	});
@@ -133,12 +147,13 @@ export const downloadFileBlob = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<{ blob: Blob; filename: string } | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers }).catch(() => null);
+	const res = await fetch(url, { headers, signal }).catch(() => null);
 
 	if (!res || !res.ok) return null;
 

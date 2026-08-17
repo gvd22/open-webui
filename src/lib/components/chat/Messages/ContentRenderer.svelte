@@ -4,15 +4,7 @@
 
 	import Markdown from './Markdown.svelte';
 	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
-	import {
-		artifactCode,
-		chatId,
-		mobile,
-		settings,
-		showArtifacts,
-		showControls,
-		showEmbeds
-	} from '$lib/stores';
+	import { mobile, settings } from '$lib/stores';
 	import FloatingButtons from '../ContentRenderer/FloatingButtons.svelte';
 	import { createMessagesList, replaceOutsideCode } from '$lib/utils';
 
@@ -133,48 +125,6 @@
 				)
 			: messageContent;
 
-	let autoOpenedArtifactIds = new Set();
-
-	const hasClosingCodeFence = (raw = '') => /(?:^|\n)```[ \t]*$/.test(raw.trimEnd());
-
-	const markdownUpdateHandler = /** @type {any} */ (
-		async (
-			/** @type {{ lang?: string; raw?: string; text?: string }} */ token,
-			codeBlockId = ''
-		) => {
-			const { lang = '', raw = '', text: code = '' } = token;
-			const normalizedLang = lang.toLowerCase();
-			const isArtifact =
-				['html', 'svg'].includes(normalizedLang) ||
-				(normalizedLang === 'xml' && code.toLowerCase().includes('<svg'));
-			const artifactId = codeBlockId || `${normalizedLang}:${raw}`;
-
-			if (
-				($settings?.detectArtifacts ?? true) &&
-				isArtifact &&
-				hasClosingCodeFence(raw) &&
-				!autoOpenedArtifactIds.has(artifactId) &&
-				!$mobile &&
-				$chatId
-			) {
-				autoOpenedArtifactIds.add(artifactId);
-				await tick();
-				showArtifacts.set(true);
-				showControls.set(true);
-			}
-		}
-	);
-
-	const previewHandler = /** @type {any} */ (
-		async (/** @type {string} */ value) => {
-			console.log('Preview', value);
-			await artifactCode.set(/** @type {any} */ (value));
-			await showControls.set(true);
-			await showArtifacts.set(true);
-			await showEmbeds.set(false);
-		}
-	);
-
 	const updateButtonPosition = (event) => {
 		const buttonsContainerElement = document.getElementById(`floating-buttons-${id}`);
 		if (
@@ -288,7 +238,7 @@
 			{output}
 			{model}
 			{save}
-			{preview}
+			preview={false}
 			{compactPreview}
 			{done}
 			{editCodeBlock}
@@ -301,8 +251,6 @@
 			{onSourceClick}
 			{onTaskClick}
 			{onSave}
-			onUpdate={markdownUpdateHandler}
-			onPreview={previewHandler}
 		/>
 	{:else if $settings?.renderMarkdownInAssistantMessages ?? true}
 		<div class="markdown-prose">
@@ -311,7 +259,7 @@
 				content={formatMessageContent(content)}
 				{model}
 				{save}
-				{preview}
+				preview={false}
 				{compactPreview}
 				{done}
 				{editCodeBlock}
@@ -320,8 +268,6 @@
 				{onSourceClick}
 				{onTaskClick}
 				{onSave}
-				onUpdate={markdownUpdateHandler}
-				onPreview={previewHandler}
 			/>
 		</div>
 	{:else}
@@ -330,7 +276,7 @@
 		{#if extracted.detailsContent}
 			<!-- Render structural blocks (tool calls, reasoning, etc.) through Markdown -->
 			<div class="markdown-prose">
-				<Markdown {id} content={extracted.detailsContent} {preview} {compactPreview} {done} />
+				<Markdown {id} content={extracted.detailsContent} preview={false} {compactPreview} {done} />
 			</div>
 		{/if}
 		{#if extracted.plainContent}

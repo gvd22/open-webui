@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
+	import { getContext, onDestroy, onMount } from 'svelte';
 	import { getPortProxyUrl } from '$lib/apis/terminal';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import { getPortPreviewFrameBlockReason } from './portPreviewSecurity';
 
 	const i18n = getContext('i18n');
 
@@ -11,10 +12,13 @@
 	export let onClose: () => void = () => {};
 	export let overlay = false;
 
-	let iframeEl: HTMLIFrameElement;
 	let urlInput: string = '';
 	let iframeKey = 0;
 	let isLoading = false;
+	let previewReady = false;
+	let previewError = '';
+	let previewErrorHelp = '';
+	let previewRequest: AbortController | null = null;
 
 	// ── Navigation history ──────────────────────────────────────────────
 	let history: string[] = [path];
@@ -36,7 +40,7 @@
 		historyIndex -= 1;
 		path = history[historyIndex];
 		syncUrlBar();
-		iframeKey += 1;
+		void loadPreview();
 	};
 
 	const goForward = () => {
@@ -44,19 +48,11 @@
 		historyIndex += 1;
 		path = history[historyIndex];
 		syncUrlBar();
-		iframeKey += 1;
+		void loadPreview();
 	};
 
 	// ── URLs ─────────────────────────────────────────────────────────────
 	$: proxyUrl = getPortProxyUrl(baseUrl, port, path);
-
-	$: proxyPathPrefix = (() => {
-		try {
-			return new URL(getPortProxyUrl(baseUrl, port, ''), window.location.origin).pathname;
-		} catch {
-			return `/proxy/${port}/`;
-		}
-	})();
 
 	const makeDisplayUrl = (p: string) => `localhost:${port}${p ? '/' + p : ''}`;
 	const syncUrlBar = () => {
@@ -64,9 +60,63 @@
 	};
 	urlInput = makeDisplayUrl(path);
 
-	const refresh = () => {
-		iframeKey += 1;
+	const loadPreview = async () => {
+		previewRequest?.abort();
+		const request = new AbortController();
+		previewRequest = request;
+		const requestedUrl = proxyUrl;
+		isLoading = true;
+		previewReady = false;
+		previewError = '';
+		previewErrorHelp = '';
+		let timedOut = false;
+		const timeout = window.setTimeout(() => {
+			timedOut = true;
+			request.abort();
+		}, 12_000);
+
+		try {
+			// The iframe cannot add a bearer header. Verify the exact cookie-authenticated
+			// navigation it will perform before displaying an otherwise opaque error page.
+			const response = await fetch(requestedUrl, {
+				credentials: 'include',
+				cache: 'no-store',
+				signal: request.signal
+			});
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const frameBlockReason = getPortPreviewFrameBlockReason(
+				response.headers,
+				requestedUrl,
+				window.location.origin
+			);
+			if (frameBlockReason) {
+				previewError = $i18n.t('This local app does not allow embedded previews.');
+				previewErrorHelp = $i18n.t('Open it in a new tab to continue.');
+				return;
+			}
+			if (request.signal.aborted || requestedUrl !== proxyUrl) return;
+			previewReady = true;
+			iframeKey += 1;
+		} catch (error) {
+			if (request.signal.aborted && !timedOut) return;
+			previewError = $i18n.t(
+				'The local app could not be opened through the authenticated workspace proxy.'
+			);
+			previewErrorHelp = timedOut
+				? $i18n.t('The Terminal service did not respond in time.')
+				: $i18n.t('Check your session and the Terminal service, then try again.');
+		} finally {
+			window.clearTimeout(timeout);
+			if (previewRequest === request) {
+				previewRequest = null;
+				if (!previewReady) isLoading = false;
+			}
+		}
 	};
+
+	const refresh = () => void loadPreview();
 
 	const openExternal = () => {
 		window.open(proxyUrl, '_blank', 'noopener,noreferrer');
@@ -88,35 +138,15 @@
 			pushHistory(path);
 		}
 		syncUrlBar();
-		iframeKey += 1;
+		void loadPreview();
 	};
 
-	/**
-	 * Read the iframe's current location and sync the URL bar.
-	 * If the iframe escaped the proxy prefix, redirect it back.
-	 */
 	const onIframeLoad = () => {
 		isLoading = false;
-		if (!iframeEl) return;
-		try {
-			const loc = iframeEl.contentWindow?.location;
-			if (!loc) return;
-			const iframePath = loc.pathname ?? '';
-			const iframeSearch = loc.search ?? '';
-			const iframeHash = loc.hash ?? '';
-
-			if (iframePath.startsWith(proxyPathPrefix)) {
-				const relativePath = iframePath.slice(proxyPathPrefix.length) + iframeSearch + iframeHash;
-				if (relativePath !== path) {
-					path = relativePath;
-					pushHistory(path);
-					syncUrlBar();
-				}
-			}
-		} catch {
-			// Cross-origin — can't access
-		}
 	};
+
+	onMount(() => void loadPreview());
+	onDestroy(() => previewRequest?.abort());
 </script>
 
 <div class="flex flex-col h-full min-h-0">
@@ -259,7 +289,26 @@
 	<!-- Loading bar -->
 	{#if isLoading}
 		<div class="h-0.5 bg-gray-100 dark:bg-gray-800 shrink-0 overflow-hidden">
-			<div class="h-full bg-blue-500 animate-loading-bar rounded-full" />
+			<div class="h-full bg-blue-500 animate-loading-bar rounded-full"></div>
+		</div>
+	{/if}
+	{#if previewReady}
+		<div
+			class="flex shrink-0 items-center justify-between gap-3 border-b border-gray-100 bg-gray-50 px-3 py-1.5 text-[11px] text-gray-500 dark:border-gray-800 dark:bg-gray-900/40 dark:text-gray-400"
+			role="note"
+		>
+			<span class="min-w-0 truncate">
+				{$i18n.t(
+					'Isolated preview. Apps that require signed-in API requests must be opened in a new tab.'
+				)}
+			</span>
+			<button
+				type="button"
+				class="shrink-0 font-medium text-gray-700 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
+				on:click={openExternal}
+			>
+				{$i18n.t('Open full app')}
+			</button>
 		</div>
 	{/if}
 
@@ -268,16 +317,41 @@
 		{#if overlay}
 			<div class="absolute inset-0 z-10"></div>
 		{/if}
-		{#key iframeKey}
-			<iframe
-				bind:this={iframeEl}
-				src={proxyUrl}
-				title="Port {port} preview"
-				class="w-full h-full border-0 bg-white"
-				sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-				on:load={onIframeLoad}
-			/>
-		{/key}
+		{#if previewError}
+			<div class="flex h-full min-h-64 flex-col items-center justify-center px-8 text-center">
+				<div class="text-sm font-medium text-gray-800 dark:text-gray-200">{previewError}</div>
+				<div class="mt-1 max-w-sm text-xs leading-5 text-gray-400 dark:text-gray-500">
+					{previewErrorHelp}
+				</div>
+				<div class="mt-4 flex items-center gap-2">
+					<button
+						type="button"
+						class="h-8 rounded-md bg-gray-100 px-3 text-xs font-medium text-gray-700 transition hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+						on:click={refresh}
+					>
+						{$i18n.t('Try again')}
+					</button>
+					<button
+						type="button"
+						class="h-8 rounded-md px-3 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+						on:click={openExternal}
+					>
+						{$i18n.t('Open in new tab')}
+					</button>
+				</div>
+			</div>
+		{:else if previewReady}
+			{#key iframeKey}
+				<iframe
+					src={proxyUrl}
+					title="Port {port} preview"
+					class="w-full h-full border-0 bg-white"
+					sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+					referrerpolicy="no-referrer"
+					on:load={onIframeLoad}
+				></iframe>
+			{/key}
+		{/if}
 	</div>
 </div>
 

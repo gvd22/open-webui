@@ -9,6 +9,8 @@ export type CanvasNoteArtifact = {
 	titleEdited?: boolean;
 	canUndoAiUpdate?: boolean;
 	updatedAt?: number;
+	contentHash?: string;
+	hasContentPayload?: boolean;
 	source: 'tool';
 };
 
@@ -72,7 +74,12 @@ export const canUseNotes = (
 	enabled: boolean,
 	role: string | undefined,
 	permission: boolean | undefined
-) => enabled && (role === 'admin' || (permission ?? true));
+) => enabled && (role === 'admin' || permission === true);
+
+export const preserveWorkspaceSelection = (
+	selectedId: string | null | undefined,
+	newObjectId: string | null | undefined
+) => selectedId || newObjectId || null;
 
 const getToolOutputParts = (item: any) => {
 	const output = item?.output ?? item?.content ?? [];
@@ -99,7 +106,8 @@ const normalizeToolCanvasDocument = (value: any): CanvasNoteArtifact | null => {
 		return null;
 	}
 
-	const md = value.content?.md ?? '';
+	const hasContentPayload = typeof value.content?.md === 'string';
+	const md = hasContentPayload ? value.content.md : '';
 	const generatedTitle = generateCanvasTitle(md, value.title ?? '');
 
 	return {
@@ -111,7 +119,9 @@ const normalizeToolCanvasDocument = (value: any): CanvasNoteArtifact | null => {
 		titleEdited: Boolean(value.titleEdited),
 		canUndoAiUpdate: Boolean(value.canUndoAiUpdate),
 		updatedAt: Number(value.updatedAt ?? 0),
-		source: 'tool'
+		contentHash: value.contentHash ?? undefined,
+		source: 'tool',
+		...(hasContentPayload ? {} : { hasContentPayload: false })
 	};
 };
 
@@ -135,8 +145,8 @@ export const getCanvasNoteArtifactsFromOutput = (output: any[] = []): CanvasNote
 			}
 		});
 
-// The chat output is the durable source for transient Canvas documents. This lets
-// the Workspace recover after its visual pane was closed or remounted.
+// Chat output stores compact Canvas references. Canonical content is hydrated
+// from the chat-scoped document store when the Workspace opens.
 export const getCanvasNoteArtifactsFromHistory = (history: any): CanvasNoteArtifact[] => {
 	if (!history?.messages || history.currentId === undefined || history.currentId === null) {
 		return [];
@@ -197,17 +207,24 @@ export const mergePersistedCanvasArtifact = (
 
 	const persistedUpdatedAt = Number(persisted.updated_at ?? 0);
 	const artifactUpdatedAt = Number(artifact.updatedAt ?? 0);
-	const persistedIsNewer = !artifactUpdatedAt || persistedUpdatedAt > artifactUpdatedAt;
+	const persistedIsNewer =
+		artifact.hasContentPayload === false ||
+		!artifactUpdatedAt ||
+		persistedUpdatedAt > artifactUpdatedAt;
 
 	return {
 		...artifact,
 		content: persistedIsNewer ? (persisted.content ?? artifact.content) : artifact.content,
-		noteId: persisted.note_id ?? artifact.noteId,
+		noteId: Object.prototype.hasOwnProperty.call(persisted, 'note_id')
+			? (persisted.note_id ?? undefined)
+			: artifact.noteId,
 		title: persistedIsNewer && persisted.title ? persisted.title : artifact.title,
 		titleEdited: persistedIsNewer ? Boolean(persisted.title_edited) : Boolean(artifact.titleEdited),
 		canUndoAiUpdate: persistedIsNewer
 			? Boolean(persisted.last_ai_update)
 			: Boolean(artifact.canUndoAiUpdate),
-		updatedAt: Math.max(persistedUpdatedAt, artifactUpdatedAt)
+		updatedAt: Math.max(persistedUpdatedAt, artifactUpdatedAt),
+		contentHash: artifact.contentHash,
+		hasContentPayload: true
 	};
 };

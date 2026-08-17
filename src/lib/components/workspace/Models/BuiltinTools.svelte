@@ -53,11 +53,15 @@
 		},
 		canvas: {
 			label: $i18n.t('Canvas'),
-			description: $i18n.t('Create and update editable Canvas documents')
+			description: $i18n.t(
+				'Create and update editable Canvas documents when Canvas capability is enabled'
+			)
 		},
 		web_preview: {
 			label: $i18n.t('Web Preview'),
-			description: $i18n.t('Create and update interactive web previews')
+			description: $i18n.t(
+				'Create and update interactive web previews when Web Preview capability is enabled'
+			)
 		},
 		tasks: {
 			label: $i18n.t('Task Management'),
@@ -80,13 +84,24 @@
 	const allTools = Object.keys(toolLabels) as Array<keyof typeof toolLabels>;
 
 	export let builtinTools: Record<string, boolean> = {};
+	export let capabilities: Record<string, boolean> = {};
+
+	const requiredCapability = (tool: string) =>
+		tool === 'canvas' ? 'canvas' : tool === 'web_preview' ? 'web_preview' : null;
+	const isAvailable = (tool: string) => {
+		const capability = requiredCapability(tool);
+		return capability ? Boolean(capabilities[capability]) : true;
+	};
 </script>
 
 <div>
 	<div class="mb-1.5 text-xs text-gray-400 dark:text-gray-600">{$i18n.t('Builtin Tools')}</div>
 	<div class="grid grid-cols-1 gap-x-5 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
 		{#each allTools as tool}
-			<div class="flex min-h-6 items-center justify-between gap-2.5">
+			<div
+				class="flex min-h-6 items-center justify-between gap-2.5"
+				class:opacity-50={!isAvailable(tool)}
+			>
 				<div class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 					<Tooltip content={marked.parse(toolLabels[tool].description)}>
 						<span class="truncate">{$i18n.t(toolLabels[tool].label)}</span>
@@ -95,6 +110,7 @@
 				<Checkbox
 					ariaLabel={$i18n.t(toolLabels[tool].label)}
 					state={builtinTools[tool] !== false ? 'checked' : 'unchecked'}
+					disabled={!isAvailable(tool)}
 					on:change={(e) => {
 						if (e.detail === 'checked') {
 							delete builtinTools[tool];

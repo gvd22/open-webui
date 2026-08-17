@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getListeningPorts } from './index';
+import {
+	archiveFromTerminal,
+	createDirectory,
+	deleteEntry,
+	downloadFileBlob,
+	getListeningPorts,
+	getTerminalServers,
+	moveEntry,
+	uploadToTerminal
+} from './index';
 
 describe('getListeningPorts', () => {
 	afterEach(() => vi.unstubAllGlobals());
@@ -29,5 +38,47 @@ describe('getListeningPorts', () => {
 		await expect(
 			getListeningPorts('/api/v1/terminals/test', 'token', { throwOnError: true })
 		).resolves.toEqual(ports);
+	});
+});
+
+describe('managed Terminal catalog', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('keeps legacy callers tolerant but lets runtime selection preserve an unknown catalog', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+
+		await expect(getTerminalServers('token')).resolves.toEqual([]);
+		await expect(getTerminalServers('token', { throwOnError: true })).rejects.toThrow('offline');
+	});
+});
+
+describe('Terminal file session headers', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('scopes create, upload, archive, delete, download, save, and move operations to the chat', async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			headers: { get: vi.fn().mockReturnValue(null) },
+			json: vi.fn().mockResolvedValue({}),
+			blob: vi.fn().mockResolvedValue(new Blob(['data']))
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const file = new File(['content'], 'file.txt', { type: 'text/plain' });
+		await createDirectory('/terminal', 'token', '/workspace/new', 'chat-1');
+		await uploadToTerminal('/terminal', 'token', '/workspace', file, 'chat-1');
+		await archiveFromTerminal('/terminal', 'token', ['/workspace/new'], 'chat-1');
+		await deleteEntry('/terminal', 'token', '/workspace/old', 'chat-1');
+		await downloadFileBlob('/terminal', 'token', '/workspace/file.txt', 'chat-1');
+		await uploadToTerminal('/terminal', 'token', '/workspace', file, 'chat-1');
+		await moveEntry('/terminal', 'token', '/workspace/a', '/workspace/b', 'chat-1');
+
+		expect(fetchMock).toHaveBeenCalledTimes(7);
+		for (const [, options] of fetchMock.mock.calls) {
+			expect(options.headers).toMatchObject({
+				Authorization: 'Bearer token',
+				'X-Session-Id': 'chat-1'
+			});
+		}
 	});
 });

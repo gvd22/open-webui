@@ -11,7 +11,8 @@
 		chatId,
 		showArtifacts,
 		showControls,
-		showEmbeds
+		showEmbeds,
+		workspaceOpenRequestId
 	} from '$lib/stores';
 	import Document from '$lib/components/icons/Document.svelte';
 	import Pencil from '$lib/components/icons/Pencil.svelte';
@@ -60,15 +61,18 @@
 									content: document.content ?? item.content,
 									titleEdited: Boolean(document.title_edited),
 									updatedAt: document.updated_at ?? item.updatedAt,
-									noteId: document.note_id ?? item.noteId
+									contentHash: document.contentHash ?? item.contentHash,
+									noteId: document.note_id ?? undefined
 								}
 							: item
 					)
 				);
 			} catch {
 				toast.error($i18n.t('Document could not be opened'));
+				return;
 			}
 		}
+		workspaceOpenRequestId.set(selectedId);
 		artifactCode.set(selectedId as any);
 		showEmbeds.set(false);
 		if (!$showArtifacts) showArtifacts.set(true);

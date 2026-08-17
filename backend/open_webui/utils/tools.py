@@ -53,10 +53,14 @@ from open_webui.tools.builtin import (
     calculate_timestamp,
     canvas_create_document,
     canvas_list_documents,
+    canvas_read_document,
+    canvas_replace_text,
     canvas_select_document,
     canvas_update_document,
     web_preview_create,
     web_preview_list,
+    web_preview_read_file,
+    web_preview_replace_text,
     web_preview_select,
     web_preview_update,
     create_automation,
@@ -732,10 +736,13 @@ async def get_builtin_tools(
     if is_saved_chat_id(chat_id):
         chat = await Chats.get_chat_by_id(chat_id)
 
-    # Notes tools - search, view, create, and update user's notes
-    if (chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note') or (
-        is_builtin_tool_enabled('notes') and config.get('notes.enable') and await has_user_permission('notes')
-    ):
+    # Internal Note chats bypass model tool-category selection, but never the
+    # global Notes switch or the user's current Notes permission.
+    notes_allowed = bool(config.get('notes.enable')) and await has_user_permission('notes')
+    is_note_chat = bool(
+        chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note'
+    )
+    if notes_allowed and (is_note_chat or is_builtin_tool_enabled('notes')):
         builtin_functions.extend([search_notes, view_note, write_note, replace_note_content])
 
     # Canvas is intentionally opt-in per model. It persists only inside the
@@ -751,6 +758,8 @@ async def get_builtin_tools(
                 canvas_update_document,
                 canvas_select_document,
                 canvas_list_documents,
+                canvas_read_document,
+                canvas_replace_text,
             ]
         )
 
@@ -759,7 +768,16 @@ async def get_builtin_tools(
         and get_model_capability('web_preview', False)
         and supports_chat_workspace_tools(chat_id, chat)
     ):
-        builtin_functions.extend([web_preview_create, web_preview_update, web_preview_select, web_preview_list])
+        builtin_functions.extend(
+            [
+                web_preview_create,
+                web_preview_update,
+                web_preview_select,
+                web_preview_list,
+                web_preview_read_file,
+                web_preview_replace_text,
+            ]
+        )
 
     # Channels tools - search channels and messages
     if is_builtin_tool_enabled('channels') and config.get('channels.enable') and await has_user_permission('channels'):
@@ -971,7 +989,6 @@ def clean_properties(schema: dict):
 
 
 def clean_openai_tool_schema(spec: dict) -> dict:
-
     cleaned_spec = copy.deepcopy(spec)
 
     if 'parameters' in cleaned_spec:

@@ -13,12 +13,20 @@
 	let ports: ListeningPort[] = [];
 	let expanded = false;
 	let loading = false;
+	let loadError = false;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	const loadPorts = async () => {
 		loading = true;
-		ports = await getListeningPorts(baseUrl, apiKey);
-		loading = false;
+		try {
+			ports = await getListeningPorts(baseUrl, apiKey, { throwOnError: true });
+			loadError = false;
+		} catch {
+			ports = [];
+			loadError = true;
+		} finally {
+			loading = false;
+		}
 	};
 
 	const startPolling = () => {
@@ -53,76 +61,87 @@
 	});
 </script>
 
-{#if ports.length > 0}
+{#if ports.length > 0 || loadError}
 	<div class="border-t border-gray-100 px-2 py-1 dark:border-gray-800">
-		<button
-			class="flex items-center gap-1 w-full text-xs font-normal text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition"
-			on:click={() => (expanded = !expanded)}
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				viewBox="0 0 20 20"
-				fill="currentColor"
-				class="size-3 transition-transform {expanded ? '' : '-rotate-90'}"
+		<div class="flex items-center gap-1">
+			<button
+				type="button"
+				class="flex min-w-0 flex-1 items-center gap-1 text-xs font-normal text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+				on:click={() => (expanded = !expanded)}
+				aria-expanded={expanded}
+				aria-controls="terminal-port-list"
 			>
-				<path
-					fill-rule="evenodd"
-					d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-			{$i18n.t('Ports')}
-			<span class="ml-auto flex items-center gap-1">
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 20 20"
+					fill="currentColor"
+					class="size-3 transition-transform {expanded ? '' : '-rotate-90'}"
+				>
+					<path
+						fill-rule="evenodd"
+						d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
+						clip-rule="evenodd"
+					/>
+				</svg>
+				<span class="truncate">{$i18n.t('Ports')}</span>
 				{#if ports.length > 0}
 					<span
-						class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
+						class="ml-auto rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400"
 					>
 						{ports.length}
 					</span>
 				{/if}
-				<Tooltip content={$i18n.t('Refresh')}>
-					<button
-						class="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400"
-						on:click|stopPropagation={loadPorts}
-						aria-label={$i18n.t('Refresh')}
+			</button>
+			<Tooltip content={$i18n.t('Refresh')}>
+				<button
+					type="button"
+					class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-400"
+					on:click={loadPorts}
+					aria-label={$i18n.t('Refresh')}
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						fill="currentColor"
+						class="size-3 {loading ? 'animate-spin' : ''}"
 					>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 20 20"
-							fill="currentColor"
-							class="size-3 {loading ? 'animate-spin' : ''}"
-						>
-							<path
-								fill-rule="evenodd"
-								d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
-								clip-rule="evenodd"
-							/>
-						</svg>
-					</button>
-				</Tooltip>
-			</span>
-		</button>
+						<path
+							fill-rule="evenodd"
+							d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.451a.75.75 0 0 0 0-1.5H4.5a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0v-2.127l.13.13a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.624-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.75a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 .75-.75V3.42a.75.75 0 0 0-1.5 0v2.126l-.13-.129A7 7 0 0 0 3.239 8.555a.75.75 0 0 0 1.449.39Z"
+							clip-rule="evenodd"
+						/>
+					</svg>
+				</button>
+			</Tooltip>
+		</div>
 
 		{#if expanded}
-			<div class="mt-1 space-y-0.5 max-h-[150px] overflow-y-auto">
+			<div id="terminal-port-list" class="mt-1 max-h-[150px] space-y-0.5 overflow-y-auto">
+				{#if loadError}
+					<div class="px-1.5 py-1 text-xs text-gray-400 dark:text-gray-500">
+						{$i18n.t('Terminal is currently unavailable')}
+					</div>
+				{/if}
 				{#each ports as port}
-					<button
-						class="flex items-center w-full gap-2 px-1.5 py-1 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition group"
-						on:click={() => previewPort(port.port)}
-					>
-						<span class="font-mono text-blue-500 dark:text-blue-400 shrink-0">
-							:{port.port}
-						</span>
-						<span class="text-gray-500 dark:text-gray-400 truncate flex-1 text-left">
-							{port.process ?? ''}
-						</span>
+					<div class="group flex items-center rounded hover:bg-gray-100 dark:hover:bg-gray-800">
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-xs"
+							on:click={() => previewPort(port.port)}
+						>
+							<span class="font-mono text-blue-500 dark:text-blue-400 shrink-0">
+								:{port.port}
+							</span>
+							<span class="text-gray-500 dark:text-gray-400 truncate flex-1 text-left">
+								{port.process ?? ''}
+							</span>
+						</button>
 						<Tooltip content={$i18n.t('Open in new tab')}>
-							<!-- svelte-ignore a11y-click-events-have-key-events -->
-							<span
-								role="button"
-								tabindex="-1"
-								class="text-gray-400 dark:text-gray-500 opacity-0 group-hover:opacity-100 transition shrink-0 p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-								on:click|stopPropagation={() => openPortExternal(port.port)}
+							<button
+								type="button"
+								class="mr-1 shrink-0 rounded p-0.5 text-gray-400 opacity-70 transition hover:bg-gray-200 hover:text-gray-600 focus-visible:opacity-100 group-hover:opacity-100 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+								on:click={() => openPortExternal(port.port)}
+								aria-label={`${$i18n.t('Open in new tab')}: ${port.port}`}
 							>
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
@@ -136,9 +155,9 @@
 										clip-rule="evenodd"
 									/>
 								</svg>
-							</span>
+							</button>
 						</Tooltip>
-					</button>
+					</div>
 				{/each}
 			</div>
 		{/if}

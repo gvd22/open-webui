@@ -966,7 +966,7 @@
 
 						{#if capabilities.builtin_tools}
 							<div class="my-3">
-								<BuiltinTools bind:builtinTools />
+								<BuiltinTools bind:builtinTools {capabilities} />
 							</div>
 						{/if}
 

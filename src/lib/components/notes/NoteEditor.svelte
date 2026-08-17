@@ -100,6 +100,7 @@
 	export let onClose: () => void = () => {};
 	export let onTitleChange: (title: string) => void = () => {};
 	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
+	export let onUnavailable: () => void = () => {};
 	export let showCanvasClose = true;
 	export let canUndoCanvasAiUpdate = false;
 	export let onUndoCanvasAiUpdate: () => void = () => {};
@@ -208,6 +209,11 @@
 			$socket?.off('events:note', noteEventHandler);
 			$socket?.on('events:note', noteEventHandler);
 		} else {
+			if (canvas) {
+				onUnavailable();
+				loading = false;
+				return;
+			}
 			goto('/');
 			return;
 		}

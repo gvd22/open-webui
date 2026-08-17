@@ -9,6 +9,7 @@ IMPORTANT: DO NOT IMPORT THIS MODULE DIRECTLY IN OTHER PARTS OF THE CODEBASE.
 from open_webui.tools.knowledge_fs import kb_exec  # noqa: F401 — re-exported
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -64,20 +65,28 @@ from open_webui.utils.canvas import (
     CANVAS_ACTIVE_DOCUMENT_KEY,
     CANVAS_DOCUMENTS_KEY,
     CANVAS_MAX_DOCUMENT_COUNT,
+    CanvasConflictError,
     build_canvas_capacity_notice,
     canvas_document_limit_reached,
+    canvas_timestamp,
     generate_canvas_title,
+    linked_canvas_note_exists,
+    require_canvas_precondition,
     set_active_canvas_document,
+    sync_linked_canvases_from_note,
     sync_linked_canvas_note_content,
 )
 from open_webui.utils.web_preview import (
     WEB_PREVIEW_ACTIVE_DOCUMENT_KEY,
     WEB_PREVIEW_DOCUMENTS_KEY,
     WEB_PREVIEW_MAX_DOCUMENT_COUNT,
+    WebPreviewConflictError,
     generate_web_preview_title,
     normalize_web_preview_files,
+    require_web_preview_precondition,
     set_active_web_preview,
     web_preview_timestamp,
+    web_preview_content_hash,
 )
 from open_webui.utils.notifications import notify_target
 from open_webui.utils.sanitize import sanitize_code
@@ -91,14 +100,18 @@ def _canvas_tool_error(message: str) -> str:
     return json.dumps({'type': 'canvas.error', 'message': message}, ensure_ascii=False)
 
 
+def _canvas_tool_conflict(exc: CanvasConflictError) -> str:
+    return json.dumps(exc.payload, ensure_ascii=False)
+
+
 def _canvas_tool_document(document: dict, warning: str = '') -> str:
     return json.dumps(
         {
             'type': 'canvas.document',
             'canvasId': document['canvas_id'],
             'title': document.get('title', ''),
-            'content': {'md': document.get('content', '')},
-            'updatedAt': document.get('updated_at'),
+            'updatedAt': int(document.get('updated_at') or 0),
+            'contentHash': _content_hash(document.get('content', '')),
             'titleEdited': bool(document.get('title_edited', False)),
             'noteId': document.get('note_id'),
             'canUndoAiUpdate': bool(document.get('last_ai_update')),
@@ -106,6 +119,47 @@ def _canvas_tool_document(document: dict, warning: str = '') -> str:
         },
         ensure_ascii=False,
     )
+
+
+def _text_excerpt(content: str, start_line: int, end_line: int, query: str = '') -> dict:
+    lines = content.splitlines(keepends=True)
+    total_lines = len(lines)
+    if total_lines == 0:
+        return {
+            'startLine': 0,
+            'endLine': 0,
+            'totalLines': 0,
+            'content': '',
+            'excerptTruncated': False,
+        }
+    if query.strip():
+        needle = query.casefold()
+        match = next((index for index, line in enumerate(lines) if needle in line.casefold()), None)
+        if match is None:
+            raise ValueError('The requested text was not found.')
+        radius = max(5, min(100, (end_line - start_line + 1) // 2))
+        start_line = max(1, match + 1 - radius)
+        end_line = min(total_lines, match + 1 + radius)
+    else:
+        start_line = min(total_lines, max(1, start_line))
+        end_line = min(total_lines, max(start_line, end_line))
+    if end_line - start_line + 1 > 400:
+        end_line = start_line + 399
+    excerpt = ''.join(lines[start_line - 1 : end_line])
+    excerpt_truncated = len(excerpt) > 24_000
+    if len(excerpt) > 24_000:
+        excerpt = excerpt[:24_000]
+    return {
+        'startLine': start_line,
+        'endLine': end_line,
+        'totalLines': total_lines,
+        'content': excerpt,
+        'excerptTruncated': excerpt_truncated,
+    }
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode()).hexdigest()
 
 
 async def _get_canvas_chat(__chat_id__: str | None, __user__: dict | None):
@@ -118,16 +172,16 @@ async def _get_canvas_chat(__chat_id__: str | None, __user__: dict | None):
     return chat if chat and chat.user_id == user_id else None
 
 
-async def _update_canvas_documents(
-    chat,
-    documents: dict,
-    active_canvas_id: str | None = None,
-) -> None:
-    chat_data = dict(chat.chat or {})
-    chat_data[CANVAS_DOCUMENTS_KEY] = documents
-    if active_canvas_id:
-        chat_data = set_active_canvas_document(chat_data, active_canvas_id)
-    await Chats.update_chat_by_id(chat.id, chat_data)
+async def _mutate_canvas_chat(chat, mutator):
+    mutation = await Chats.mutate_chat_by_id(
+        chat.id,
+        mutator,
+        user_id=chat.user_id,
+        touch=False,
+    )
+    if mutation is None:
+        raise RuntimeError('Canvas chat could not be persisted.')
+    return mutation[1]
 
 
 async def _has_write_access_to_note(note, user_id: str) -> bool:
@@ -193,29 +247,22 @@ async def canvas_create_document(
     Canvas is a transient working document. Use this only when the user asks for
     a separate or new document. If a Canvas document is already active and the
     user asks to continue, expand, rewrite, correct, or edit it, use
-    canvas_update_document instead. Return the complete document content, not a
-    description of the change.
+    canvas_update_document instead. Supply the complete document content in the
+    content argument, not a description of the change.
 
     A chat can contain at most 15 Canvas documents. A capacity warning is
     returned from the 10th document onward.
 
     :param content: Complete Markdown content for the new document.
     :param title: Optional short document title. Leave empty when the content should determine it.
-    :return: The Canvas document, including its stable canvasId.
+    :return: A compact reference to the Canvas document, including its stable canvasId.
     """
     chat = await _get_canvas_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
-    now = int(time.time())
+    now = canvas_timestamp()
     canvas_id = f'canvas-{uuid.uuid4()}'
-    documents = dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {})
-    if canvas_document_limit_reached(len(documents)):
-        return _canvas_tool_error(
-            f'This chat already contains the maximum of {CANVAS_MAX_DOCUMENT_COUNT} '
-            'Canvas documents. Edit an existing document, save work to Notes, or start a new chat.'
-        )
-
     document = {
         'canvas_id': canvas_id,
         'title': generate_canvas_title(content, title),
@@ -224,14 +271,30 @@ async def canvas_create_document(
         'created_at': now,
         'updated_at': now,
     }
-    documents[canvas_id] = document
-    await _update_canvas_documents(chat, documents, canvas_id)
-    return _canvas_tool_document(document, build_canvas_capacity_notice(len(documents)))
+
+    def mutate(chat_data: dict, _session):
+        documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+        if canvas_document_limit_reached(len(documents)):
+            raise ValueError(
+                f'This chat already contains the maximum of {CANVAS_MAX_DOCUMENT_COUNT} '
+                'Canvas documents. Edit an existing document, save work to Notes, or start a new chat.'
+            )
+        documents[canvas_id] = document
+        chat_data[CANVAS_DOCUMENTS_KEY] = documents
+        return set_active_canvas_document(chat_data, canvas_id), len(documents)
+
+    try:
+        document_count = await _mutate_canvas_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _canvas_tool_error(str(exc))
+    return _canvas_tool_document(document, build_canvas_capacity_notice(document_count))
 
 
 async def canvas_update_document(
     canvas_id: str,
     content: str,
+    expected_updated_at: int | None = None,
+    expected_content_hash: str = '',
     title: str | None = None,
     __request__: Request = None,
     __chat_id__: str | None = None,
@@ -240,60 +303,82 @@ async def canvas_update_document(
     """Replace the complete content of an existing Canvas document in this chat.
 
     Use the canvasId returned by a previous Canvas tool call. This updates that
-    same document rather than creating another one. Return the complete updated
-    Markdown content.
+    same document rather than creating another one. Supply the complete updated
+    Markdown in the content argument.
 
     :param canvas_id: Stable ID of the Canvas document to update.
     :param content: Complete Markdown content after the requested edit.
+    :param expected_updated_at: Required updatedAt from the current Canvas reference or read result.
+    :param expected_content_hash: Required contentHash from the current Canvas reference or read result.
     :param title: Optional replacement title. Omit it to keep the current title.
-    :return: The updated Canvas document.
+    :return: A compact reference to the updated Canvas document.
     """
     chat = await _get_canvas_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
-    documents = dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {})
-    document = documents.get(canvas_id)
-    if not document:
-        return _canvas_tool_error('Canvas document not found in this chat.')
-
     title_was_supplied = title is not None and bool(title.strip())
-    document = {
-        **document,
-        'content': content,
-        'updated_at': int(time.time()),
-        'last_ai_update': {
-            'title': document.get('title', ''),
-            'content': document.get('content', ''),
-            'title_edited': bool(document.get('title_edited', False)),
-        },
-        **(
-            {
-                'title': generate_canvas_title(content, title or ''),
-                'title_edited': title_was_supplied,
-            }
-            if title_was_supplied
-            else (
-                {'title': generate_canvas_title(content), 'title_edited': False}
-                if not document.get('title_edited', False)
-                else {}
-            )
-        ),
-    }
-    documents[canvas_id] = document
-    await _update_canvas_documents(chat, documents, canvas_id)
+
+    async def mutate(chat_data: dict, session):
+        documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+        current = documents.get(canvas_id)
+        if not current:
+            raise ValueError('Canvas document not found in this chat.')
+        require_canvas_precondition(
+            canvas_id,
+            current,
+            expected_updated_at,
+            expected_content_hash,
+        )
+        updated = {
+            **current,
+            'content': content,
+            'updated_at': canvas_timestamp(current.get('updated_at')),
+            'last_ai_update': {
+                'title': current.get('title', ''),
+                'content': current.get('content', ''),
+                'title_edited': bool(current.get('title_edited', False)),
+            },
+            **(
+                {
+                    'title': generate_canvas_title(content, title or ''),
+                    'title_edited': title_was_supplied,
+                }
+                if title_was_supplied
+                else (
+                    {'title': generate_canvas_title(content), 'title_edited': False}
+                    if not current.get('title_edited', False)
+                    else {}
+                )
+            ),
+        }
+        sync = await sync_linked_canvas_note_content(
+            updated.get('note_id'),
+            (__user__ or {}).get('id', ''),
+            updated['content'],
+            db=session,
+            title=updated['title'],
+            commit=False,
+        )
+        if sync.stale_link:
+            updated['note_id'] = None
+        documents[canvas_id] = updated
+        chat_data[CANVAS_DOCUMENTS_KEY] = documents
+        return chat_data, {'document': updated, 'note': sync.note}
 
     try:
-        updated_note = await sync_linked_canvas_note_content(
-            document.get('note_id'),
-            (__user__ or {}).get('id', ''),
-            content,
-        )
-        if updated_note and __request__ is not None:
+        result = await _mutate_canvas_chat(chat, mutate)
+    except CanvasConflictError as exc:
+        return _canvas_tool_conflict(exc)
+    except (RuntimeError, ValueError) as exc:
+        return _canvas_tool_error(str(exc))
+    document = result['document']
+    updated_note = result['note']
+    if updated_note and __request__ is not None:
+        try:
             await _emit_note_updated(__request__, __user__, updated_note)
-    except Exception:
-        # A missing/deleted Note must not make its chat-scoped Canvas unusable.
-        log.exception('Unable to synchronize linked Canvas Note canvas_id=%s', canvas_id)
+        except Exception:
+            log.exception('Unable to publish linked Canvas Note event canvas_id=%s', canvas_id)
 
     return _canvas_tool_document(document)
 
@@ -312,14 +397,29 @@ async def canvas_select_document(
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
-    document = ((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}).get(canvas_id)
-    if not document:
-        return _canvas_tool_error('Canvas document not found in this chat.')
-    await _update_canvas_documents(
-        chat,
-        dict((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}),
-        canvas_id,
-    )
+    async def mutate(chat_data: dict, session):
+        documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+        document = documents.get(canvas_id)
+        if not document:
+            raise ValueError('Canvas document not found in this chat.')
+        if document.get('note_id') and not await linked_canvas_note_exists(
+            document.get('note_id'),
+            (__user__ or {}).get('id', ''),
+            db=session,
+        ):
+            document = {
+                **document,
+                'note_id': None,
+                'updated_at': canvas_timestamp(document.get('updated_at')),
+            }
+            documents[canvas_id] = document
+            chat_data[CANVAS_DOCUMENTS_KEY] = documents
+        return set_active_canvas_document(chat_data, canvas_id), document
+
+    try:
+        document = await _mutate_canvas_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _canvas_tool_error(str(exc))
     return _canvas_tool_document(document)
 
 
@@ -347,7 +447,7 @@ async def canvas_list_documents(
                 {
                     'canvasId': document['canvas_id'],
                     'title': document.get('title', ''),
-                    'updatedAt': document.get('updated_at'),
+                    'updatedAt': int(document.get('updated_at') or 0),
                     'selected': document['canvas_id'] == (chat.chat or {}).get(CANVAS_ACTIVE_DOCUMENT_KEY),
                 }
                 for document in documents.values()
@@ -355,6 +455,134 @@ async def canvas_list_documents(
         },
         ensure_ascii=False,
     )
+
+
+async def canvas_read_document(
+    canvas_id: str,
+    start_line: int = 1,
+    end_line: int = 200,
+    query: str = '',
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Read a bounded excerpt of a Canvas without loading the complete document.
+
+    Use query to locate a passage, or start_line/end_line for a precise range.
+
+    :param canvas_id: Stable Canvas document ID.
+    :param start_line: First line to return when query is empty.
+    :param end_line: Last line to return; at most 400 lines are returned.
+    :param query: Optional exact text fragment used to locate a relevant range.
+    :return: A line-addressed Canvas excerpt and current update version.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+    document = ((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}).get(canvas_id)
+    if not document:
+        return _canvas_tool_error('Canvas document not found in this chat.')
+    try:
+        excerpt = _text_excerpt(document.get('content', ''), start_line, end_line, query)
+    except ValueError as exc:
+        return _canvas_tool_error(str(exc))
+    return json.dumps(
+        {
+            'type': 'canvas.document_excerpt',
+            'canvasId': canvas_id,
+            'title': document.get('title', ''),
+            'updatedAt': int(document.get('updated_at') or 0),
+            'contentHash': _content_hash(document.get('content', '')),
+            **excerpt,
+        },
+        ensure_ascii=False,
+    )
+
+
+async def canvas_replace_text(
+    canvas_id: str,
+    old_text: str,
+    new_text: str,
+    expected_content_hash: str,
+    expected_updated_at: int | None = None,
+    __request__: Request = None,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Replace one uniquely matching passage in a Canvas document.
+
+    Prefer this over canvas_update_document when only part of a large document
+    is visible. Read the passage first and pass its updatedAt as the expected
+    version so manual edits cannot be overwritten.
+
+    :param canvas_id: Stable Canvas document ID.
+    :param old_text: Exact existing passage. It must occur exactly once.
+    :param new_text: Replacement passage.
+    :param expected_content_hash: Required content hash returned by canvas_read_document.
+    :param expected_updated_at: Optional timestamp returned by canvas_read_document.
+    :return: The updated Canvas document.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _canvas_tool_error('Canvas is available only in a saved chat.')
+    if not old_text:
+        return _canvas_tool_error('old_text must not be empty.')
+
+    async def mutate(chat_data: dict, session):
+        documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+        current = documents.get(canvas_id)
+        if not current:
+            raise ValueError('Canvas document not found in this chat.')
+        if expected_updated_at is not None and int(current.get('updated_at') or 0) != expected_updated_at:
+            raise ValueError('Canvas changed after it was read. Read the passage again before editing.')
+        content = current.get('content', '')
+        if _content_hash(content) != expected_content_hash:
+            raise ValueError('Canvas changed after it was read. Read the passage again before editing.')
+        occurrences = content.count(old_text)
+        if occurrences != 1:
+            raise ValueError(f'Expected one exact passage match, found {occurrences}. Read a more specific range.')
+        updated_content = content.replace(old_text, new_text, 1)
+        updated = {
+            **current,
+            'content': updated_content,
+            'updated_at': canvas_timestamp(current.get('updated_at')),
+            'last_ai_update': {
+                'title': current.get('title', ''),
+                'content': content,
+                'title_edited': bool(current.get('title_edited', False)),
+            },
+            **(
+                {}
+                if current.get('title_edited', False)
+                else {'title': generate_canvas_title(updated_content), 'title_edited': False}
+            ),
+        }
+        sync = await sync_linked_canvas_note_content(
+            updated.get('note_id'),
+            (__user__ or {}).get('id', ''),
+            updated['content'],
+            db=session,
+            title=updated['title'],
+            commit=False,
+        )
+        if sync.stale_link:
+            updated['note_id'] = None
+        documents[canvas_id] = updated
+        chat_data[CANVAS_DOCUMENTS_KEY] = documents
+        return chat_data, {'document': updated, 'note': sync.note}
+
+    try:
+        result = await _mutate_canvas_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _canvas_tool_error(str(exc))
+
+    document = result['document']
+    updated_note = result['note']
+    if updated_note and __request__ is not None:
+        try:
+            await _emit_note_updated(__request__, __user__, updated_note)
+        except Exception:
+            log.exception('Unable to publish linked Canvas Note event canvas_id=%s', canvas_id)
+    return _canvas_tool_document(document)
 
 
 # =============================================================================
@@ -366,6 +594,10 @@ def _web_preview_error(message: str) -> str:
     return json.dumps({'type': 'web_preview.error', 'message': message}, ensure_ascii=False)
 
 
+def _web_preview_conflict(exc: WebPreviewConflictError) -> str:
+    return json.dumps(exc.payload, ensure_ascii=False)
+
+
 def _web_preview_document(document: dict) -> str:
     return json.dumps(
         {
@@ -373,8 +605,8 @@ def _web_preview_document(document: dict) -> str:
             'previewId': document['preview_id'],
             'title': document.get('title', ''),
             'entrypoint': document.get('entrypoint', 'index.html'),
-            'files': document.get('files', {}),
-            'updatedAt': document.get('updated_at'),
+            'updatedAt': int(document.get('updated_at') or 0),
+            'contentHash': web_preview_content_hash(document),
             'exportedPath': document.get('exported_path'),
             'exportedRuntime': document.get('exported_runtime'),
         },
@@ -382,12 +614,16 @@ def _web_preview_document(document: dict) -> str:
     )
 
 
-async def _update_web_previews(chat, documents: dict, active_preview_id: str | None = None) -> None:
-    chat_data = dict(chat.chat or {})
-    chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
-    if active_preview_id:
-        chat_data = set_active_web_preview(chat_data, active_preview_id)
-    await Chats.update_chat_by_id(chat.id, chat_data)
+async def _mutate_web_preview_chat(chat, mutator):
+    mutation = await Chats.mutate_chat_by_id(
+        chat.id,
+        mutator,
+        user_id=chat.user_id,
+        touch=False,
+    )
+    if mutation is None:
+        raise RuntimeError('Web Preview chat could not be persisted.')
+    return mutation[1]
 
 
 async def web_preview_create(
@@ -411,11 +647,6 @@ async def web_preview_create(
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
-    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
-    if len(documents) >= WEB_PREVIEW_MAX_DOCUMENT_COUNT:
-        return _web_preview_error(
-            f'This chat already contains the maximum of {WEB_PREVIEW_MAX_DOCUMENT_COUNT} Web Previews.'
-        )
     try:
         normalized_files = normalize_web_preview_files(files)
     except ValueError as exc:
@@ -435,14 +666,29 @@ async def web_preview_create(
         'exported_path': None,
         'exported_runtime': None,
     }
-    documents[preview_id] = document
-    await _update_web_previews(chat, documents, preview_id)
+
+    def mutate(chat_data: dict, _session):
+        documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+        if len(documents) >= WEB_PREVIEW_MAX_DOCUMENT_COUNT:
+            raise ValueError(
+                f'This chat already contains the maximum of {WEB_PREVIEW_MAX_DOCUMENT_COUNT} Web Previews.'
+            )
+        documents[preview_id] = document
+        chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+        return set_active_web_preview(chat_data, preview_id), document
+
+    try:
+        await _mutate_web_preview_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _web_preview_error(str(exc))
     return _web_preview_document(document)
 
 
 async def web_preview_update(
     preview_id: str,
     files: dict[str, str],
+    expected_updated_at: int | None = None,
+    expected_content_hash: str = '',
     title: str | None = None,
     entrypoint: str | None = None,
     __chat_id__: str | None = None,
@@ -452,6 +698,8 @@ async def web_preview_update(
 
     :param preview_id: Stable ID returned by web_preview_create or web_preview_list.
     :param files: Complete mapping of relative file paths to updated text contents.
+    :param expected_updated_at: Required updatedAt from the current Web Preview reference or read result.
+    :param expected_content_hash: Required contentHash from the current Web Preview reference.
     :param title: Optional replacement title. Omit to retain the current title.
     :param entrypoint: Optional replacement HTML entrypoint.
     :return: The updated Web Preview.
@@ -460,31 +708,46 @@ async def web_preview_update(
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
-    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
-    current = documents.get(preview_id)
-    if not current:
-        return _web_preview_error('Web Preview not found in this chat.')
     try:
         normalized_files = normalize_web_preview_files(files)
     except ValueError as exc:
         return _web_preview_error(str(exc))
-    next_entrypoint = entrypoint or current.get('entrypoint', 'index.html')
-    if next_entrypoint not in normalized_files or normalized_files[next_entrypoint]['mime'] != 'text/html':
-        return _web_preview_error('The entrypoint must reference an HTML file in the preview package.')
 
-    document = {
-        **current,
-        'title': (
-            generate_web_preview_title(normalized_files, next_entrypoint, title)
-            if title is not None
-            else current.get('title') or generate_web_preview_title(normalized_files, next_entrypoint)
-        ),
-        'entrypoint': next_entrypoint,
-        'files': normalized_files,
-        'updated_at': web_preview_timestamp(current.get('updated_at')),
-    }
-    documents[preview_id] = document
-    await _update_web_previews(chat, documents, preview_id)
+    def mutate(chat_data: dict, _session):
+        documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+        current = documents.get(preview_id)
+        if not current:
+            raise ValueError('Web Preview not found in this chat.')
+        require_web_preview_precondition(
+            preview_id,
+            current,
+            expected_updated_at,
+            expected_content_hash,
+        )
+        next_entrypoint = entrypoint or current.get('entrypoint', 'index.html')
+        if next_entrypoint not in normalized_files or normalized_files[next_entrypoint]['mime'] != 'text/html':
+            raise ValueError('The entrypoint must reference an HTML file in the preview package.')
+        updated = {
+            **current,
+            'title': (
+                generate_web_preview_title(normalized_files, next_entrypoint, title)
+                if title is not None
+                else current.get('title') or generate_web_preview_title(normalized_files, next_entrypoint)
+            ),
+            'entrypoint': next_entrypoint,
+            'files': normalized_files,
+            'updated_at': web_preview_timestamp(current.get('updated_at')),
+        }
+        documents[preview_id] = updated
+        chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+        return chat_data, updated
+
+    try:
+        document = await _mutate_web_preview_chat(chat, mutate)
+    except WebPreviewConflictError as exc:
+        return _web_preview_conflict(exc)
+    except (RuntimeError, ValueError) as exc:
+        return _web_preview_error(str(exc))
     return _web_preview_document(document)
 
 
@@ -501,11 +764,17 @@ async def web_preview_select(
     chat = await _get_canvas_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
-    documents = dict((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
-    document = documents.get(preview_id)
-    if not document:
-        return _web_preview_error('Web Preview not found in this chat.')
-    await _update_web_previews(chat, documents, preview_id)
+
+    def mutate(chat_data: dict, _session):
+        document = (chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {}).get(preview_id)
+        if not document:
+            raise ValueError('Web Preview not found in this chat.')
+        return set_active_web_preview(chat_data, preview_id), document
+
+    try:
+        document = await _mutate_web_preview_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _web_preview_error(str(exc))
     return _web_preview_document(document)
 
 
@@ -527,7 +796,7 @@ async def web_preview_list(
                     'previewId': document['preview_id'],
                     'title': document.get('title', ''),
                     'entrypoint': document.get('entrypoint', 'index.html'),
-                    'updatedAt': document.get('updated_at'),
+                    'updatedAt': int(document.get('updated_at') or 0),
                     'selected': document['preview_id'] == active_id,
                 }
                 for document in documents.values()
@@ -535,6 +804,115 @@ async def web_preview_list(
         },
         ensure_ascii=False,
     )
+
+
+async def web_preview_read_file(
+    preview_id: str,
+    path: str,
+    start_line: int = 1,
+    end_line: int = 200,
+    query: str = '',
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Read a bounded line-addressed excerpt from one Web Preview file.
+
+    :param preview_id: Stable Web Preview ID.
+    :param path: Exact relative file path in the preview package.
+    :param start_line: First line to return when query is empty.
+    :param end_line: Last line to return; at most 400 lines are returned.
+    :param query: Optional exact text fragment used to locate a relevant range.
+    :return: A file excerpt and the preview's current update version.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+    document = ((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {}).get(preview_id)
+    if not document:
+        return _web_preview_error('Web Preview not found in this chat.')
+    file = (document.get('files') or {}).get(path)
+    if not isinstance(file, dict):
+        return _web_preview_error('File not found in this Web Preview.')
+    try:
+        excerpt = _text_excerpt(file.get('content', ''), start_line, end_line, query)
+    except ValueError as exc:
+        return _web_preview_error(str(exc))
+    return json.dumps(
+        {
+            'type': 'web_preview.file_excerpt',
+            'previewId': preview_id,
+            'title': document.get('title', ''),
+            'path': path,
+            'mime': file.get('mime', 'text/plain'),
+            'updatedAt': int(document.get('updated_at') or 0),
+            'contentHash': _content_hash(file.get('content', '')),
+            **excerpt,
+        },
+        ensure_ascii=False,
+    )
+
+
+async def web_preview_replace_text(
+    preview_id: str,
+    path: str,
+    old_text: str,
+    new_text: str,
+    expected_content_hash: str,
+    expected_updated_at: int | None = None,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Replace one uniquely matching passage in one Web Preview file.
+
+    Read the file first and pass updatedAt to avoid overwriting a newer manual edit.
+
+    :param preview_id: Stable Web Preview ID.
+    :param path: Exact relative file path in the preview package.
+    :param old_text: Exact existing passage; it must occur exactly once.
+    :param new_text: Replacement passage.
+    :param expected_content_hash: Required file hash returned by web_preview_read_file.
+    :param expected_updated_at: Optional timestamp returned by web_preview_read_file.
+    :return: The updated Web Preview metadata.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+    if not old_text:
+        return _web_preview_error('old_text must not be empty.')
+
+    def mutate(chat_data: dict, _session):
+        documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+        current = documents.get(preview_id)
+        if not current:
+            raise ValueError('Web Preview not found in this chat.')
+        if expected_updated_at is not None and int(current.get('updated_at') or 0) != expected_updated_at:
+            raise ValueError('Web Preview changed after it was read. Read the file again before editing.')
+        files = dict(current.get('files') or {})
+        file = files.get(path)
+        if not isinstance(file, dict):
+            raise ValueError('File not found in this Web Preview.')
+        content = str(file.get('content', ''))
+        if _content_hash(content) != expected_content_hash:
+            raise ValueError('Web Preview changed after it was read. Read the file again before editing.')
+        occurrences = content.count(old_text)
+        if occurrences != 1:
+            raise ValueError(f'Expected one exact passage match, found {occurrences}. Read a more specific range.')
+        files[path] = {**file, 'content': content.replace(old_text, new_text, 1)}
+        normalized_files = normalize_web_preview_files(files)
+        updated = {
+            **current,
+            'files': normalized_files,
+            'updated_at': web_preview_timestamp(current.get('updated_at')),
+        }
+        documents[preview_id] = updated
+        chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+        return chat_data, updated
+
+    try:
+        document = await _mutate_web_preview_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _web_preview_error(str(exc))
+    return _web_preview_document(document)
 
 
 # =============================================================================
@@ -1765,6 +2143,13 @@ async def replace_note_content(
         if not updated_note:
             return json.dumps({'error': 'Failed to update note', 'code': 'update_failed'})
 
+        markdown = (((updated_note.data or {}).get('content') or {}).get('md') or '')
+        await sync_linked_canvases_from_note(
+            updated_note.id,
+            updated_note.user_id,
+            updated_note.title,
+            markdown,
+        )
         await _emit_note_updated(__request__, __user__, updated_note)
 
         return json.dumps(

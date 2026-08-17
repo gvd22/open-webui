@@ -8,6 +8,7 @@ import {
 	getCanvasNoteArtifactsFromOutput,
 	hasNewCanvasArtifact,
 	mergePersistedCanvasArtifact,
+	preserveWorkspaceSelection,
 	type CanvasNoteArtifact
 } from './canvas';
 import {
@@ -51,6 +52,7 @@ describe('Canvas tool state', () => {
 							title: 'Bananen',
 							content: { md: '# Bananen' },
 							updatedAt: 42,
+							contentHash: 'canvas-hash-42',
 							titleEdited: true,
 							canUndoAiUpdate: true
 						})
@@ -64,6 +66,7 @@ describe('Canvas tool state', () => {
 			canvasId: 'canvas-1',
 			content: '# Bananen',
 			updatedAt: 42,
+			contentHash: 'canvas-hash-42',
 			titleEdited: true,
 			canUndoAiUpdate: true
 		});
@@ -199,6 +202,43 @@ describe('Canvas tool state', () => {
 		});
 	});
 
+	it('clears a deleted linked Note from hydrated Canvas state', () => {
+		expect(
+			mergePersistedCanvasArtifact(artifact({ noteId: 'deleted-note' }), {
+				title: 'Notiz uber Bananen',
+				content: '# Notiz uber Bananen\n\nNeu',
+				updated_at: 30,
+				note_id: null
+			})
+		).toMatchObject({ noteId: undefined });
+	});
+
+	it('hydrates compact partial-update tool results from persisted Canvas state', () => {
+		const [reference] = getCanvasNoteArtifactsFromOutput([
+			{
+				type: 'function_call_output',
+				output: JSON.stringify({
+					type: 'canvas.document',
+					canvasId: 'canvas-1',
+					title: 'Plan',
+					updatedAt: 40
+				})
+			}
+		]);
+
+		expect(reference.hasContentPayload).toBe(false);
+		expect(
+			mergePersistedCanvasArtifact(reference, {
+				title: 'Plan',
+				content: '# Plan\n\nTeilweise aktualisiert',
+				updated_at: 40
+			})
+		).toMatchObject({
+			content: '# Plan\n\nTeilweise aktualisiert',
+			hasContentPayload: true
+		});
+	});
+
 	it('opens the workspace for a new document but not another update of the same document', () => {
 		expect(hasNewCanvasArtifact([], [artifact()])).toBe(true);
 		expect(hasNewCanvasArtifact([artifact()], [artifact({ content: '# Updated' })])).toBe(false);
@@ -217,7 +257,14 @@ describe('Canvas tool state', () => {
 		expect(canUseNotes(true, 'admin', false)).toBe(true);
 		expect(canUseNotes(true, 'user', true)).toBe(true);
 		expect(canUseNotes(true, 'user', false)).toBe(false);
+		expect(canUseNotes(true, 'user', undefined)).toBe(false);
 		expect(canUseNotes(false, 'admin', true)).toBe(false);
+	});
+
+	it('preserves an existing Files, Terminal, Preview, or Canvas selection', () => {
+		expect(preserveWorkspaceSelection('workspace:files', 'canvas-2')).toBe('workspace:files');
+		expect(preserveWorkspaceSelection('preview-1', 'canvas-2')).toBe('preview-1');
+		expect(preserveWorkspaceSelection(null, 'canvas-2')).toBe('canvas-2');
 	});
 });
 
@@ -317,5 +364,43 @@ describe('Canvas chat previews', () => {
 			name: 'canvas_select_document',
 			error: 'Canvas document not found in this chat.'
 		});
+	});
+
+	it('renders bounded Canvas read and replace calls as workspace activities', () => {
+		const output = buildOutputDisplayItems([
+			{
+				type: 'function_call',
+				call_id: 'read-1',
+				name: 'canvas_read_document',
+				status: 'completed'
+			},
+			{
+				type: 'function_call_output',
+				call_id: 'read-1',
+				output: JSON.stringify({ type: 'canvas.document_excerpt', canvasId: 'canvas-1' })
+			},
+			{
+				type: 'function_call',
+				call_id: 'replace-1',
+				name: 'canvas_replace_text',
+				status: 'completed'
+			},
+			{
+				...artifact({ canvasId: 'canvas-1' }),
+				type: 'function_call_output',
+				call_id: 'replace-1',
+				output: JSON.stringify({
+					type: 'canvas.document',
+					canvasId: 'canvas-1',
+					title: 'Updated',
+					content: { md: '# Updated' }
+				})
+			}
+		]);
+
+		expect(output.filter((item) => item.type === 'canvas_activity')).toMatchObject([
+			{ name: 'canvas_read_document', done: true },
+			{ name: 'canvas_replace_text', done: true, artifact: { canvasId: 'canvas-1' } }
+		]);
 	});
 });

@@ -8,6 +8,7 @@
 	import { terminalServers, selectedTerminalId } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import { getTerminalConnectionContextKey, isCurrentTerminalSocket } from './terminalConnection';
 
 	const i18n = getContext('i18n');
 
@@ -23,12 +24,14 @@
 	export let connecting = false;
 	let resizeObserver: ResizeObserver | null = null;
 	let pingInterval: ReturnType<typeof setInterval> | null = null;
-	let connectedTerminalId: string | null | undefined = undefined;
+	let connectedContextKey: string | null = null;
+	let connectionSequence = 0;
 	let activeSession: {
 		id: string;
 		serverId: string;
 		baseUrl: string;
 		authToken: string;
+		chatId: string | null;
 		released?: boolean;
 	} | null = null;
 
@@ -49,14 +52,14 @@
 	const releaseSession = (session = activeSession) => {
 		if (!session || session.released) return;
 		session.released = true;
-		if (activeSession?.id === session.id) activeSession = null;
+		if (activeSession === session) activeSession = null;
 
 		const base = session.baseUrl.replace(/\/$/, '');
 		const url = `${base}/terminals/${session.serverId}/api/terminals/${session.id}`;
 		const headers: Record<string, string> = {
 			Authorization: `Bearer ${session.authToken}`
 		};
-		if (chatId) headers['X-Session-Id'] = chatId;
+		if (session.chatId) headers['X-Session-Id'] = session.chatId;
 
 		void (async () => {
 			for (const delay of [150, 500, 1000]) {
@@ -77,10 +80,15 @@
 
 		const info = getTerminalInfo();
 		if (!info) return;
+		const requestSequence = ++connectionSequence;
+		const requestedTerminalId = activeTerminalId;
+		const requestedChatId = chatId;
 
 		connecting = true;
 
 		const token = localStorage.getItem('token') ?? '';
+		let websocketSession: typeof activeSession = null;
+		let socket: WebSocket | null = null;
 
 		try {
 			let sessionId: string;
@@ -93,7 +101,7 @@
 
 				// Create session via proxy
 				const proxyHeaders: Record<string, string> = { Authorization: `Bearer ${token}` };
-				if (chatId) proxyHeaders['X-Session-Id'] = chatId;
+				if (requestedChatId) proxyHeaders['X-Session-Id'] = requestedChatId;
 				const res = await fetch(`${base}/terminals/${info.serverId}/api/terminals`, {
 					method: 'POST',
 					headers: proxyHeaders
@@ -101,45 +109,61 @@
 				if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
 				const session = await res.json();
 				sessionId = session.id;
-				activeSession = {
+				const createdSession = {
 					id: sessionId,
 					serverId: info.serverId,
 					baseUrl: info.baseUrl,
-					authToken
+					authToken,
+					chatId: requestedChatId
 				};
+				if (
+					requestSequence !== connectionSequence ||
+					activeTerminalId !== requestedTerminalId ||
+					chatId !== requestedChatId
+				) {
+					releaseSession(createdSession);
+					return;
+				}
+				activeSession = createdSession;
 
 				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 				wsUrl = `${wsBase}/terminals/${info.serverId}/api/terminals/${sessionId}`;
 			}
 
-			const websocketSession = activeSession;
-			ws = new WebSocket(wsUrl);
-			ws.binaryType = 'arraybuffer';
+			websocketSession = activeSession;
+			const connectionSocket = new WebSocket(wsUrl);
+			socket = connectionSocket;
+			ws = connectionSocket;
+			connectionSocket.binaryType = 'arraybuffer';
 
-			ws.onopen = () => {
-				// First-message auth (no token in URL)
-				if (ws) {
-					ws.send(JSON.stringify({ type: 'auth', token: authToken.trim() }));
+			connectionSocket.onopen = () => {
+				if (!isCurrentTerminalSocket(ws, connectionSocket, connectionSequence, requestSequence)) {
+					connectionSocket.close();
+					return;
 				}
+				// First-message auth (no token in URL)
+				connectionSocket.send(JSON.stringify({ type: 'auth', token: authToken.trim() }));
 				connected = true;
 				connecting = false;
 				// Focus the terminal so it receives keyboard input immediately
 				term?.focus();
 				// Send initial resize
-				if (term && ws) {
-					ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+				if (term) {
+					connectionSocket.send(
+						JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
+					);
 				}
 				// Keepalive ping to prevent idle timeout from proxies/LBs
 				if (pingInterval) clearInterval(pingInterval);
 				pingInterval = setInterval(() => {
-					if (ws && ws.readyState === WebSocket.OPEN) {
-						ws.send(JSON.stringify({ type: 'ping' }));
+					if (ws === connectionSocket && connectionSocket.readyState === WebSocket.OPEN) {
+						connectionSocket.send(JSON.stringify({ type: 'ping' }));
 					}
 				}, 25000);
 			};
 
-			ws.onmessage = (event) => {
-				if (term) {
+			connectionSocket.onmessage = (event) => {
+				if (ws === connectionSocket && term) {
 					if (event.data instanceof ArrayBuffer) {
 						term.write(new Uint8Array(event.data));
 					} else {
@@ -148,9 +172,10 @@
 				}
 			};
 
-			ws.onclose = () => {
-				ws = null;
+			connectionSocket.onclose = () => {
 				releaseSession(websocketSession);
+				if (ws !== connectionSocket) return;
+				ws = null;
 				connected = false;
 				connecting = false;
 				if (term) {
@@ -158,12 +183,20 @@
 				}
 			};
 
-			ws.onerror = () => {
+			connectionSocket.onerror = () => {
 				releaseSession(websocketSession);
+				if (ws !== connectionSocket) return;
 				connected = false;
 				connecting = false;
 			};
 		} catch (err) {
+			if (socket && ws === socket) {
+				ws = null;
+				socket.close();
+			}
+			releaseSession(websocketSession);
+			if (requestSequence !== connectionSequence) return;
+			connected = false;
 			connecting = false;
 			if (term) {
 				term.write(`\r\n\x1b[31m[Error: ${err}]\x1b[0m\r\n`);
@@ -172,13 +205,15 @@
 	};
 
 	const disconnect = () => {
+		connectionSequence += 1;
 		if (pingInterval) {
 			clearInterval(pingInterval);
 			pingInterval = null;
 		}
-		if (ws) {
-			ws.close();
-			ws = null;
+		const socket = ws;
+		ws = null;
+		if (socket) {
+			socket.close();
 		}
 		releaseSession();
 		connected = false;
@@ -275,14 +310,16 @@
 		// handler would write a spurious "[Connection closed]" message.
 	};
 
-	// Reconnect when this view's explicit connection (or the global fallback) changes.
-	$: if (activeTerminalId !== undefined && term && activeTerminalId !== connectedTerminalId) {
-		connectedTerminalId = activeTerminalId;
+	// Reconnect when this view's explicit connection or chat scope changes.
+	$: connectionContextKey = getTerminalConnectionContextKey(activeTerminalId, chatId);
+	$: if (activeTerminalId !== undefined && term && connectionContextKey !== connectedContextKey) {
+		connectedContextKey = connectionContextKey;
 		// Clear the terminal screen and reconnect to the new server
-		disconnect();
 		term.clear();
 		if (activeTerminalId) {
 			connect();
+		} else {
+			disconnect();
 		}
 	}
 

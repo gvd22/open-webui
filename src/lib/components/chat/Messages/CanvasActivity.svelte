@@ -11,7 +11,8 @@
 		chatId,
 		showArtifacts,
 		showControls,
-		showEmbeds
+		showEmbeds,
+		workspaceOpenRequestId
 	} from '$lib/stores';
 	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
@@ -51,13 +52,23 @@
 		canvas_list_documents: {
 			pending: 'Checking canvas documents',
 			complete: 'Canvas documents checked'
+		},
+		canvas_read_document: {
+			pending: 'Reading canvas',
+			complete: 'Canvas read'
+		},
+		canvas_replace_text: {
+			pending: 'Updating canvas',
+			complete: 'Canvas updated'
 		}
 	};
 	const errorLabels: Record<string, string> = {
 		canvas_create_document: 'Canvas konnte nicht erstellt werden',
 		canvas_update_document: 'Canvas konnte nicht aktualisiert werden',
 		canvas_select_document: 'Canvas konnte nicht geöffnet werden',
-		canvas_list_documents: 'Canvas-Dokumente konnten nicht geprüft werden'
+		canvas_list_documents: 'Canvas-Dokumente konnten nicht geprüft werden',
+		canvas_read_document: 'Canvas konnte nicht gelesen werden',
+		canvas_replace_text: 'Canvas konnte nicht aktualisiert werden'
 	};
 
 	$: label = toolLabels[name] ?? toolLabels.canvas_update_document;
@@ -88,7 +99,8 @@
 							content: document.content ?? item.content,
 							titleEdited: Boolean(document.title_edited),
 							updatedAt: document.updated_at ?? item.updatedAt,
-							noteId: document.note_id ?? item.noteId
+							contentHash: document.contentHash ?? item.contentHash,
+							noteId: document.note_id ?? undefined
 						};
 					});
 
@@ -100,7 +112,9 @@
 			}
 		}
 
-		artifactCode.set(artifact.canvasId || artifact.noteId || artifact.content);
+		const selectedId = artifact.canvasId || artifact.noteId || artifact.content;
+		workspaceOpenRequestId.set(selectedId);
+		artifactCode.set(selectedId);
 		showEmbeds.set(false);
 		if (!$showArtifacts) showArtifacts.set(true);
 		if (!$showControls) showControls.set(true);

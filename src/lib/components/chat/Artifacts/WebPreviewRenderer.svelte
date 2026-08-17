@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { getContext, onDestroy } from 'svelte';
+	import { getContext, onDestroy, onMount } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { toast } from 'svelte-sonner';
 	import JSZip from 'jszip';
 
-	import { updateTransientWebPreview } from '$lib/apis/chats';
+	import { selectTransientWebPreview, updateTransientWebPreview } from '$lib/apis/chats';
 	import { createDirectory, getCwd, uploadToTerminal } from '$lib/apis/terminal';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import {
@@ -23,8 +23,10 @@
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import Refresh from '$lib/components/icons/Refresh.svelte';
 	import type { WebPreviewArtifact, WebPreviewFile } from './webPreview';
-	import { composeWebPreviewHtml } from './webPreview';
+	import { composeWebPreviewHtml, mergeLocalWebPreviewDraft } from './webPreview';
+	import { buildWebPreviewSandbox } from './webPreviewSandbox';
 	import { resolveWorkspaceRuntime } from './workspace';
+	import { createSerializedSaveQueue, registerWorkspaceSaveBarrier } from './serializedSaveQueue';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	export let artifact: WebPreviewArtifact;
@@ -47,12 +49,16 @@
 	let exportedPath = artifact.exportedPath ?? '';
 	let exportedRuntime = artifact.exportedRuntime ?? '';
 	let workerRequestId = 0;
-	let saveTimer: ReturnType<typeof setTimeout> | null = null;
-	let changeVersion = 0;
-	let pendingSave = false;
-	let pendingExportMeta: { path: string; runtime: string } | undefined;
 	let saveFailed = false;
 	let retryCount = 0;
+	let lastArtifact = artifact;
+	let unregisterSaveBarrier = () => {};
+	let localRevision = 0;
+	let lastSaveBaseVersion: number | undefined;
+	let lastSavedVersion: number | undefined;
+	let lastContentHash = artifact.contentHash;
+	let lastSaveBaseHash: string | undefined;
+	let lastSavedHash: string | undefined;
 
 	$: selectedFile = files[selectedPath] ?? files[entrypoint];
 	$: previewHtml = composeWebPreviewHtml(files, entrypoint);
@@ -72,52 +78,68 @@
 			: null;
 	$: filesAvailable = workspaceRuntime.writable;
 
-	$: if ((artifact.updatedAt ?? 0) > lastUpdatedAt && !dirty) {
+	$: if (artifact !== lastArtifact && (artifact.updatedAt ?? 0) >= lastUpdatedAt && !dirty) {
+		lastArtifact = artifact;
 		title = artifact.title;
 		entrypoint = artifact.entrypoint;
 		files = structuredClone(artifact.files);
 		selectedPath = files[selectedPath] ? selectedPath : entrypoint;
 		lastUpdatedAt = artifact.updatedAt ?? 0;
+		lastContentHash = artifact.contentHash ?? lastContentHash;
 		exportedPath = artifact.exportedPath ?? '';
 		exportedRuntime = artifact.exportedRuntime ?? '';
 		reloadKey += 1;
 	}
 
-	const scheduleAutosave = (delay = 500) => {
-		if (saveTimer) clearTimeout(saveTimer);
-		saveTimer = setTimeout(() => {
-			saveTimer = null;
-			void persist();
-		}, delay);
+	type PreviewSaveSnapshot = {
+		title: string;
+		entrypoint: string;
+		files: Record<string, WebPreviewFile>;
+		exportedPath: string;
+		exportedRuntime: string;
+		expectedUpdatedAt?: number;
+		expectedContentHash?: string;
+		notifyExport?: boolean;
+		revision: number;
 	};
 
-	const markDirty = () => {
-		dirty = true;
-		changeVersion += 1;
-		scheduleAutosave();
+	const updateSharedDraft = () => {
+		(artifactContents as any).update((items: any[] | null) =>
+			(items ?? []).map((item) =>
+				item?.previewId === artifact.previewId
+					? mergeLocalWebPreviewDraft(item, { title, entrypoint, files: structuredClone(files) })
+					: item
+			)
+		);
 	};
 
-	const persist = async (exportMeta?: { path: string; runtime: string }) => {
+	const buildSaveSnapshot = (exportMeta?: {
+		path: string;
+		runtime: string;
+	}): PreviewSaveSnapshot => ({
+		title,
+		entrypoint,
+		files: structuredClone(files),
+		exportedPath: exportMeta?.path ?? exportedPath,
+		exportedRuntime: exportMeta?.runtime ?? exportedRuntime,
+		expectedUpdatedAt: lastUpdatedAt || undefined,
+		expectedContentHash: lastContentHash,
+		notifyExport: Boolean(exportMeta),
+		revision: localRevision
+	});
+
+	const saveSnapshot = async (snapshot: PreviewSaveSnapshot) => {
 		if (!chatId) return;
-		if (saving) {
-			pendingSave = true;
-			pendingExportMeta = exportMeta ?? pendingExportMeta;
-			return;
-		}
-		if (saveTimer) {
-			clearTimeout(saveTimer);
-			saveTimer = null;
-		}
-		const version = changeVersion;
-		const snapshot = {
-			title,
-			entrypoint,
-			files: structuredClone(files),
-			exportedPath: exportMeta?.path ?? exportedPath,
-			exportedRuntime: exportMeta?.runtime ?? exportedRuntime
-		};
 		saving = true;
 		try {
+			const expectedUpdatedAt =
+				snapshot.expectedUpdatedAt === lastSaveBaseVersion
+					? lastSavedVersion
+					: snapshot.expectedUpdatedAt;
+			const expectedContentHash =
+				snapshot.expectedContentHash === lastSaveBaseHash
+					? lastSavedHash
+					: snapshot.expectedContentHash;
 			const updated = await updateTransientWebPreview(
 				localStorage.token,
 				chatId,
@@ -127,55 +149,112 @@
 					entrypoint: snapshot.entrypoint,
 					files: snapshot.files,
 					exported_path: snapshot.exportedPath || null,
-					exported_runtime: snapshot.exportedRuntime || null
+					exported_runtime: snapshot.exportedRuntime || null,
+					expected_updated_at: expectedUpdatedAt ?? null,
+					expected_content_hash: expectedContentHash ?? null
 				}
 			);
+			lastSaveBaseVersion = expectedUpdatedAt;
+			lastSavedVersion = updated.updated_at;
+			lastSaveBaseHash = expectedContentHash;
+			lastSavedHash = updated.contentHash;
+			lastContentHash = updated.contentHash;
 			lastUpdatedAt = Number(updated.updated_at ?? Date.now() / 1000);
-			dirty = changeVersion !== version;
+			const isLatestRevision = snapshot.revision === localRevision;
+			dirty = !isLatestRevision;
 			saveFailed = false;
 			retryCount = 0;
-			if (exportMeta) {
-				exportedPath = exportMeta.path;
-				exportedRuntime = exportMeta.runtime;
-			}
+			exportedPath = snapshot.exportedPath;
+			exportedRuntime = snapshot.exportedRuntime;
 			(artifactContents as any).update((items: any[] | null) =>
 				(items ?? []).map((item) =>
 					item?.previewId === artifact.previewId
-						? {
-								...item,
-								title: snapshot.title,
-								entrypoint: snapshot.entrypoint,
-								files: snapshot.files,
-								content: snapshot.files[snapshot.entrypoint]?.content ?? '',
-								updatedAt: lastUpdatedAt,
-								exportedPath: snapshot.exportedPath,
-								exportedRuntime: snapshot.exportedRuntime
-							}
+						? isLatestRevision
+							? {
+									...item,
+									title: snapshot.title,
+									entrypoint: snapshot.entrypoint,
+									files: snapshot.files,
+									content: snapshot.files[snapshot.entrypoint]?.content ?? '',
+									updatedAt: lastUpdatedAt,
+									contentHash: lastContentHash,
+									exportedPath: snapshot.exportedPath,
+									exportedRuntime: snapshot.exportedRuntime
+								}
+							: { ...item, updatedAt: lastUpdatedAt, contentHash: lastContentHash }
 						: item
 				)
 			);
-			if (exportMeta) toast.success($i18n.t('Saved to Files'));
-		} catch {
+			if (snapshot.notifyExport) toast.success($i18n.t('Saved to Files'));
+		} catch (error: any) {
 			dirty = true;
 			saveFailed = true;
+			if (error?.status === 409) {
+				try {
+					const document = await selectTransientWebPreview(
+						localStorage.token,
+						chatId,
+						artifact.previewId
+					);
+					title = document.title;
+					entrypoint = document.entrypoint;
+					files = structuredClone(document.files);
+					selectedPath = files[selectedPath] ? selectedPath : entrypoint;
+					lastUpdatedAt = Number(document.updated_at ?? lastUpdatedAt);
+					lastContentHash = document.contentHash;
+					exportedPath = document.exported_path ?? '';
+					exportedRuntime = document.exported_runtime ?? '';
+					dirty = false;
+					lastSaveBaseVersion = lastUpdatedAt;
+					lastSavedVersion = lastUpdatedAt;
+					lastSaveBaseHash = lastContentHash;
+					lastSavedHash = lastContentHash;
+					(artifactContents as any).update((items: any[] | null) =>
+						(items ?? []).map((item) =>
+							item?.previewId === artifact.previewId
+								? {
+										...mergeLocalWebPreviewDraft(item, {
+											title,
+											entrypoint,
+											files: structuredClone(files)
+										}),
+										updatedAt: lastUpdatedAt,
+										contentHash: lastContentHash,
+										exportedPath,
+										exportedRuntime
+									}
+								: item
+						)
+					);
+					saveFailed = false;
+				} catch {
+					// Keep the conflict visible when canonical refresh also fails.
+				}
+				toast.warning($i18n.t('Preview changed elsewhere. The latest version was loaded.'));
+				return;
+			}
 			if (retryCount < 1) {
 				retryCount += 1;
-				scheduleAutosave(1500);
+				setTimeout(() => {
+					if (snapshot.revision === localRevision) previewSaveQueue.enqueue(snapshot);
+				}, 1500);
 			}
 		} finally {
 			saving = false;
-			if (pendingSave || changeVersion !== version) {
-				const nextExportMeta = pendingExportMeta;
-				pendingSave = false;
-				pendingExportMeta = undefined;
-				await persist(nextExportMeta);
-			}
 		}
+	};
+	const previewSaveQueue = createSerializedSaveQueue(saveSnapshot);
+
+	const queuePreviewSave = () => {
+		dirty = true;
+		localRevision += 1;
+		updateSharedDraft();
+		previewSaveQueue.enqueue(buildSaveSnapshot());
 	};
 
 	const setSelectedContent = (content: string) => {
 		files = { ...files, [selectedPath]: { ...selectedFile, content } };
-		markDirty();
+		queuePreviewSave();
 	};
 
 	const showPreview = () => {
@@ -277,7 +356,8 @@
 		try {
 			const runtime = workspaceRuntime.kind;
 			const path = runtime === 'terminal' ? await exportToTerminal() : await exportToPyodide();
-			await persist({ path, runtime });
+			previewSaveQueue.enqueue(buildSaveSnapshot({ path, runtime }));
+			await previewSaveQueue.flush();
 		} catch {
 			toast.error($i18n.t('Files are currently unavailable'));
 		} finally {
@@ -307,9 +387,18 @@
 		saveBlob(await zip.generateAsync({ type: 'blob' }), `${projectSlug()}.zip`);
 	};
 
+	onMount(() => {
+		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
+			{ kind: 'web_preview', id: artifact.previewId },
+			async () => {
+				await previewSaveQueue.flush();
+				return !saveFailed;
+			}
+		);
+	});
+
 	onDestroy(() => {
-		if (saveTimer) clearTimeout(saveTimer);
-		if (dirty) void persist();
+		void previewSaveQueue.flush().finally(unregisterSaveBarrier);
 	});
 </script>
 
@@ -321,8 +410,11 @@
 	>
 		<input
 			class="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-gray-400"
-			bind:value={title}
-			on:input={markDirty}
+			value={title}
+			on:input={(event) => {
+				title = (event.currentTarget as HTMLInputElement).value;
+				queuePreviewSave();
+			}}
 			aria-label={$i18n.t('Preview title')}
 		/>
 		<span class="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
@@ -394,9 +486,10 @@
 					{title}
 					srcdoc={injectCsp(previewHtml, iframeCsp)}
 					class="h-full min-h-0 w-full border-0 bg-white"
-					sandbox="allow-scripts allow-downloads{sandboxAllowForms
-						? ' allow-forms'
-						: ''}{sandboxAllowSameOrigin ? ' allow-same-origin' : ''}"
+					sandbox={buildWebPreviewSandbox({
+						allowForms: sandboxAllowForms,
+						allowSameOrigin: sandboxAllowSameOrigin
+					})}
 				></iframe>
 			{/key}
 		{/if}

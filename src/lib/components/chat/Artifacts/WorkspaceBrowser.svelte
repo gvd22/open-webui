@@ -14,7 +14,11 @@
 	} from '$lib/stores';
 
 	import PortPreview from '../FileNav/PortPreview.svelte';
-	import { isKeyboardActivationClick, WORKSPACE_TERMINAL_ID } from './workspace';
+	import {
+		isKeyboardActivationClick,
+		resolveBoundWorkspaceTerminal,
+		WORKSPACE_TERMINAL_ID
+	} from './workspace';
 
 	const i18n = getContext('i18n');
 
@@ -27,33 +31,37 @@
 	let loadError = '';
 	let loadedTerminalUrl = '';
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let portsRequestSequence = 0;
 
-	$: terminal =
-		($terminalServers ?? []).find((item) => item.id === terminalId) ??
-		($terminalServers ?? []).find((item) => item.id === $selectedTerminalId) ??
-		($terminalServers ?? [])[0] ??
-		null;
+	$: terminal = resolveBoundWorkspaceTerminal($terminalServers, terminalId);
 
 	const loadPorts = async (showLoading = true) => {
-		if (!terminal) {
+		const requestId = ++portsRequestSequence;
+		const requestedTerminal = terminal;
+		if (!requestedTerminal) {
 			ports = [];
 			selectedPort = null;
-			loadError = $i18n.t('No terminal is available');
+			loadError = $i18n.t('This Terminal connection is unavailable');
 			return;
 		}
 		if (showLoading) loading = true;
 		try {
-			ports = await getListeningPorts(terminal.url, localStorage.token, { throwOnError: true });
+			const nextPorts = await getListeningPorts(requestedTerminal.url, localStorage.token, {
+				throwOnError: true
+			});
+			if (requestId !== portsRequestSequence || terminal?.id !== requestedTerminal.id) return;
+			ports = nextPorts;
 			loadError = '';
 			if (selectedPort !== null && !ports.some((port) => port.port === selectedPort)) {
 				selectedPort = null;
 			}
 		} catch {
+			if (requestId !== portsRequestSequence || terminal?.id !== requestedTerminal.id) return;
 			ports = [];
 			selectedPort = null;
 			loadError = $i18n.t('Terminal is currently unavailable');
 		} finally {
-			if (showLoading) loading = false;
+			if (showLoading && requestId === portsRequestSequence) loading = false;
 		}
 	};
 
@@ -74,11 +82,16 @@
 	}
 
 	$: if (!terminal && loadedTerminalUrl) {
+		portsRequestSequence += 1;
 		loadedTerminalUrl = '';
 		ports = [];
 		selectedPort = null;
 		loading = false;
-		loadError = $i18n.t('No terminal is available');
+		loadError = $i18n.t('This Terminal connection is unavailable');
+	}
+
+	$: if (!terminal && !loadedTerminalUrl) {
+		loadError = $i18n.t('This Terminal connection is unavailable');
 	}
 
 	onMount(() => {

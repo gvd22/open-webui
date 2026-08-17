@@ -1163,6 +1163,8 @@ async def chat_completion(
 
         chat_variables = normalize_chat_variables(chat_variables)
 
+        workspace_focus = form_data.pop('workspace_focus', None)
+
         # Drop tool_servers if caller lacks features.direct_tool_servers —
         # mirrors the storage-side strip in user/settings/update.
         tool_servers = form_data.pop('tool_servers', None)
@@ -1194,6 +1196,7 @@ async def chat_completion(
             'features': form_data.get('features', {}),
             'variables': form_data.get('variables', {}),
             'chat_variables': chat_variables,
+            'workspace_focus': workspace_focus,
             'model': model,
             'direct': model_item.get('direct', False),
             'params': {

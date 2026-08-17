@@ -15,6 +15,7 @@
 		selectedTerminalId,
 		terminalServers,
 		workspaceChatContextId,
+		workspaceOpenRequestId,
 		workspaceTerminalConnectionId,
 		workspaceUtilityInstances
 	} from '$lib/stores';
@@ -39,6 +40,7 @@
 	import { selectTransientCanvasDocument } from '$lib/apis/chats';
 	import {
 		buildWorkspaceTabs,
+		buildWorkspaceFileContent,
 		replaceWorkspaceFileContent,
 		buildWorkspaceUtilityContents,
 		getWorkspaceContentId,
@@ -72,6 +74,91 @@
 	let workspaceContentOrder: string[] = [];
 	let selectedContentIdx = 0;
 	let closedWorkspaceContentIds = new Set<string>();
+	const WORKSPACE_STATE_VERSION = 1;
+	const workspaceStateKey = (id: string) =>
+		`open-webui.workspace.tabs.v${WORKSPACE_STATE_VERSION}:${id}`;
+
+	type PersistedWorkspaceState = {
+		version: number;
+		order: string[];
+		closed: string[];
+		filesOpened: boolean;
+		openedFiles: string[];
+		utilities: Array<{
+			id: string;
+			kind: 'terminal' | 'browser';
+			title: string;
+			terminalId?: string;
+		}>;
+	};
+
+	const readWorkspaceState = (id: string): PersistedWorkspaceState | null => {
+		if (!id) return null;
+		try {
+			const value = JSON.parse(localStorage.getItem(workspaceStateKey(id)) ?? 'null');
+			if (!value || value.version !== WORKSPACE_STATE_VERSION) return null;
+			return {
+				version: WORKSPACE_STATE_VERSION,
+				order: Array.isArray(value.order)
+					? value.order.filter((item: unknown) => typeof item === 'string').slice(0, 100)
+					: [],
+				closed: Array.isArray(value.closed)
+					? value.closed
+							.filter((item: unknown) => typeof item === 'string' && item !== WORKSPACE_LAUNCHER_ID)
+							.slice(0, 100)
+					: [],
+				filesOpened: Boolean(value.filesOpened),
+				openedFiles: Array.isArray(value.openedFiles)
+					? value.openedFiles.filter((item: unknown) => typeof item === 'string').slice(-1)
+					: [],
+				utilities: Array.isArray(value.utilities)
+					? value.utilities
+							.filter(
+								(item: any) =>
+									item &&
+									typeof item.id === 'string' &&
+									item.id !== WORKSPACE_LAUNCHER_ID &&
+									['terminal', 'browser'].includes(item.kind) &&
+									typeof item.title === 'string'
+							)
+							.slice(0, 30)
+					: []
+			};
+		} catch {
+			return null;
+		}
+	};
+
+	const persistWorkspaceState = (id = $chatId) => {
+		if (!id) return;
+		try {
+			const state: PersistedWorkspaceState = {
+				version: WORKSPACE_STATE_VERSION,
+				order: workspaceContentOrder.filter((item) => item !== WORKSPACE_LAUNCHER_ID),
+				closed: [...closedWorkspaceContentIds].filter((item) => item !== WORKSPACE_LAUNCHER_ID),
+				filesOpened,
+				openedFiles: openedFileContents.map((content) => content.path).filter(Boolean) as string[],
+				utilities: $workspaceUtilityInstances.map(({ id, kind, title, terminalId }) => ({
+					id,
+					kind,
+					title,
+					terminalId
+				}))
+			};
+			localStorage.setItem(workspaceStateKey(id), JSON.stringify(state));
+		} catch (error) {
+			console.warn('Unable to persist workspace tab state', error);
+		}
+	};
+
+	const restoreWorkspaceState = (id: string) => {
+		const state = readWorkspaceState(id);
+		closedWorkspaceContentIds = new Set(state?.closed ?? []);
+		workspaceContentOrder = state?.order ?? [];
+		filesOpened = state?.filesOpened ?? false;
+		openedFileContents = (state?.openedFiles ?? []).map(buildWorkspaceFileContent);
+		workspaceUtilityInstances.set(state?.utilities ?? []);
+	};
 	$: selectedContent = contents[selectedContentIdx];
 	$: selectedContentId = selectedContent
 		? getWorkspaceContentId(selectedContent, selectedContentIdx)
@@ -183,7 +270,7 @@
 		const nextSourceContents = [
 			...utilityContents.filter((content) => content.workspaceId === WORKSPACE_FILES_ID),
 			...artifactSourceContents,
-			...openedFileContents,
+			...(workspaceRuntime.kind === 'terminal' ? openedFileContents : []),
 			...utilityInstanceContents,
 			...utilityContents.filter((content) => content.workspaceId !== WORKSPACE_FILES_ID)
 		];
@@ -199,6 +286,7 @@
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
 		closedWorkspaceContentIds.delete(WORKSPACE_FILES_ID);
 		rebuildWorkspaceContents();
+		persistWorkspaceState();
 	}
 
 	function selectWorkspaceFiles() {
@@ -228,6 +316,7 @@
 		selectedTerminalId.set(terminalId);
 		workspaceTerminalConnectionId.set(terminalId);
 		rebuildWorkspaceContents();
+		persistWorkspaceState();
 		artifactCode.set(id);
 	}
 
@@ -247,6 +336,7 @@
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
 		closedWorkspaceContentIds.delete(id);
 		rebuildWorkspaceContents();
+		persistWorkspaceState();
 		artifactCode.set(id);
 	}
 
@@ -256,6 +346,7 @@
 			getWorkspaceContentId(content, index)
 		);
 		syncVisibleWorkspaceContents();
+		persistWorkspaceState();
 	}
 
 	function closeWorkspaceTab(tab: WorkspaceTab) {
@@ -277,6 +368,7 @@
 
 		if (contents.length === 0) {
 			artifactCode.set(WORKSPACE_LAUNCHER_ID);
+			persistWorkspaceState();
 			return;
 		}
 
@@ -287,9 +379,11 @@
 			selectedIdx !== -1 ? selectedIdx : Math.min(tab.index, contents.length - 1);
 		const nextContent = contents[selectedContentIdx];
 		artifactCode.set(getWorkspaceContentId(nextContent, selectedContentIdx));
+		persistWorkspaceState();
 	}
 
 	function closeWorkspace() {
+		persistWorkspaceState();
 		dispatch('close');
 		showControls.set(false);
 		showArtifacts.set(false);
@@ -350,6 +444,9 @@
 	};
 
 	onMount(() => {
+		restoreWorkspaceState($chatId ?? '');
+		rebuildWorkspaceContents();
+
 		const unsubscribeArtifactCode = artifactCode.subscribe((value) => {
 			if (value === WORKSPACE_FILES_ID) {
 				ensureWorkspaceFilesOpen();
@@ -364,12 +461,6 @@
 				focusOrOpenWorkspaceUtility('terminal');
 				return;
 			}
-			if (closedWorkspaceContentIds.has(value)) {
-				closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
-				closedWorkspaceContentIds.delete(value);
-				syncVisibleWorkspaceContents();
-			}
-
 			if (contents.length > 0) {
 				const codeIdx = contents.findIndex(
 					(content, index) =>
@@ -383,6 +474,17 @@
 			}
 		});
 
+		const unsubscribeOpenRequest = workspaceOpenRequestId.subscribe((value) => {
+			if (!value) return;
+			workspaceOpenRequestId.set(null);
+			if (!closedWorkspaceContentIds.has(value)) return;
+
+			closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
+			closedWorkspaceContentIds.delete(value);
+			syncVisibleWorkspaceContents();
+			persistWorkspaceState();
+		});
+
 		const unsubscribeArtifactContents = artifactContents.subscribe((value) => {
 			artifactSourceContents = resolveWorkspaceContents(value);
 			rebuildWorkspaceContents();
@@ -390,6 +492,7 @@
 
 		return () => {
 			unsubscribeArtifactCode();
+			unsubscribeOpenRequest();
 			unsubscribeArtifactContents();
 		};
 	});
@@ -397,13 +500,9 @@
 	$: {
 		const nextWorkspaceChatId = $chatId ?? '';
 		if (shouldResetWorkspaceForChatChange($workspaceChatContextId, nextWorkspaceChatId)) {
-			closedWorkspaceContentIds = new Set();
-			openedFileContents = [];
-			workspaceContentOrder = [];
-			filesOpened = false;
+			restoreWorkspaceState(nextWorkspaceChatId);
 			workspaceTerminalConnectionId.set(null);
-			workspaceUtilityInstances.set([]);
-			syncVisibleWorkspaceContents();
+			rebuildWorkspaceContents();
 		}
 		workspaceChatContextId.set(nextWorkspaceChatId);
 	}

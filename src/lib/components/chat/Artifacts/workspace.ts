@@ -26,6 +26,11 @@ export type WorkspaceTab = {
 	closable: boolean;
 };
 
+export type WorkspaceModelFocus = {
+	kind: 'canvas' | 'web_preview';
+	id: string;
+};
+
 export type WorkspaceRuntime =
 	| {
 			kind: 'terminal';
@@ -50,6 +55,14 @@ export type WorkspaceRuntime =
 			writable: false;
 			shell: false;
 			ports: false;
+	  }
+	| {
+			kind: 'unavailable';
+			terminalId: null;
+			files: false;
+			writable: false;
+			shell: false;
+			ports: false;
 	  };
 
 export const resolveWorkspaceRuntime = (
@@ -57,6 +70,20 @@ export const resolveWorkspaceRuntime = (
 	selectedTerminalId: string | null | undefined,
 	pyodideEnabled: boolean
 ): WorkspaceRuntime => {
+	// `null` means the managed Terminal catalog has not loaded or failed to load.
+	// It must not be treated as an authoritative empty catalog because that would
+	// redirect work into Pyodide even when a managed Terminal is configured.
+	if (terminalServers == null) {
+		return {
+			kind: 'unavailable',
+			terminalId: null,
+			files: false,
+			writable: false,
+			shell: false,
+			ports: false
+		};
+	}
+
 	const systemTerminals = (terminalServers ?? []).filter((terminal): terminal is { id: string } =>
 		Boolean(terminal.id)
 	);
@@ -123,6 +150,14 @@ export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: st
 
 export const hasWorkspaceAddActions = (terminalId: string | null, filesAvailable: boolean) =>
 	Boolean(terminalId || filesAvailable);
+
+export const resolveBoundWorkspaceTerminal = <T extends { id?: string }>(
+	terminalServers: T[] | null | undefined,
+	terminalId: string | null | undefined
+): T | null =>
+	terminalId
+		? ((terminalServers ?? []).find((terminal) => terminal.id === terminalId) ?? null)
+		: null;
 
 export const buildWorkspaceFileContent = (path: string): WorkspaceContent => ({
 	type: 'workspace-file',
@@ -193,12 +228,48 @@ export const replaceWorkspaceFileContent = (
 		: [buildWorkspaceFileContent(path)];
 };
 
-export const getWorkspaceContentId = (content: WorkspaceContent, index: number) =>
-	content.workspaceId ??
-	content.previewId ??
-	content.canvasId ??
-	content.noteId ??
-	`${content.type || 'workspace-item'}:${index}`;
+const fallbackWorkspaceIds = new WeakMap<WorkspaceContent, string>();
+
+const hashWorkspaceIdentity = (value: string) => {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index += 1) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(36);
+};
+
+export const getWorkspaceContentId = (content: WorkspaceContent, _index: number) => {
+	const explicitId = content.workspaceId ?? content.previewId ?? content.canvasId ?? content.noteId;
+	if (explicitId) return explicitId;
+
+	const cachedId = fallbackWorkspaceIds.get(content);
+	if (cachedId) return cachedId;
+
+	const type = content.type || 'workspace-item';
+	const identity = [type, content.source ?? '', content.content].join('\u0000');
+	const id = `${type}:${hashWorkspaceIdentity(identity)}`;
+	fallbackWorkspaceIds.set(content, id);
+	return id;
+};
+
+export const getWorkspaceModelFocus = (
+	contents: WorkspaceContent[] | null | undefined,
+	selectedId: string | null | undefined,
+	visible: boolean
+): WorkspaceModelFocus | undefined => {
+	if (!visible || !selectedId) return undefined;
+	const selected = (contents ?? []).find(
+		(content, index) => getWorkspaceContentId(content, index) === selectedId
+	);
+	if (selected?.type === 'canvas-note' && selected.canvasId) {
+		return { kind: 'canvas', id: selected.canvasId };
+	}
+	if (selected?.type === 'web-preview' && selected.previewId) {
+		return { kind: 'web_preview', id: selected.previewId };
+	}
+	return undefined;
+};
 
 export const buildWorkspaceTabs = (contents: WorkspaceContent[]): WorkspaceTab[] =>
 	contents.map((content, index) => ({

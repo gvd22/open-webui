@@ -168,27 +168,33 @@
 	const goBack = async () => {
 		if (!canGoBack) return;
 		navigatingHistory = true;
-		navIndex -= 1;
-		const entry = navHistory[navIndex];
-		await loadDir(entry.path);
-		if (entry.file) {
-			const fileName = entry.file.split('/').pop() ?? '';
-			await openEntry({ name: fileName, type: 'file', size: 0 });
+		try {
+			navIndex -= 1;
+			const entry = navHistory[navIndex];
+			if (!(await loadDir(entry.path))) return;
+			if (entry.file) {
+				const fileName = entry.file.split('/').pop() ?? '';
+				await openEntry({ name: fileName, type: 'file', size: 0 });
+			}
+		} finally {
+			navigatingHistory = false;
 		}
-		navigatingHistory = false;
 	};
 
 	const goForward = async () => {
 		if (!canGoForward) return;
 		navigatingHistory = true;
-		navIndex += 1;
-		const entry = navHistory[navIndex];
-		await loadDir(entry.path);
-		if (entry.file) {
-			const fileName = entry.file.split('/').pop() ?? '';
-			await openEntry({ name: fileName, type: 'file', size: 0 });
+		try {
+			navIndex += 1;
+			const entry = navHistory[navIndex];
+			if (!(await loadDir(entry.path))) return;
+			if (entry.file) {
+				const fileName = entry.file.split('/').pop() ?? '';
+				await openEntry({ name: fileName, type: 'file', size: 0 });
+			}
+		} finally {
+			navigatingHistory = false;
 		}
-		navigatingHistory = false;
 	};
 
 	// ── File preview state ───────────────────────────────────────────────
@@ -202,6 +208,12 @@
 	let fileSqliteData: ArrayBuffer | null = null;
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
+	let directoryRequestSequence = 0;
+	let fileRequestSequence = 0;
+	let contextRequestSequence = 0;
+	let directoryAbortController: AbortController | null = null;
+	let fileAbortController: AbortController | null = null;
+	let destroyed = false;
 
 	// ── Office preview state ────────────────────────────────────────────
 	let fileOfficeHtml: string | null = null;
@@ -293,14 +305,37 @@
 				loading = true;
 				error = null;
 				entries = [];
+				const contextRequestId = ++contextRequestSequence;
+				const requestedTerminalUrl = terminal.url;
+				const requestedChatId = chatId;
 				(async () => {
 					if (terminalChanged) {
 						const config = await getTerminalConfig(terminal.url, terminal.key);
+						if (
+							destroyed ||
+							contextRequestId !== contextRequestSequence ||
+							selectedTerminal?.url !== requestedTerminalUrl ||
+							chatId !== requestedChatId
+						)
+							return;
 						terminalEnabled = config?.features?.terminal !== false;
 					}
 
-					savedPath = applyCwd(await getCwd(terminal.url, terminal.key, chatId ?? undefined));
-					loadDir(savedPath);
+					const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
+					if (
+						destroyed ||
+						contextRequestId !== contextRequestSequence ||
+						selectedTerminal?.url !== requestedTerminalUrl ||
+						chatId !== requestedChatId
+					)
+						return;
+					savedPath = applyCwd(cwd);
+					if (initialFilePath && initialFilePath !== appliedInitialFilePath) {
+						appliedInitialFilePath = initialFilePath;
+						await openRequestedFile(initialFilePath);
+					} else {
+						await loadDir(savedPath);
+					}
 				})();
 			}
 		}
@@ -406,10 +441,17 @@
 	};
 
 	// ── Directory operations ─────────────────────────────────────────────
-	const loadDir = async (path: string) => {
+	const loadDir = async (path: string): Promise<boolean> => {
 		const terminal = selectedTerminal;
-		if (!terminal) return;
+		if (!terminal) return false;
 		const directory = clampToFileRoot(path);
+		const sessionId = chatId ?? undefined;
+		const requestId = ++directoryRequestSequence;
+		directoryAbortController?.abort();
+		directoryAbortController = new AbortController();
+		fileAbortController?.abort();
+		fileRequestSequence += 1;
+		fileLoading = false;
 
 		loading = true;
 		error = null;
@@ -421,11 +463,24 @@
 		savedPath = directory;
 		pushNavHistory(directory);
 
-		const result = await listFiles(terminal.url, terminal.key, directory, chatId ?? undefined);
+		const result = await listFiles(
+			terminal.url,
+			terminal.key,
+			directory,
+			sessionId,
+			directoryAbortController.signal
+		);
+		if (
+			destroyed ||
+			requestId !== directoryRequestSequence ||
+			selectedTerminal?.url !== terminal.url ||
+			(chatId ?? undefined) !== sessionId
+		)
+			return false;
 		loading = false;
 
 		// Set working directory on the terminal server (fire-and-forget)
-		setCwd(terminal.url, terminal.key, directory, chatId ?? undefined);
+		setCwd(terminal.url, terminal.key, directory, sessionId);
 
 		if (result === null) {
 			error =
@@ -434,6 +489,7 @@
 		} else {
 			entries = sortEntries(result);
 		}
+		return true;
 	};
 
 	const openEntry = async (entry: FileEntry, notifyWorkspace = true) => {
@@ -449,94 +505,120 @@
 
 		const terminal = selectedTerminal;
 		if (!terminal) return;
+		const sessionId = chatId ?? undefined;
+		const requestId = ++fileRequestSequence;
+		fileAbortController?.abort();
+		fileAbortController = new AbortController();
+		const isCurrentRequest = () =>
+			!destroyed &&
+			requestId === fileRequestSequence &&
+			selectedFile === filePath &&
+			selectedTerminal?.url === terminal.url &&
+			(chatId ?? undefined) === sessionId;
 
 		selectedFile = filePath;
 		fileLoading = true;
 		clearFilePreview();
 
-		if (isImage(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) fileImageUrl = URL.createObjectURL(result.blob);
-		} else if (isVideo(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) fileVideoUrl = URL.createObjectURL(result.blob);
-		} else if (isAudio(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) fileAudioUrl = URL.createObjectURL(result.blob);
-		} else if (isPdf(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) filePdfData = await result.blob.arrayBuffer();
-		} else if (isSqlite(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) fileSqliteData = await result.blob.arrayBuffer();
-		} else if (isOffice(filePath)) {
-			const result = await downloadFileBlob(
-				terminal.url,
-				terminal.key,
-				filePath,
-				chatId ?? undefined
-			);
-			if (result) {
-				const ext = getFileExt(filePath);
-				const arrayBuffer = await result.blob.arrayBuffer();
-				try {
-					if (ext === 'docx') {
-						const mammoth = await import('mammoth');
-						const res = await mammoth.convertToHtml({ arrayBuffer });
-						const DOMPurify = (await import('dompurify')).default;
-						fileOfficeHtml = DOMPurify.sanitize(res.value);
-					} else if (ext === 'xlsx') {
-						const XLSX = await import('xlsx');
-						const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-						excelWorkbook = wb;
-						excelSheetNames = wb.SheetNames;
-						if (excelSheetNames.length > 0) {
-							selectedExcelSheet = excelSheetNames[0];
-							const { excelToTable } = await import('$lib/utils/excelToTable');
-							const result = await excelToTable(wb.Sheets[selectedExcelSheet]);
-							const DOMPurify = (await import('dompurify')).default;
-							fileOfficeHtml = DOMPurify.sanitize(result.html);
-						}
-					} else if (ext === 'pptx') {
-						const { pptxToImages } = await import('$lib/utils/pptxToHtml');
-						const result = await pptxToImages(arrayBuffer);
-						fileOfficeSlides = result.images;
-						currentSlide = 0;
-					}
-				} catch (e) {
-					console.error('Failed to render Office file:', e);
-					fileContent = `Error previewing file: ${e instanceof Error ? e.message : 'Unknown error'}`;
+		let objectUrl: { kind: 'image' | 'video' | 'audio'; url: string } | null = null;
+		let objectUrlCommitted = false;
+		let nextContent: string | null = null;
+		let nextPdfData: ArrayBuffer | null = null;
+		let nextSqliteData: ArrayBuffer | null = null;
+		let nextOfficeHtml: string | null = null;
+		let nextOfficeSlides: string[] | null = null;
+		let nextWorkbook: import('xlsx').WorkBook | null = null;
+		let nextSheetNames: string[] = [];
+		let nextSelectedSheet = '';
+
+		try {
+			if (isImage(filePath) || isVideo(filePath) || isAudio(filePath)) {
+				const result = await downloadFileBlob(
+					terminal.url,
+					terminal.key,
+					filePath,
+					sessionId,
+					fileAbortController.signal
+				);
+				if (result) {
+					objectUrl = {
+						kind: isImage(filePath) ? 'image' : isVideo(filePath) ? 'video' : 'audio',
+						url: URL.createObjectURL(result.blob)
+					};
 				}
+			} else if (isPdf(filePath) || isSqlite(filePath) || isOffice(filePath)) {
+				const result = await downloadFileBlob(
+					terminal.url,
+					terminal.key,
+					filePath,
+					sessionId,
+					fileAbortController.signal
+				);
+				if (result) {
+					const arrayBuffer = await result.blob.arrayBuffer();
+					if (isPdf(filePath)) nextPdfData = arrayBuffer;
+					else if (isSqlite(filePath)) nextSqliteData = arrayBuffer;
+					else {
+						const ext = getFileExt(filePath);
+						try {
+							if (ext === 'docx') {
+								const mammoth = await import('mammoth');
+								const res = await mammoth.convertToHtml({ arrayBuffer });
+								const DOMPurify = (await import('dompurify')).default;
+								nextOfficeHtml = DOMPurify.sanitize(res.value);
+							} else if (ext === 'xlsx') {
+								const XLSX = await import('xlsx');
+								const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+								nextWorkbook = workbook;
+								nextSheetNames = workbook.SheetNames;
+								if (nextSheetNames.length > 0) {
+									nextSelectedSheet = nextSheetNames[0];
+									const { excelToTable } = await import('$lib/utils/excelToTable');
+									const table = await excelToTable(workbook.Sheets[nextSelectedSheet]);
+									const DOMPurify = (await import('dompurify')).default;
+									nextOfficeHtml = DOMPurify.sanitize(table.html);
+								}
+							} else if (ext === 'pptx') {
+								const { pptxToImages } = await import('$lib/utils/pptxToHtml');
+								nextOfficeSlides = (await pptxToImages(arrayBuffer)).images;
+							}
+						} catch (error) {
+							console.error('Failed to render Office file:', error);
+							nextContent = `Error previewing file: ${error instanceof Error ? error.message : 'Unknown error'}`;
+						}
+					}
+				}
+			} else {
+				nextContent = await readFile(
+					terminal.url,
+					terminal.key,
+					filePath,
+					sessionId,
+					fileAbortController.signal
+				);
 			}
-		} else {
-			fileContent = await readFile(terminal.url, terminal.key, filePath, chatId ?? undefined);
+
+			if (!isCurrentRequest()) {
+				return;
+			}
+
+			if (objectUrl?.kind === 'image') fileImageUrl = objectUrl.url;
+			if (objectUrl?.kind === 'video') fileVideoUrl = objectUrl.url;
+			if (objectUrl?.kind === 'audio') fileAudioUrl = objectUrl.url;
+			objectUrlCommitted = objectUrl !== null;
+			fileContent = nextContent;
+			filePdfData = nextPdfData;
+			fileSqliteData = nextSqliteData;
+			fileOfficeHtml = nextOfficeHtml;
+			fileOfficeSlides = nextOfficeSlides;
+			excelWorkbook = nextWorkbook;
+			excelSheetNames = nextSheetNames;
+			selectedExcelSheet = nextSelectedSheet;
+			currentSlide = 0;
+		} finally {
+			if (objectUrl && !objectUrlCommitted) URL.revokeObjectURL(objectUrl.url);
+			if (isCurrentRequest()) fileLoading = false;
 		}
-		fileLoading = false;
 	};
 
 	let appliedInitialFilePath: string | null | undefined = undefined;
@@ -546,7 +628,7 @@
 		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
 		const name = normalized.slice(separator + 1);
 		if (!name) return;
-		await loadDir(directory);
+		if (!(await loadDir(directory))) return;
 		await openEntry({ name, type: 'file', size: 0 }, false);
 	};
 
@@ -573,7 +655,12 @@
 			// Directories end with '/', downloaded as a ZIP archive
 			const isDir = path.endsWith('/');
 			const result = isDir
-				? await archiveFromTerminal(terminal.url, terminal.key, [path.replace(/\/$/, '')])
+				? await archiveFromTerminal(
+						terminal.url,
+						terminal.key,
+						[path.replace(/\/$/, '')],
+						chatId ?? undefined
+					)
 				: await downloadFileBlob(terminal.url, terminal.key, path, chatId ?? undefined);
 			if (!result) {
 				toast.error($i18n.t('Download failed'));
@@ -696,7 +783,13 @@
 		if (!terminal) return;
 
 		const emptyFile = new File([''], name, { type: 'application/octet-stream' });
-		const result = await uploadToTerminal(terminal.url, terminal.key, currentPath, emptyFile);
+		const result = await uploadToTerminal(
+			terminal.url,
+			terminal.key,
+			currentPath,
+			emptyFile,
+			chatId ?? undefined
+		);
 		toast[result ? 'success' : 'error']($i18n.t(result ? 'File created' : 'Failed to create file'));
 		await loadDir(currentPath);
 	};
@@ -843,7 +936,12 @@
 		const paths = [...selectedEntries];
 		let ok = 0;
 		for (const p of paths) {
-			const result = await deleteEntry(terminal.url, terminal.key, p.replace(/\/$/, ''));
+			const result = await deleteEntry(
+				terminal.url,
+				terminal.key,
+				p.replace(/\/$/, ''),
+				chatId ?? undefined
+			);
 			if (result) ok++;
 		}
 		toast[ok > 0 ? 'success' : 'error'](
@@ -870,7 +968,12 @@
 		const toastId = toast.loading($i18n.t('Preparing download...'));
 		try {
 			// Archive everything into a single ZIP
-			const result = await archiveFromTerminal(terminal.url, terminal.key, paths);
+			const result = await archiveFromTerminal(
+				terminal.url,
+				terminal.key,
+				paths,
+				chatId ?? undefined
+			);
 			if (!result) {
 				toast.error($i18n.t('Download failed'));
 				return;
@@ -923,7 +1026,7 @@
 			const fileName = filePath.substring(lastSlash + 1);
 
 			// Always reload directory to ensure entries are fresh
-			await loadDir(dir);
+			if (!(await loadDir(dir))) return;
 			await tick();
 
 			const entry = entries.find((e) => e.name === fileName);
@@ -961,18 +1064,43 @@
 
 		if (!handledDisplayFile && terminal) {
 			loading = true;
+			const contextRequestId = ++contextRequestSequence;
+			const requestedTerminalUrl = terminal.url;
+			const requestedChatId = chatId;
 
 			void (async () => {
 				// Discover server features on initial mount
 				const config = await getTerminalConfig(terminal.url, terminal.key);
+				if (
+					destroyed ||
+					contextRequestId !== contextRequestSequence ||
+					selectedTerminal?.url !== requestedTerminalUrl ||
+					chatId !== requestedChatId
+				)
+					return;
 				terminalEnabled = config?.features?.terminal !== false;
 
 				if (chatId || savedPath === '/') {
 					// Fetch session-specific cwd from the server (or global default for new chats)
-					savedPath = applyCwd(await getCwd(terminal.url, terminal.key, chatId ?? undefined));
+					const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
+					if (
+						destroyed ||
+						contextRequestId !== contextRequestSequence ||
+						selectedTerminal?.url !== requestedTerminalUrl ||
+						chatId !== requestedChatId
+					)
+						return;
+					savedPath = applyCwd(cwd);
 				}
 				savedPath = clampToFileRoot(savedPath);
-				loadDir(savedPath);
+				if (initialFilePath) {
+					if (initialFilePath !== appliedInitialFilePath) {
+						appliedInitialFilePath = initialFilePath;
+						await openRequestedFile(initialFilePath);
+					}
+					return;
+				}
+				await loadDir(savedPath);
 			})();
 		}
 
@@ -1008,6 +1136,12 @@
 	});
 
 	onDestroy(() => {
+		destroyed = true;
+		contextRequestSequence += 1;
+		directoryRequestSequence += 1;
+		fileRequestSequence += 1;
+		directoryAbortController?.abort();
+		fileAbortController?.abort();
 		if (fileImageUrl) URL.revokeObjectURL(fileImageUrl);
 		if (fileVideoUrl) URL.revokeObjectURL(fileVideoUrl);
 		if (fileAudioUrl) URL.revokeObjectURL(fileAudioUrl);
@@ -1429,7 +1563,13 @@
 						const fileName = selectedFile.split('/').pop() ?? 'file';
 						const dir = selectedFile.substring(0, selectedFile.lastIndexOf('/') + 1) || '/';
 						const file = new File([content], fileName, { type: 'text/plain' });
-						const result = await uploadToTerminal(terminal.url, terminal.key, dir, file);
+						const result = await uploadToTerminal(
+							terminal.url,
+							terminal.key,
+							dir,
+							file,
+							chatId ?? undefined
+						);
 						toast[result ? 'success' : 'error'](
 							$i18n.t(result ? 'File saved' : 'Failed to save file')
 						);

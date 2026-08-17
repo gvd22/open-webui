@@ -32,6 +32,7 @@ from open_webui.utils.access_control import (
     has_public_write_access_grant,
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.canvas import sync_linked_canvases_from_note
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -576,6 +577,8 @@ async def update_note_by_id(
 
     try:
         note = await Notes.update_note_by_id(id, form_data, db=db)
+        markdown = (((note.data or {}).get('content') or {}).get('md') or '')
+        await sync_linked_canvases_from_note(note.id, note.user_id, note.title, markdown, db=db)
         pinned_note_ids = await Notes.get_pinned_note_ids(user.id, db=db)
         note.is_pinned = note.id in pinned_note_ids
 

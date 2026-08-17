@@ -5,6 +5,7 @@ import {
 	findNewToolWebPreview,
 	getWebPreviewsFromHistory,
 	getWebPreviewsFromOutput,
+	mergeLocalWebPreviewDraft,
 	mergePersistedWebPreview,
 	type WebPreviewArtifact
 } from './webPreview';
@@ -26,7 +27,8 @@ const toolOutput = (previewId: string, title = 'Counter', heading = 'One') => ({
 			'styles.css': { content: 'h1 { color: red; }', mime: 'text/css' },
 			'app.js': { content: 'document.body.dataset.ready = "yes";', mime: 'text/javascript' }
 		},
-		updatedAt: 10
+		updatedAt: 10,
+		contentHash: `hash-${previewId}`
 	})
 });
 
@@ -37,8 +39,49 @@ describe('Web Preview contract', () => {
 			previewId: 'preview-1',
 			title: 'Counter',
 			entrypoint: 'index.html',
-			files: { 'app.js': { mime: 'text/javascript' } }
+			files: { 'app.js': { mime: 'text/javascript' } },
+			contentHash: 'hash-preview-1'
 		});
+	});
+
+	it('keeps the last file package when a later tool result is a compact reference', () => {
+		const history = {
+			currentId: 'assistant-2',
+			messages: {
+				'assistant-1': {
+					id: 'assistant-1',
+					role: 'assistant',
+					parentId: null,
+					output: [toolOutput('p1')]
+				},
+				'assistant-2': {
+					id: 'assistant-2',
+					role: 'assistant',
+					parentId: 'assistant-1',
+					output: [
+						{
+							type: 'function_call_output',
+							output: JSON.stringify({
+								type: 'web_preview.document',
+								previewId: 'p1',
+								title: 'Updated counter',
+								entrypoint: 'index.html',
+								updatedAt: 20
+							})
+						}
+					]
+				}
+			}
+		};
+
+		expect(getWebPreviewsFromHistory(history)).toMatchObject([
+			{
+				previewId: 'p1',
+				title: 'Updated counter',
+				files: { 'index.html': { mime: 'text/html' } },
+				hasFilePayload: false
+			}
+		]);
 	});
 
 	it('inlines local styles and scripts without a runtime', () => {
@@ -167,5 +210,49 @@ describe('Web Preview contract', () => {
 				updated_at: 20
 			})
 		).toMatchObject({ title: 'Edited', content: '<h1>Edited</h1>', updatedAt: 20 });
+	});
+
+	it('keeps an unsaved local draft in the shared artifact state across remounts', () => {
+		const artifact = getWebPreviewsFromOutput([toolOutput('preview-1')])[0];
+		const files = {
+			...artifact.files,
+			'index.html': { content: '<h1>Local draft</h1>', mime: 'text/html' }
+		};
+
+		expect(
+			mergeLocalWebPreviewDraft(artifact, {
+				title: 'Edited locally',
+				entrypoint: 'index.html',
+				files
+			})
+		).toMatchObject({ title: 'Edited locally', content: '<h1>Local draft</h1>', files });
+	});
+
+	it('renders bounded Web Preview read and replace calls as workspace activities', () => {
+		const output = buildOutputDisplayItems([
+			{
+				type: 'function_call',
+				call_id: 'read-1',
+				name: 'web_preview_read_file',
+				status: 'completed'
+			},
+			{
+				type: 'function_call_output',
+				call_id: 'read-1',
+				output: JSON.stringify({ type: 'web_preview.file_excerpt', previewId: 'preview-1' })
+			},
+			{
+				type: 'function_call',
+				call_id: 'replace-1',
+				name: 'web_preview_replace_text',
+				status: 'completed'
+			},
+			{ ...toolOutput('preview-1'), call_id: 'replace-1' }
+		]);
+
+		expect(output.filter((item) => item.type === 'web_preview_activity')).toMatchObject([
+			{ name: 'web_preview_read_file', done: true },
+			{ name: 'web_preview_replace_text', done: true, artifact: { previewId: 'preview-1' } }
+		]);
 	});
 });

@@ -69,9 +69,12 @@
 	export const saveEdit = async () => {
 		if (!onSave) return;
 		saving = true;
-		await onSave(editContent);
-		saving = false;
-		editing = false;
+		try {
+			await onSave(editContent);
+			editing = false;
+		} finally {
+			saving = false;
+		}
 	};
 
 	export const cancelEdit = () => {
@@ -83,9 +86,12 @@
 	export const saveCodeFile = async () => {
 		if (!onSave) return;
 		saving = true;
-		const content = fileCodeEditorRef?.getValue() ?? '';
-		await onSave(content);
-		saving = false;
+		try {
+			const content = fileCodeEditorRef?.getValue() ?? '';
+			await onSave(content);
+		} finally {
+			saving = false;
+		}
 	};
 
 	$: isTextFile = fileContent !== null && fileImageUrl === null && filePdfData === null;

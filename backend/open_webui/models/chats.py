@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
+import inspect
 import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 # local imports
 from open_webui.internal.db import Base, JSONField, get_async_db_context
@@ -35,6 +40,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql import case, exists
 from sqlalchemy.sql.expression import bindparam
@@ -616,6 +622,85 @@ class ChatTable:
                 return ChatModel.model_validate(chat_item)
         except Exception:
             return
+
+    async def mutate_chat_by_id(
+        self,
+        id: str,
+        mutator: Callable[
+            [dict, AsyncSession],
+            tuple[dict, Any] | Awaitable[tuple[dict, Any]],
+        ],
+        *,
+        user_id: str | None = None,
+        db: AsyncSession | None = None,
+        touch: bool = False,
+        max_retries: int = 5,
+    ) -> tuple[ChatModel, Any] | None:
+        """Atomically mutate chat JSON without replacing a stale snapshot.
+
+        Databases with row locking serialize the read-modify-write operation.
+        SQLite uses a compare-and-swap update and retries after conflicts.
+        The mutator may write related rows with the supplied session; those
+        writes commit or roll back together with the chat mutation.
+        """
+        async with get_async_db_context(db) as session:
+            dialect = session.bind.dialect.name if session.bind else ''
+            use_compare_and_swap = dialect == 'sqlite'
+
+            for attempt in range(max_retries):
+                try:
+                    conditions = [Chat.id == id]
+                    if user_id is not None:
+                        conditions.append(Chat.user_id == user_id)
+
+                    stmt = select(Chat).where(*conditions)
+                    if not use_compare_and_swap:
+                        stmt = stmt.with_for_update()
+                    chat_item = (await session.execute(stmt)).scalar_one_or_none()
+                    if chat_item is None:
+                        return None
+
+                    original_chat = copy.deepcopy(chat_item.chat or {})
+                    mutation = mutator(copy.deepcopy(original_chat), session)
+                    if inspect.isawaitable(mutation):
+                        mutation = await mutation
+                    updated_chat, result = mutation
+                    cleaned_chat = self._clean_null_bytes(updated_chat)
+
+                    values: dict[str, Any] = {'chat': cleaned_chat}
+                    if touch:
+                        values['updated_at'] = int(time.time())
+
+                    if use_compare_and_swap:
+                        update_stmt = update(Chat).where(*conditions, Chat.chat == original_chat).values(**values)
+                        update_result = await session.execute(update_stmt)
+                        if update_result.rowcount != 1:
+                            await session.rollback()
+                            if attempt + 1 < max_retries:
+                                await asyncio.sleep(0)
+                                continue
+                            raise RuntimeError(f'Concurrent chat mutation did not converge for chat {id}')
+                    else:
+                        chat_item.chat = cleaned_chat
+                        if touch:
+                            chat_item.updated_at = values['updated_at']
+
+                    await session.commit()
+                    session.expire_all()
+                    persisted = await session.get(Chat, id)
+                    if persisted is None:
+                        raise RuntimeError(f'Chat {id} disappeared after mutation')
+                    return ChatModel.model_validate(persisted), result
+                except OperationalError:
+                    await session.rollback()
+                    if not use_compare_and_swap or attempt + 1 >= max_retries:
+                        raise
+                    await asyncio.sleep(0.01 * (attempt + 1))
+                except Exception:
+                    await session.rollback()
+                    raise
+
+            raise RuntimeError(f'Unable to persist chat mutation for chat {id}')
 
     async def update_chat_variables_by_id(
         self,

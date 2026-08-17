@@ -1304,7 +1304,13 @@ export const updateTransientCanvasDocument = async (
 	token: string,
 	chatId: string,
 	canvasId: string,
-	document: { title: string; content: string; title_edited: boolean }
+	document: {
+		title: string;
+		content: string;
+		title_edited: boolean;
+		expected_updated_at?: number | null;
+		expected_content_hash?: string | null;
+	}
 ) => {
 	const res = await fetch(
 		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}`,
@@ -1320,7 +1326,8 @@ export const updateTransientCanvasDocument = async (
 	);
 
 	if (!res.ok) {
-		throw await res.json();
+		const body = await res.json().catch(() => ({}));
+		throw Object.assign(body, { status: res.status });
 	}
 
 	return res.json();
@@ -1376,7 +1383,14 @@ export const promoteTransientCanvasDocument = async (
 	token: string,
 	chatId: string,
 	canvasId: string,
-	document: { title: string; content: string; html?: string; json?: object | null }
+	document: {
+		title: string;
+		content: string;
+		html?: string;
+		json?: object | null;
+		expected_updated_at: number | null;
+		expected_content_hash: string | null;
+	}
 ) => {
 	const res = await fetch(
 		`${WEBUI_API_BASE_URL}/chats/${encodeURIComponent(chatId)}/canvas/${encodeURIComponent(canvasId)}/promote`,
@@ -1392,7 +1406,8 @@ export const promoteTransientCanvasDocument = async (
 	);
 
 	if (!res.ok) {
-		throw await res.json();
+		const body = await res.json().catch(() => ({}));
+		throw Object.assign(body, { status: res.status });
 	}
 
 	return res.json();
@@ -1408,6 +1423,8 @@ export const updateTransientWebPreview = async (
 		files: Record<string, unknown>;
 		exported_path?: string | null;
 		exported_runtime?: string | null;
+		expected_updated_at?: number | null;
+		expected_content_hash?: string | null;
 	}
 ) => {
 	const res = await fetch(
@@ -1423,7 +1440,10 @@ export const updateTransientWebPreview = async (
 		}
 	);
 
-	if (!res.ok) throw await res.json();
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw Object.assign(body, { status: res.status });
+	}
 	return res.json();
 };
 

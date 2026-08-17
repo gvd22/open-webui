@@ -139,9 +139,12 @@
 			return true;
 		});
 		toolServers.set(toolServersData);
+	};
 
-		// Fetch terminal servers the user has access to (for FileNav + terminal_id)
-		const systemTerminals = await getTerminalServers(localStorage.token);
+	const setManagedTerminalServers = async () => {
+		// A failed catalog request is not equivalent to having no configured Terminal.
+		// Keep the store unresolved so runtime selection cannot silently fall back to Pyodide.
+		const systemTerminals = await getTerminalServers(localStorage.token, { throwOnError: true });
 		terminalServers.set(
 			systemTerminals.map((t) => ({
 				id: t.id,
@@ -230,15 +233,17 @@
 
 		selectedTerminalId.set(localStorage.selectedTerminalId ?? null);
 
-		const loadToolServers = setToolServers().catch((e) => {
-			console.error('Failed to load tool servers:', e);
-			terminalServers.set([]);
-		});
+		const loadWorkspaceConnections = Promise.all([
+			setToolServers().catch((e) => console.error('Failed to load tool servers:', e)),
+			setManagedTerminalServers().catch((e) =>
+				console.error('Failed to load managed Terminal servers:', e)
+			)
+		]);
 		if (
 			$page.url.searchParams.get('q') &&
 			($page.url.searchParams.get('submit') ?? 'true') === 'true'
 		) {
-			await loadToolServers;
+			await loadWorkspaceConnections;
 		}
 
 		const setupKeyboardShortcuts = () => {

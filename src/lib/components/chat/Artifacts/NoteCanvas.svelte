@@ -1,13 +1,25 @@
 <script lang="ts">
-	import { createEventDispatcher, getContext, onDestroy } from 'svelte';
+	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
+	import { toast } from 'svelte-sonner';
 
 	import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
-	import { undoLastTransientCanvasAiUpdate, updateTransientCanvasDocument } from '$lib/apis/chats';
+	import {
+		selectTransientCanvasDocument,
+		undoLastTransientCanvasAiUpdate,
+		updateTransientCanvasDocument
+	} from '$lib/apis/chats';
 	import { artifactContents, config, user } from '$lib/stores';
 	import CanvasEditor from './CanvasEditor.svelte';
 	import { canSynchronizeCanvasDocumentChange, canUseNotes } from './canvas';
+	import {
+		createSerializedSaveQueue,
+		registerWorkspaceSaveBarrier,
+		resetWorkspaceSaveVersion,
+		runWorkspaceOptimisticSave
+	} from './serializedSaveQueue';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -30,14 +42,11 @@
 	let linkedContent = content;
 	let lastTitleProp = title;
 	let lastContentProp = content;
-	let linkedSaveTimer: ReturnType<typeof setTimeout> | null = null;
-	let pendingWorkspaceDocument: {
-		canvasId: string;
-		title: string;
-		content: string;
-	} | null = null;
 	let isApplyingExternalDocument = false;
 	let suppressWorkspaceSyncUntil = Date.now() + 300;
+	let linkedNoteUnavailable = false;
+	let saveConflict = false;
+	let unregisterSaveBarrier = () => {};
 
 	const markExternalDocumentUpdate = () => {
 		isApplyingExternalDocument = true;
@@ -58,16 +67,6 @@
 		markExternalDocumentUpdate();
 	}
 
-	onDestroy(() => {
-		if (linkedSaveTimer) {
-			clearTimeout(linkedSaveTimer);
-			linkedSaveTimer = null;
-			if (pendingWorkspaceDocument) {
-				void saveCanvasContext(pendingWorkspaceDocument);
-			}
-		}
-	});
-
 	const updateWorkspaceTitle = (nextTitle: string) => {
 		const isManualChange =
 			canSynchronizeCanvasDocumentChange(isApplyingExternalDocument, suppressWorkspaceSyncUntil) &&
@@ -82,31 +81,47 @@
 					? {
 							...item,
 							title: nextTitle,
+							titleEdited: true,
 							canUndoAiUpdate: isManualChange ? false : item.canUndoAiUpdate
 						}
 					: item
 			)
 		);
+		queueWorkspaceSave();
 	};
 
 	const saveCanvasContext = async (documentToSave: {
 		canvasId: string;
 		title: string;
 		content: string;
+		expectedUpdatedAt?: number;
+		expectedContentHash?: string;
 	}) => {
 		if (!chatId || !documentToSave.canvasId) {
 			return;
 		}
 
 		try {
-			const document = await updateTransientCanvasDocument(
-				localStorage.token,
-				chatId,
-				documentToSave.canvasId,
+			const document = await runWorkspaceOptimisticSave(
+				{ kind: 'canvas', id: documentToSave.canvasId },
 				{
-					title: documentToSave.title,
-					content: documentToSave.content,
-					title_edited: true
+					updatedAt: documentToSave.expectedUpdatedAt,
+					contentHash: documentToSave.expectedContentHash
+				},
+				async (version) => {
+					const saved = await updateTransientCanvasDocument(
+						localStorage.token,
+						chatId,
+						documentToSave.canvasId,
+						{
+							title: documentToSave.title,
+							content: documentToSave.content,
+							title_edited: true,
+							expected_updated_at: version.updatedAt ?? null,
+							expected_content_hash: version.contentHash ?? null
+						}
+					);
+					return { ...saved, updatedAt: saved.updated_at };
 				}
 			);
 			(artifactContents as any).update((items: any[]) =>
@@ -117,17 +132,65 @@
 								title: document.title,
 								content: document.content,
 								updatedAt: document.updated_at,
+								contentHash: document.contentHash,
 								titleEdited: Boolean(document.title_edited)
 							}
 						: item
 				)
 			);
-			if (pendingWorkspaceDocument === documentToSave) {
-				pendingWorkspaceDocument = null;
+			saveConflict = false;
+		} catch (error: any) {
+			saveConflict = true;
+			if (error?.status === 409) {
+				try {
+					const document = await selectTransientCanvasDocument(
+						localStorage.token,
+						chatId,
+						documentToSave.canvasId
+					);
+					linkedTitle = document.title ?? linkedTitle;
+					linkedContent = document.content ?? linkedContent;
+					(artifactContents as any).update((items: any[]) =>
+						(items ?? []).map((item) =>
+							item?.canvasId === documentToSave.canvasId
+								? {
+										...item,
+										title: linkedTitle,
+										content: linkedContent,
+										updatedAt: document.updated_at,
+										contentHash: document.contentHash
+									}
+								: item
+						)
+					);
+					resetWorkspaceSaveVersion(
+						{ kind: 'canvas', id: documentToSave.canvasId },
+						{ updatedAt: document.updated_at, contentHash: document.contentHash }
+					);
+					saveConflict = false;
+				} catch {
+					// Preserve the conflict state if the canonical document is unavailable.
+				}
+				toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
+				return;
 			}
-		} catch (error) {
 			console.error('Unable to synchronize Canvas context', error);
 		}
+	};
+	const workspaceSaveQueue = createSerializedSaveQueue(saveCanvasContext);
+
+	const queueWorkspaceSave = () => {
+		if (!chatId || !canvasId) return;
+		const current = ((get(artifactContents) ?? []) as any[]).find(
+			(item) => item?.canvasId === canvasId
+		);
+		workspaceSaveQueue.enqueue({
+			canvasId,
+			title: linkedTitle,
+			content: linkedContent,
+			expectedUpdatedAt: current?.updatedAt,
+			expectedContentHash: current?.contentHash
+		});
 	};
 
 	const updateWorkspaceDocument = (updates: { title?: string; content?: string }) => {
@@ -154,28 +217,31 @@
 			)
 		);
 
-		if (!isManualChange || !chatId || !canvasId) {
-			return;
-		}
-
-		if (linkedSaveTimer) {
-			clearTimeout(linkedSaveTimer);
-		}
-		const documentToSave = {
-			canvasId,
-			title: linkedTitle,
-			content: linkedContent
-		};
-		pendingWorkspaceDocument = documentToSave;
-		linkedSaveTimer = setTimeout(async () => {
-			try {
-				linkedSaveTimer = null;
-				await saveCanvasContext(documentToSave);
-			} finally {
-				linkedSaveTimer = null;
-			}
-		}, 500);
+		queueWorkspaceSave();
 	};
+
+	const markLinkedNoteUnavailable = () => {
+		linkedNoteUnavailable = true;
+		(artifactContents as any).update((items: any[]) =>
+			(items ?? []).map((item) =>
+				item?.canvasId === canvasId ? { ...item, noteId: undefined } : item
+			)
+		);
+	};
+
+	onMount(() => {
+		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
+			{ kind: 'canvas', id: canvasId },
+			async () => {
+				await workspaceSaveQueue.flush();
+				return !saveConflict;
+			}
+		);
+	});
+
+	onDestroy(() => {
+		void workspaceSaveQueue.flush().finally(unregisterSaveBarrier);
+	});
 
 	const undoAiUpdate = async () => {
 		if (!chatId || !canvasId) {
@@ -196,7 +262,8 @@
 								content: document.content,
 								titleEdited: Boolean(document.title_edited),
 								canUndoAiUpdate: false,
-								updatedAt: document.updated_at
+								updatedAt: document.updated_at,
+								contentHash: document.contentHash
 							}
 						: item
 				)
@@ -207,7 +274,7 @@
 	};
 </script>
 
-{#if noteId && notesAvailable}
+{#if noteId && notesAvailable && !linkedNoteUnavailable}
 	<div class="h-full min-h-0 bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
 		<NoteEditor
 			id={noteId}
@@ -217,6 +284,7 @@
 			onClose={() => dispatch('close')}
 			onTitleChange={updateWorkspaceTitle}
 			onDocumentChange={updateWorkspaceDocument}
+			onUnavailable={markLinkedNoteUnavailable}
 			onUndoCanvasAiUpdate={undoAiUpdate}
 		/>
 	</div>
@@ -230,7 +298,7 @@
 			{titleEdited}
 			{canUndoAiUpdate}
 			{showClose}
-			{noteId}
+			noteId={linkedNoteUnavailable ? '' : noteId}
 			on:close={() => dispatch('close')}
 		/>
 	{/key}

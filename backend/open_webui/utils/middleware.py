@@ -81,8 +81,10 @@ from open_webui.utils.access_control.files import get_owner_accessible_folder_fi
 from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.chat_id import is_saved_chat_id
-from open_webui.utils.canvas import get_active_canvas_prompt
-from open_webui.utils.web_preview import get_active_web_preview_prompt
+from open_webui.utils.workspace_context import (
+    build_workspace_context_prompt,
+    compact_workspace_tool_output,
+)
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.context_compaction import compact_messages_for_request
 from open_webui.utils.files import (
@@ -2091,7 +2093,7 @@ def process_messages_with_output(
         if message.get('role') == 'assistant' and message.get('output'):
             # Use output items for clean OpenAI-format messages
             output_messages = convert_output_to_messages(
-                message['output'],
+                compact_workspace_tool_output(message['output']),
                 raw=True,
                 reasoning_format=reasoning_format,
                 flatten_tool_images=True,
@@ -2378,32 +2380,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             log.exception('Context compaction failed; continuing with full chat history')
 
     form_data['messages'] = strip_compaction_fields(form_data.get('messages', []))
-
-    canvas_capability = model.get('info', {}).get('meta', {}).get('capabilities', {}).get('canvas', False)
-    if canvas_capability and is_saved_chat_id(chat_id):
-        canvas_prompt = await get_active_canvas_prompt(
-            chat_id,
-            getattr(user, 'id', ''),
-        )
-        if canvas_prompt:
-            form_data['messages'] = add_or_update_system_message(
-                canvas_prompt,
-                form_data.get('messages', []),
-                append=True,
-            )
-
-    web_preview_capability = model.get('info', {}).get('meta', {}).get('capabilities', {}).get('web_preview', False)
-    if web_preview_capability and is_saved_chat_id(chat_id):
-        web_preview_prompt = await get_active_web_preview_prompt(
-            chat_id,
-            getattr(user, 'id', ''),
-        )
-        if web_preview_prompt:
-            form_data['messages'] = add_or_update_system_message(
-                web_preview_prompt,
-                form_data.get('messages', []),
-                append=True,
-            )
 
     # Process messages with OR-aligned output items for clean LLM messages
     form_data['messages'] = process_messages_with_output(
@@ -2980,6 +2956,23 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # If context is not empty, insert it into the messages
     if sources and prompt:
         form_data['messages'] = await apply_source_context_to_messages(request, form_data['messages'], sources, prompt)
+
+    if is_saved_chat_id(chat_id):
+        workspace_chat = await Chats.get_chat_by_id_and_user_id(chat_id, getattr(user, 'id', ''))
+        workspace_data = (workspace_chat.chat or {}) if workspace_chat else {}
+        workspace_prompt = build_workspace_context_prompt(
+            workspace_data,
+            metadata.get('workspace_focus'),
+            model,
+            form_data,
+            metadata.get('tools'),
+        )
+        if workspace_prompt:
+            form_data['messages'] = add_or_update_system_message(
+                workspace_prompt,
+                form_data.get('messages', []),
+                append=True,
+            )
 
     # If there are citations, add them to the data_items
     sources = [
@@ -4120,7 +4113,8 @@ async def streaming_chat_response_handler(response, ctx):
             last_response_id = None
 
             def full_output():
-                return prior_output + output if prior_output else output
+                current = prior_output + output if prior_output else output
+                return compact_workspace_tool_output(current)
 
             def get_message_error_content(error):
                 if isinstance(error, HTTPException):
@@ -5238,6 +5232,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 item = {**item, 'output': [p for p in parts if p.get('type') != 'input_image']}
                         frontend_output.append(item)
 
+                    frontend_output = compact_workspace_tool_output(frontend_output)
                     await event_emitter(
                         {
                             'type': 'chat:completion',
@@ -5530,10 +5525,11 @@ async def streaming_chat_response_handler(response, ctx):
                     if item.get('status') == 'in_progress':
                         item['status'] = 'completed'
 
+                stored_output = compact_workspace_tool_output(output)
                 title = await Chats.get_chat_title_by_id(metadata['chat_id']) if save_to_chat else ''
                 data = {
                     'done': True,
-                    'output': output,
+                    'output': stored_output,
                     'title': title,
                     **({'usage': usage} if usage else {}),
                 }
@@ -5546,7 +5542,17 @@ async def streaming_chat_response_handler(response, ctx):
                             metadata['message_id'],
                             {
                                 'done': True,
-                                'output': output,
+                                'output': stored_output,
+                                **({'usage': usage} if usage else {}),
+                            },
+                        )
+                    elif stored_output != output:
+                        await Chats.upsert_message_to_chat_by_id_and_message_id(
+                            metadata['chat_id'],
+                            metadata['message_id'],
+                            {
+                                'done': True,
+                                'output': stored_output,
                                 **({'usage': usage} if usage else {}),
                             },
                         )
@@ -5563,7 +5569,9 @@ async def streaming_chat_response_handler(response, ctx):
                             {'done': True},
                         )
 
-                await publish_chat_finished_event(request, user, metadata, title, ''.join(content_parts), output)
+                await publish_chat_finished_event(
+                    request, user, metadata, title, ''.join(content_parts), stored_output
+                )
 
                 await event_emitter(
                     {
@@ -5573,8 +5581,8 @@ async def streaming_chat_response_handler(response, ctx):
                 )
 
                 ctx['assistant_message'] = {
-                    'content': ''.join(content_parts) or get_output_text(output),
-                    'output': output,
+                    'content': ''.join(content_parts) or get_output_text(stored_output),
+                    'output': stored_output,
                     **({'usage': usage} if usage else {}),
                 }
                 await outlet_filter_handler(ctx)
@@ -5595,22 +5603,17 @@ async def streaming_chat_response_handler(response, ctx):
                 async def save_cancelled_state():
                     await event_emitter({'type': 'chat:tasks:cancel'})
                     if save_to_chat:
-                        if not ENABLE_REALTIME_CHAT_SAVE:
-                            await Chats.upsert_message_to_chat_by_id_and_message_id(
-                                metadata['chat_id'],
-                                metadata['message_id'],
-                                {
-                                    'done': True,
-                                    'output': output,
-                                },
-                            )
-                        else:
-                            await Chats.upsert_message_to_chat_by_id_and_message_id(
-                                metadata['chat_id'],
-                                metadata['message_id'],
-                                {'done': True},
-                                touch=False,
-                            )
+                        from open_webui.utils.workspace_context import build_cancelled_workspace_output_update
+
+                        await Chats.upsert_message_to_chat_by_id_and_message_id(
+                            metadata['chat_id'],
+                            metadata['message_id'],
+                            build_cancelled_workspace_output_update(
+                                output,
+                                realtime=ENABLE_REALTIME_CHAT_SAVE,
+                            ),
+                            **({'touch': False} if ENABLE_REALTIME_CHAT_SAVE else {}),
+                        )
 
                 try:
                     await asyncio.shield(save_cancelled_state())
