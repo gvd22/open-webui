@@ -15,7 +15,11 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import WordDocumentViewer from './WordDocumentViewer.svelte';
 	import PowerPointDocumentViewer from './PowerPointDocumentViewer.svelte';
-	import { readPyodideWorkerFile } from './pyodideFileRead';
+	import {
+		assertDocumentSize,
+		DOCUMENT_TOO_LARGE_ERROR,
+		readPyodideWorkerFile
+	} from './pyodideFileRead';
 	import {
 		getWorkspaceFileRefreshAction,
 		getWorkspaceFileUpdateAction,
@@ -95,7 +99,7 @@
 				'The document service is temporarily unavailable. Try again when it reconnects.'
 			);
 		}
-		if (cause instanceof Error && cause.message === 'too-large') {
+		if (cause instanceof Error && cause.message === DOCUMENT_TOO_LARGE_ERROR) {
 			return $i18n.t('This document is too large to display here.');
 		}
 		return $i18n.t('This document could not be opened.');
@@ -116,9 +120,7 @@
 					? await readTerminalFile(abortController.signal)
 					: await readPyodideFile(abortController.signal);
 			if (generation !== loadGeneration) return;
-			if (nextData.byteLength > maxDocumentBytes[format]) {
-				throw new Error('Document exceeds the viewer size limit');
-			}
+			assertDocumentSize(nextData, maxDocumentBytes[format]);
 			candidateData = nextData;
 			candidateGeneration = generation;
 			error = '';

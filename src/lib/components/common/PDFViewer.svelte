@@ -34,6 +34,8 @@
 	let loadedData: ArrayBuffer | Uint8Array | null = null;
 	let loadedUrl: string | null = null;
 	let loadGeneration = 0;
+	let fetchController: AbortController | null = null;
+	let pdfLoadingTask: any = null;
 	let resizeObserver: ResizeObserver | null = null;
 	let currentPage = 1;
 
@@ -266,11 +268,25 @@
 		}, 120);
 	};
 
+	const cancelPendingLoad = () => {
+		fetchController?.abort();
+		fetchController = null;
+		const loadingTask = pdfLoadingTask;
+		pdfLoadingTask = null;
+		void Promise.resolve(loadingTask?.destroy?.()).catch(() => {});
+	};
+
 	const loadPdf = async () => {
-		if (!url && !data) return;
 		const generation = ++loadGeneration;
+		cancelPendingLoad();
+		if (!url && !data) {
+			loading = false;
+			return;
+		}
 		const previousAnchor = getPageAnchor(getPageMetrics(), outerContainer?.scrollTop ?? 0);
 		const previousZoom = zoomLevel;
+		const previousLoadedData = loadedData;
+		const previousLoadedUrl = loadedUrl;
 		let candidatePdfDoc: any = null;
 		let previousPdfDoc: any = null;
 		let previousScene: ChildNode[] = [];
@@ -288,11 +304,23 @@
 			let pdfData: ArrayBuffer | Uint8Array;
 			if (data) pdfData = data;
 			else {
-				const response = await fetch(url!, { credentials: 'include' });
-				if (!response.ok) throw new Error(`HTTP ${response.status}`);
-				pdfData = await response.arrayBuffer();
+				const controller = new AbortController();
+				fetchController = controller;
+				try {
+					const response = await fetch(url!, { credentials: 'include', signal: controller.signal });
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					pdfData = await response.arrayBuffer();
+				} finally {
+					if (fetchController === controller) fetchController = null;
+				}
 			}
-			candidatePdfDoc = await pdfjs.getDocument({ data: pdfData }).promise;
+			const loadingTask = pdfjs.getDocument({ data: pdfData });
+			pdfLoadingTask = loadingTask;
+			try {
+				candidatePdfDoc = await loadingTask.promise;
+			} finally {
+				if (pdfLoadingTask === loadingTask) pdfLoadingTask = null;
+			}
 			if (candidatePdfDoc.numPages > 1000) throw new Error('PDF exceeds the viewer page limit');
 			if (generation !== loadGeneration) {
 				await candidatePdfDoc.destroy();
@@ -307,8 +335,6 @@
 			pzInstance?.dispose();
 			sceneElement.replaceChildren(...candidateScene.childNodes);
 			pdfDoc = candidatePdfDoc;
-			loadedData = data;
-			loadedUrl = url;
 			lastRenderedZoom = 1;
 			initPanzoom();
 			if (previousZoom !== 1 && pzInstance) {
@@ -324,6 +350,8 @@
 				releaseOwnedPreviousPdf();
 				return;
 			}
+			loadedData = data;
+			loadedUrl = url;
 			observePages();
 			dispatch('preview-rendered', data);
 			releaseOwnedPreviousPdf();
@@ -346,6 +374,17 @@
 				outerContainer.scrollTop = getScrollTopForPageAnchor(getPageMetrics(), previousAnchor);
 				observePages();
 				void candidatePdfDoc.destroy();
+			} else if (candidatePdfDoc && candidatePdfDoc === pdfDoc) {
+				releaseAllPages();
+				pzInstance?.dispose();
+				sceneElement.replaceChildren();
+				pdfDoc = null;
+				zoomLevel = 1;
+				lastRenderedZoom = 1;
+				currentPage = 1;
+				loadedData = previousLoadedData;
+				loadedUrl = previousLoadedUrl;
+				await candidatePdfDoc.destroy();
 			} else if (candidatePdfDoc && candidatePdfDoc !== pdfDoc) await candidatePdfDoc.destroy();
 			console.error('PDF render error:', cause);
 			error = 'Failed to load PDF.';
@@ -364,6 +403,7 @@
 	onDestroy(() => {
 		mounted = false;
 		loadGeneration += 1;
+		cancelPendingLoad();
 		if (rerenderTimer) clearTimeout(rerenderTimer);
 		if (resizeTimer) clearTimeout(resizeTimer);
 		if (resizeFrame) cancelAnimationFrame(resizeFrame);

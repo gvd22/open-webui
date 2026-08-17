@@ -8,16 +8,16 @@ describe('workspace document viewer accessibility contract', () => {
 	it('removes inactive document panels from pixels, focus order, and the accessibility tree', () => {
 		const source = readComponent('WorkspaceDocumentPanels.svelte');
 
-		expect(source).toContain(
-			'hidden={selectedContentId !== getWorkspaceContentId(content, index)}'
-		);
+		expect(source).toContain('hidden={selectedContentId !== getWorkspaceContentId(content, index)}');
 		expect(source).not.toContain('class:invisible={selectedContentId');
 	});
 
 	it('renders only the selected document viewer and leaves inactive owners empty', () => {
 		const source = readComponent('WorkspaceDocumentPanels.svelte');
 
-		expect(source).toContain('hidden={selectedContentId !== getWorkspaceContentId(content, index)}');
+		expect(source).toContain(
+			'hidden={selectedContentId !== getWorkspaceContentId(content, index)}'
+		);
 		expect(source).toContain('{#if selectedContentId === getWorkspaceContentId(content, index)}');
 		expect(source).toContain('id={`workspace-panel-${index}`}');
 		expect(source).not.toContain('<div class="absolute inset-0"></div>');
@@ -82,6 +82,23 @@ describe('workspace document viewer accessibility contract', () => {
 			/bind:this=\{host\}\s+role="slider"[\s\S]*?aria-label=\{\$i18n\.t\('PowerPoint presentation'\)\}[\s\S]*?on:keydown=\{handlePresentationKeydown\}/
 		);
 		expect(source.match(/on:keydown=\{handlePresentationKeydown\}/g)).toHaveLength(1);
+	});
+
+	it('drops stale or rejected PowerPoint slide navigation without changing the active slide', () => {
+		const source = readComponent('DocumentViewer/PowerPointDocumentViewer.svelte');
+
+		expect(source).toMatch(
+			/const activeViewer = viewer;\s+const generation = renderGeneration;\s+if \(!mounted \|\| !activeViewer \|\| navigationPending\) return;\s+const navigation = \+\+navigationGeneration;/
+		);
+		expect(source).toMatch(
+			/try \{\s+await activeViewer\.goToSlide\([\s\S]*?\);\s+\} catch \(cause\) \{[\s\S]*?return;\s+\}/
+		);
+		expect(source).toMatch(
+			/!mounted \|\|\s+viewer !== activeViewer \|\|\s+generation !== renderGeneration \|\|\s+navigation !== navigationGeneration/
+		);
+		expect(source).toContain('currentSlide = activeViewer.currentSlideIndex');
+		expect(source).toContain('navigationGeneration += 1;');
+		expect(source).toContain('navigationPending = false;');
 	});
 
 	it('keeps the PowerPoint keyboard controls free of Svelte accessibility warnings', () => {

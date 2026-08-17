@@ -24,11 +24,15 @@
 	let renderedData: ArrayBuffer | null = null;
 	let attemptedData: ArrayBuffer | null = null;
 	let renderGeneration = 0;
+	let navigationGeneration = 0;
+	let navigationPending = false;
 	let renderAbortController: AbortController | null = null;
 
 	const loadPresentation = async () => {
 		if (!mounted || !host || data === attemptedData) return;
 		const generation = ++renderGeneration;
+		navigationGeneration += 1;
+		navigationPending = false;
 		renderAbortController?.abort();
 		const abortController = new AbortController();
 		renderAbortController = abortController;
@@ -125,18 +129,52 @@
 		}
 	};
 
-	const changeSlide = async (direction: -1 | 1) => {
-		if (!viewer) return;
-		const next = Math.max(0, Math.min(slideCount - 1, currentSlide + direction));
-		if (next === currentSlide) return;
-		await viewer.goToSlide(next);
-		currentSlide = viewer.currentSlideIndex;
+	const goToSlide = async (index: number) => {
+		const activeViewer = viewer;
+		const generation = renderGeneration;
+		if (!mounted || !activeViewer || navigationPending) return;
+		const navigation = ++navigationGeneration;
+		navigationPending = true;
+
+		try {
+			await activeViewer.goToSlide(Math.max(0, Math.min(slideCount - 1, index)));
+		} catch (cause) {
+			if (
+				mounted &&
+				viewer === activeViewer &&
+				generation === renderGeneration &&
+				navigation === navigationGeneration
+			) {
+				console.error('PowerPoint slide navigation failed:', cause);
+			}
+			return;
+		} finally {
+			if (
+				mounted &&
+				viewer === activeViewer &&
+				generation === renderGeneration &&
+				navigation === navigationGeneration
+			) {
+				navigationPending = false;
+			}
+		}
+
+		if (
+			!mounted ||
+			viewer !== activeViewer ||
+			generation !== renderGeneration ||
+			navigation !== navigationGeneration
+		) {
+			return;
+		}
+
+		currentSlide = activeViewer.currentSlideIndex;
 	};
 
-	const goToSlide = async (index: number) => {
-		if (!viewer) return;
-		await viewer.goToSlide(Math.max(0, Math.min(slideCount - 1, index)));
-		currentSlide = viewer.currentSlideIndex;
+	const changeSlide = async (direction: -1 | 1) => {
+		const next = Math.max(0, Math.min(slideCount - 1, currentSlide + direction));
+		if (next === currentSlide) return;
+		await goToSlide(next);
 	};
 
 	const handlePresentationKeydown = (event: KeyboardEvent) => {
@@ -172,6 +210,8 @@
 	onDestroy(() => {
 		mounted = false;
 		renderGeneration += 1;
+		navigationGeneration += 1;
+		navigationPending = false;
 		renderAbortController?.abort();
 		viewer?.destroy();
 		viewerLinkObserver?.disconnect();
@@ -191,7 +231,7 @@
 		bind:this={host}
 		role="slider"
 		tabindex={slideCount > 0 ? 0 : -1}
-		aria-disabled={slideCount === 0}
+		aria-disabled={slideCount === 0 || navigationPending}
 		aria-label={$i18n.t('PowerPoint presentation')}
 		aria-valuemin="1"
 		aria-valuemax={Math.max(1, slideCount)}
@@ -242,7 +282,7 @@
 			<button
 				type="button"
 				class="flex size-9 items-center justify-center rounded-full transition hover:bg-white/10 disabled:opacity-35"
-				disabled={currentSlide === 0}
+				disabled={currentSlide === 0 || navigationPending}
 				aria-label={$i18n.t('Previous slide')}
 				on:click={() => void changeSlide(-1)}
 			>
@@ -257,7 +297,7 @@
 			<button
 				type="button"
 				class="flex size-9 items-center justify-center rounded-full transition hover:bg-white/10 disabled:opacity-35"
-				disabled={currentSlide >= slideCount - 1}
+				disabled={currentSlide >= slideCount - 1 || navigationPending}
 				aria-label={$i18n.t('Next slide')}
 				on:click={() => void changeSlide(1)}
 			>
