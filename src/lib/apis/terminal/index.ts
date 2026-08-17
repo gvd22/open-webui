@@ -38,6 +38,21 @@ export type TerminalServer = {
 	name: string;
 };
 
+export type TerminalFileDownload =
+	| { ok: true; blob: Blob; filename: string }
+	| { ok: false; reason: 'unavailable' | 'missing' | 'too-large' | 'failed' };
+
+const toBlobPart = (value: Uint8Array): ArrayBuffer => {
+	if (
+		value.buffer instanceof ArrayBuffer &&
+		value.byteOffset === 0 &&
+		value.byteLength === value.buffer.byteLength
+	) {
+		return value.buffer;
+	}
+	return new Uint8Array(value).buffer;
+};
+
 export const getTerminalServers = async (
 	token: string,
 	options: { throwOnError?: boolean } = {}
@@ -143,24 +158,67 @@ export const readFile = async (
 	return json?.content ?? null;
 };
 
-export const downloadFileBlob = async (
+export const downloadFileBlobDetailed = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
 	sessionId?: string,
+	maxBytes?: number,
 	signal?: AbortSignal
-): Promise<{ blob: Blob; filename: string } | null> => {
+): Promise<TerminalFileDownload> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
 	const res = await fetch(url, { headers, signal }).catch(() => null);
 
-	if (!res || !res.ok) return null;
+	if (!res) return { ok: false, reason: 'unavailable' };
+	if (!res.ok) return { ok: false, reason: res.status === 404 ? 'missing' : 'unavailable' };
+	const declaredBytes = Number(res.headers.get('content-length'));
+	if (maxBytes && Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+		await res.body?.cancel();
+		return { ok: false, reason: 'too-large' };
+	}
 
 	const filename = path.split('/').pop() ?? 'file';
-	const blob = await res.blob().catch(() => null);
-	if (!blob) return null;
-	return { blob, filename };
+	let blob: Blob | null = null;
+	if (maxBytes && res.body) {
+		const reader = res.body.getReader();
+		const chunks: ArrayBuffer[] = [];
+		let receivedBytes = 0;
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				receivedBytes += value.byteLength;
+				if (receivedBytes > maxBytes) {
+					await reader.cancel();
+					return { ok: false, reason: 'too-large' };
+				}
+				chunks.push(toBlobPart(value));
+			}
+			blob = new Blob(chunks, { type: res.headers.get('content-type') ?? undefined });
+		} catch {
+			await reader.cancel().catch(() => undefined);
+			return { ok: false, reason: 'failed' };
+		}
+	} else {
+		blob = await res.blob().catch(() => null);
+	}
+	if (!blob) return { ok: false, reason: 'failed' };
+	return { ok: true, blob, filename };
+};
+
+/** Legacy callers only need the bytes; viewer callers use the detailed result above. */
+export const downloadFileBlob = async (
+	baseUrl: string,
+	apiKey: string,
+	path: string,
+	sessionId?: string,
+	maxBytes?: number,
+	signal?: AbortSignal
+): Promise<{ blob: Blob; filename: string } | null> => {
+	const result = await downloadFileBlobDetailed(baseUrl, apiKey, path, sessionId, maxBytes, signal);
+	return result.ok ? result : null;
 };
 
 export const archiveFromTerminal = async (

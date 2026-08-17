@@ -22,13 +22,34 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Abort if package.json unchanged
         run: |
-          git diff --cached --diff-filter=d package.json || {
-            echo "package.json not modified — skipping release"
+          BEFORE="${{ github.event.before }}"
+          CURRENT="${{ github.sha }}"
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "initial push has no parent commit; refusing an unverifiable release"
             exit 1
-          }
+          fi
+          if ! git cat-file -e "$BEFORE^{commit}"; then
+            echo "push-before commit is unavailable; refusing an unverifiable release"
+            exit 1
+          fi
+          set +e
+          git diff --quiet "$BEFORE" "$CURRENT" -- package.json
+          DIFF_STATUS=$?
+          set -e
+          if [ "$DIFF_STATUS" -eq 1 ]; then
+            echo "package.json changed; continuing release"
+          elif [ "$DIFF_STATUS" -eq 0 ]; then
+            echo "package.json not modified; skipping release"
+            exit 1
+          elif [ "$DIFF_STATUS" -gt 1 ]; then
+            echo "git diff failed with status $DIFF_STATUS; refusing release"
+            exit "$DIFF_STATUS"
+          fi
 
       - name: Read version
         id: pkg

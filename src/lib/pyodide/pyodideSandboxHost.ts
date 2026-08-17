@@ -8,6 +8,7 @@ const sandboxScript = String.raw`
 	let pyodideReady = null;
 	let stdout = null;
 	let stderr = null;
+	const workspaceRoot = '/mnt/uploads';
 
 	function post(message, transfer) {
 		parent.postMessage(message, '*', transfer || []);
@@ -26,8 +27,30 @@ const sandboxScript = String.raw`
 			},
 			packages: ['micropip']
 		});
-		pyodide.FS.mkdirTree('/mnt/uploads');
+		pyodide.FS.mkdirTree(workspaceRoot);
 		await pyodide.pyimport('micropip').install(packages || []);
+		await resetPythonWorkspace();
+	}
+
+	async function resetPythonWorkspace() {
+		await pyodide.runPythonAsync('import os\nos.environ["HOME"] = "' + workspaceRoot + '"\nos.chdir("' + workspaceRoot + '")');
+	}
+
+	function requireWorkspacePath(path) {
+		if (typeof path !== 'string' || !path.startsWith('/') || path.includes('\0')) {
+			throw new Error('Path is outside the Pyodide workspace');
+		}
+		const parts = [];
+		for (const part of path.split('/')) {
+			if (!part || part === '.') continue;
+			if (part === '..') parts.pop();
+			else parts.push(part);
+		}
+		const normalized = '/' + parts.join('/');
+		if (normalized !== workspaceRoot && !normalized.startsWith(workspaceRoot + '/')) {
+			throw new Error('Path is outside the Pyodide workspace');
+		}
+		return normalized;
 	}
 
 	async function ensureRuntime(packages) {
@@ -47,14 +70,16 @@ const sandboxScript = String.raw`
 	}
 
 	function upload(files, dir) {
-		dir = dir || '/mnt/uploads';
+		dir = requireWorkspacePath(dir || workspaceRoot);
 		ensureDir(dir);
 		for (const file of files || []) {
-			pyodide.FS.writeFile(dir + '/' + file.name, new Uint8Array(file.data));
+			const target = requireWorkspacePath(dir + '/' + file.name);
+			pyodide.FS.writeFile(target, new Uint8Array(file.data));
 		}
 	}
 
 	function list(path) {
+		path = requireWorkspacePath(path);
 		const entries = [];
 		try {
 			const names = pyodide.FS.readdir(path).filter(function (name) {
@@ -72,6 +97,8 @@ const sandboxScript = String.raw`
 	}
 
 	function remove(path) {
+		path = requireWorkspacePath(path);
+		if (path === workspaceRoot) throw new Error('The Pyodide workspace root cannot be deleted');
 		try {
 			const stat = pyodide.FS.stat(path);
 			if (!pyodide.FS.isDir(stat.mode)) {
@@ -134,6 +161,7 @@ const sandboxScript = String.raw`
 		let result = null;
 		if (files && files.length > 0) upload(files);
 		try {
+			await resetPythonWorkspace();
 			if (code.includes('matplotlib')) await patchMatplotlib();
 			result = clean(await pyodide.runPythonAsync(code));
 		} catch (error) {
@@ -163,7 +191,19 @@ const sandboxScript = String.raw`
 					break;
 				case 'fs:read':
 					try {
-						const buffer = pyodide.FS.readFile(data.path).buffer;
+						const path = requireWorkspacePath(data.path);
+						const stat = pyodide.FS.stat(path);
+						if (pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+						if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+							throw new Error('File metadata is invalid');
+						}
+						if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
+						const buffer = pyodide.FS.readFile(path).buffer;
+						if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
 						post({ id: id, type: data.type, data: buffer }, [buffer]);
 					} catch (error) {
 						post({ id: id, type: data.type, error: error && error.message ? error.message : String(error) });
@@ -174,7 +214,7 @@ const sandboxScript = String.raw`
 					post({ id: id, type: data.type, success: true });
 					break;
 				case 'fs:mkdir':
-					pyodide.FS.mkdirTree(data.path);
+					pyodide.FS.mkdirTree(requireWorkspacePath(data.path));
 					post({ id: id, type: data.type, success: true });
 					break;
 				case 'fs:sync':

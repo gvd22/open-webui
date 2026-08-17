@@ -45,7 +45,9 @@
 	let visibleBreadcrumbs: { label: string; path: string }[] = [];
 	$: {
 		visibleBreadcrumbs =
-			breadcrumbs[0]?.label.toLowerCase() === 'workspace' ? breadcrumbs.slice(1) : breadcrumbs;
+			breadcrumbs[0]?.label.toLowerCase() === 'workspace'
+				? [{ ...breadcrumbs[0], label: $i18n.t('Files') }, ...breadcrumbs.slice(1)]
+				: breadcrumbs;
 		if (visibleBreadcrumbs[0]?.label === '/') {
 			visibleBreadcrumbs = [
 				{ ...visibleBreadcrumbs[0], label: 'Home' },

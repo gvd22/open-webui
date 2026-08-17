@@ -100,6 +100,18 @@ describe('Web Preview contract', () => {
 		expect(html).toContain('<script data-preview-file="app.js">window.ready = true;</script>');
 	});
 
+	it('inlines standard JavaScript MIME aliases', () => {
+		const html = composeWebPreviewHtml({
+			'index.html': {
+				content: '<script src="app.js"></script>',
+				mime: 'text/html'
+			},
+			'app.js': { content: 'window.ready = true;', mime: 'application/javascript; charset=utf-8' }
+		});
+
+		expect(html).toContain('<script data-preview-file="app.js">window.ready = true;</script>');
+	});
+
 	it('resolves nested relative styles, scripts, and assets', () => {
 		const html = composeWebPreviewHtml(
 			{

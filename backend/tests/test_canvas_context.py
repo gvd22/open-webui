@@ -39,10 +39,20 @@ from open_webui.utils.canvas import (
     generate_canvas_title,
     is_internal_note_chat,
     set_active_canvas_document,
+    serialize_canvas_documents,
     sync_linked_canvas_note_content,
 )
 from open_webui.utils.tools import get_builtin_tools, supports_chat_workspace_tools
 from starlette.requests import Request
+
+
+def test_serialized_canvas_documents_include_current_content_hash_without_mutating_chat():
+    chat_data = {CANVAS_DOCUMENTS_KEY: {'canvas-1': {'canvas_id': 'canvas-1', 'content': 'Current content'}}}
+
+    serialized = serialize_canvas_documents(chat_data)
+
+    assert serialized[CANVAS_DOCUMENTS_KEY]['canvas-1']['content_hash'] == canvas_content_hash('Current content')
+    assert 'content_hash' not in chat_data[CANVAS_DOCUMENTS_KEY]['canvas-1']
 
 
 def test_active_canvas_prompt_targets_existing_document_for_updates():
@@ -513,6 +523,7 @@ def test_internal_note_chat_loses_note_tools_when_permission_is_revoked(monkeypa
         AsyncMock(return_value=SimpleNamespace(meta={'internal': True, 'type': 'note'})),
     )
     monkeypatch.setattr(Config, 'get_many', AsyncMock(return_value={'notes.enable': True}))
+    monkeypatch.setattr(Config, 'get', AsyncMock(return_value={}))
     monkeypatch.setattr(tools_utils, 'has_permission', AsyncMock(return_value=False))
 
     tools = asyncio.run(
@@ -680,6 +691,7 @@ def test_direct_note_update_synchronizes_linked_canvas(monkeypatch):
     monkeypatch.setattr(Notes, 'get_note_by_id', AsyncMock(return_value=existing_note))
     monkeypatch.setattr(Notes, 'update_note_by_id', AsyncMock(return_value=updated_note))
     monkeypatch.setattr(Notes, 'get_pinned_note_ids', AsyncMock(return_value=[]))
+    monkeypatch.setattr(Config, 'get', AsyncMock(return_value={}))
     monkeypatch.setattr(notes_router, 'filter_allowed_access_grants', AsyncMock(return_value=[]))
     monkeypatch.setattr(notes_router, 'sync_linked_canvases_from_note', sync)
     monkeypatch.setattr(notes_router.sio, 'emit', AsyncMock())
@@ -776,9 +788,7 @@ def test_canvas_select_clears_deleted_linked_note(monkeypatch):
     monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
     monkeypatch.setattr(Notes, 'get_note_by_id', AsyncMock(return_value=None))
 
-    result = json.loads(
-        asyncio.run(canvas_select_document('canvas-1', __chat_id__=chat.id, __user__={'id': 'user-1'}))
-    )
+    result = json.loads(asyncio.run(canvas_select_document('canvas-1', __chat_id__=chat.id, __user__={'id': 'user-1'})))
 
     assert result['noteId'] is None
     assert result['updatedAt'] > 9

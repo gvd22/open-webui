@@ -34,6 +34,8 @@
 		showControls,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceFileUpdate,
+		workspaceOpenFilePaths,
 		pyodideWorker,
 		desktopEvent
 	} from '$lib/stores';
@@ -71,6 +73,7 @@
 		removeAllDetails
 	} from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
+	import { isWorkspaceDocumentPath } from '$lib/components/chat/Artifacts/workspace';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
@@ -285,6 +288,12 @@
 		return worker;
 	};
 
+	const invalidatePyodideWorkspaceFiles = () => {
+		// Python can create, replace, rename, or remove arbitrary files. Do not guess
+		// paths or switch to another filesystem; open viewers verify on activation.
+		window.dispatchEvent(new CustomEvent('pyodide:files', { detail: { paths: undefined } }));
+	};
+
 	const executePythonAsWorker = async (id, code, cb, files = []) => {
 		let result = null;
 		let stdout = null;
@@ -345,6 +354,7 @@
 				// Terminate and recreate the worker on timeout
 				worker.terminate();
 				pyodideWorker.set(null);
+				invalidatePyodideWorkspaceFiles();
 
 				if (cb) {
 					cb(
@@ -396,6 +406,7 @@
 			}
 
 			executing = false;
+			invalidatePyodideWorkspaceFiles();
 		};
 
 		const onError = (event) => {
@@ -419,6 +430,7 @@
 				);
 			}
 			executing = false;
+			invalidatePyodideWorkspaceFiles();
 		};
 
 		worker.addEventListener('message', onMessage);
@@ -459,12 +471,32 @@
 
 			if (data?.name === 'display_file' && data?.params?.path) {
 				if (res?.exists !== false) {
-					displayFileHandler(data.params.path, { showControls, showFileNavPath });
+					if ($workspaceOpenFilePaths.includes(data.params.path)) {
+						workspaceFileUpdate.set({
+							path: data.params.path,
+							kind: 'changed',
+							revision: Date.now()
+						});
+					} else {
+						displayFileHandler(data.params.path, { showControls, showFileNavPath });
+					}
 				}
 			}
 
-			if (['write_file'].includes(data?.name) && data?.params?.path) {
-				showFileNavDir.set(res?.path ?? data.params.path);
+			if (['write_file', 'replace_file_content'].includes(data?.name) && data?.params?.path) {
+				const path = res?.path ?? data.params.path;
+				if (isWorkspaceDocumentPath(path)) {
+					if ($workspaceOpenFilePaths.includes(path)) {
+						workspaceFileUpdate.set({ path, kind: 'changed', revision: Date.now() });
+					} else {
+						displayFileHandler(path, { showControls, showFileNavPath });
+					}
+				}
+				showFileNavDir.set(path);
+			}
+
+			if (data?.name === 'run_command') {
+				workspaceFileUpdate.set({ kind: 'unknown', revision: Date.now() });
 			}
 
 			if (cb) {

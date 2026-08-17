@@ -68,6 +68,25 @@ def canvas_content_hash(content: object) -> str:
     return hashlib.sha256(str(content or '').encode()).hexdigest()
 
 
+def serialize_canvas_documents(chat_data: dict) -> dict:
+    """Return chat data with current Canvas hashes for optimistic concurrency."""
+    documents = chat_data.get(CANVAS_DOCUMENTS_KEY)
+    if not isinstance(documents, dict):
+        return chat_data
+
+    return {
+        **chat_data,
+        CANVAS_DOCUMENTS_KEY: {
+            canvas_id: {
+                **document,
+                'content_hash': canvas_content_hash(document.get('content', '')),
+            }
+            for canvas_id, document in documents.items()
+            if isinstance(document, dict)
+        },
+    }
+
+
 def require_canvas_precondition(
     canvas_id: str,
     document: dict,
@@ -201,7 +220,7 @@ async def sync_linked_canvas_note_content(
             data={
                 **(note.data or {}),
                 'content': build_canvas_note_content(markdown),
-            }
+            },
         ),
         db=db,
         commit=commit,
@@ -231,6 +250,7 @@ async def sync_linked_canvases_from_note(
 
     updated_chats = []
     for chat_id in chat_ids:
+
         def mutate(chat_data: dict, _session):
             documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
             changed = False
@@ -321,7 +341,9 @@ def build_active_canvas_prompt(
     active_canvas_id = (
         focused_canvas_id
         if focused_canvas_id is not None
-        else chat_data.get(CANVAS_ACTIVE_DOCUMENT_KEY) if use_persisted_active else None
+        else chat_data.get(CANVAS_ACTIVE_DOCUMENT_KEY)
+        if use_persisted_active
+        else None
     )
     document = documents.get(active_canvas_id)
     catalog = [

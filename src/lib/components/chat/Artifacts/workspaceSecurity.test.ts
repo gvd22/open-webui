@@ -25,7 +25,7 @@ describe('workspace security and configuration invariants', () => {
 		expect(artifacts).toContain('workspaceContentOrder');
 		expect(artifacts).toContain('item !== WORKSPACE_LAUNCHER_ID');
 		expect(artifacts).toContain('workspaceOpenRequestId.subscribe');
-		expect(artifacts).toContain("workspaceRuntime.kind === 'terminal' ? openedFileContents : []");
+		expect(artifacts).toContain('workspaceRuntime.files ? openedFileContents : []');
 		expect(artifacts).toContain("console.warn('Unable to persist workspace tab state'");
 	});
 

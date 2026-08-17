@@ -16,7 +16,10 @@ export type WorkspaceContent = {
 	source?: string;
 	path?: string;
 	terminalId?: string;
+	fileFormat?: WorkspaceDocumentFormat;
 };
+
+export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx';
 
 export type WorkspaceTab = {
 	id: string;
@@ -148,8 +151,12 @@ export const isKeyboardActivationClick = (detail: number) => detail === 0;
 export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: string) =>
 	Boolean(previousId && previousId !== nextId);
 
-export const hasWorkspaceAddActions = (terminalId: string | null, filesAvailable: boolean) =>
-	Boolean(terminalId || filesAvailable);
+export const getDefaultWorkspaceContentId = (runtime: WorkspaceRuntime) =>
+	runtime.kind === 'pyodide' ? WORKSPACE_FILES_ID : WORKSPACE_LAUNCHER_ID;
+
+// Files is the default Pyodide surface, not an additional workspace tool. The add
+// menu is reserved for managed Terminal environments that can create more tabs.
+export const hasWorkspaceAddActions = (terminalId: string | null) => Boolean(terminalId);
 
 export const resolveBoundWorkspaceTerminal = <T extends { id?: string }>(
 	terminalServers: T[] | null | undefined,
@@ -159,12 +166,30 @@ export const resolveBoundWorkspaceTerminal = <T extends { id?: string }>(
 		? ((terminalServers ?? []).find((terminal) => terminal.id === terminalId) ?? null)
 		: null;
 
+export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentFormat | null => {
+	const extension = path.split('.').pop()?.toLowerCase();
+	return extension === 'pdf' || extension === 'docx' || extension === 'pptx' ? extension : null;
+};
+
+export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boolean) =>
+	enabled ? getWorkspaceDocumentFormat(path) : null;
+
+export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFormat(path) !== null;
+
+/**
+ * Shared by the Terminal and Pyodide Files views before either delegates to a
+ * workspace tab. Formats outside the narrow viewer contract stay in Files.
+ */
+export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
+	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
+
 export const buildWorkspaceFileContent = (path: string): WorkspaceContent => ({
 	type: 'workspace-file',
 	workspaceId: getWorkspaceFileId(path),
 	title: path.split('/').filter(Boolean).at(-1) || 'File',
 	content: '',
-	path
+	path,
+	fileFormat: getWorkspaceDocumentFormat(path) ?? undefined
 });
 
 export const buildWorkspaceUtilityContents = ({
@@ -226,6 +251,78 @@ export const replaceWorkspaceFileContent = (
 	return contents.length === 1 && getWorkspaceContentId(contents[0], 0) === id
 		? contents
 		: [buildWorkspaceFileContent(path)];
+};
+
+export const upsertWorkspaceFileContent = (
+	contents: WorkspaceContent[],
+	path: string
+): WorkspaceContent[] => {
+	const id = getWorkspaceFileId(path);
+	return contents.some((content, index) => getWorkspaceContentId(content, index) === id)
+		? contents
+		: [...contents, buildWorkspaceFileContent(path)];
+};
+
+export const limitWorkspaceFileContents = (
+	contents: WorkspaceContent[],
+	recency: string[],
+	activeId: string,
+	maximum: number
+) => {
+	const ids = contents.map((content, index) => getWorkspaceContentId(content, index));
+	const contentIds = new Set(ids);
+	const orderedIds = [
+		...new Set(recency.filter((id) => contentIds.has(id))),
+		...ids.filter((id) => !recency.includes(id))
+	];
+	const remainingIds = new Set(ids);
+	const evictedIds: string[] = [];
+
+	for (const id of orderedIds) {
+		if (remainingIds.size <= Math.max(1, maximum)) break;
+		if (id !== activeId) {
+			remainingIds.delete(id);
+			evictedIds.push(id);
+		}
+	}
+
+	return {
+		contents: contents.filter((content, index) =>
+			remainingIds.has(getWorkspaceContentId(content, index))
+		),
+		recency: orderedIds.filter((id) => remainingIds.has(id)),
+		evictedIds
+	};
+};
+
+export const nextDocumentLoadSequence = (current: number) => current + 1;
+
+export const getWorkspaceFileRefreshAction = (
+	changedPaths: string[] | undefined,
+	path: string,
+	isActive: boolean
+): 'ignore' | 'refresh' | 'defer' => {
+	if (changedPaths?.length && !changedPaths.includes(path)) return 'ignore';
+	return isActive ? 'refresh' : 'defer';
+};
+
+export type WorkspaceFileChange = {
+	path?: string;
+	previousPath?: string;
+	kind?: 'changed' | 'deleted' | 'renamed' | 'unknown';
+};
+
+export const getWorkspaceFileUpdateAction = (
+	update: WorkspaceFileChange | null,
+	path: string,
+	isActive: boolean
+): 'ignore' | 'refresh' | 'defer' | 'deleted' | 'renamed' => {
+	if (!update) return 'ignore';
+	const refersToPath = update.path === path || update.previousPath === path;
+	if (update.kind === 'deleted' && refersToPath) return 'deleted';
+	if (update.kind === 'renamed' && update.previousPath === path) return 'renamed';
+	if (update.kind !== 'unknown' && !refersToPath) return 'ignore';
+	return isActive ? 'refresh' : 'defer';
 };
 
 const fallbackWorkspaceIds = new WeakMap<WorkspaceContent, string>();

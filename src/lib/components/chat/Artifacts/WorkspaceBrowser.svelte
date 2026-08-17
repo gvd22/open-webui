@@ -24,6 +24,7 @@
 
 	export let overlay = false;
 	export let terminalId: string | null = null;
+	export let active = true;
 
 	let ports: ListeningPort[] = [];
 	let selectedPort: number | null = null;
@@ -32,6 +33,7 @@
 	let loadedTerminalUrl = '';
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let portsRequestSequence = 0;
+	let mounted = false;
 
 	$: terminal = resolveBoundWorkspaceTerminal($terminalServers, terminalId);
 
@@ -76,7 +78,7 @@
 		if (isKeyboardActivationClick(event.detail)) action();
 	};
 
-	$: if (terminal?.url && terminal.url !== loadedTerminalUrl) {
+	$: if (active && terminal?.url && terminal.url !== loadedTerminalUrl) {
 		loadedTerminalUrl = terminal.url;
 		loadPorts();
 	}
@@ -94,8 +96,19 @@
 		loadError = $i18n.t('This Terminal connection is unavailable');
 	}
 
+	const syncPolling = (isActive: boolean) => {
+		if (isActive && !pollTimer) pollTimer = setInterval(() => void loadPorts(false), 4000);
+		if (!isActive && pollTimer) {
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+	};
+
+	$: if (mounted) syncPolling(active);
+
 	onMount(() => {
-		pollTimer = setInterval(() => void loadPorts(false), 4000);
+		mounted = true;
+		syncPolling(active);
 	});
 
 	onDestroy(() => {

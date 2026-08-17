@@ -35,9 +35,9 @@
 	import Embeds from './ChatControls/Embeds.svelte';
 	import Overview from './Overview.svelte';
 	import {
+		getDefaultWorkspaceContentId,
 		resolveWorkspaceRuntime,
-		WORKSPACE_FILES_ID,
-		WORKSPACE_LAUNCHER_ID
+		WORKSPACE_FILES_ID
 	} from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
@@ -101,7 +101,7 @@
 	// The header button now owns a single end-user surface. Technical Controls stay
 	// in administration and never become the empty-chat default.
 	$: if ($showControls && !$showCallOverlay && !$showEmbeds && !$showArtifacts) {
-		openWorkspaceItem(WORKSPACE_LAUNCHER_ID);
+		openWorkspaceItem(getDefaultWorkspaceContentId(workspaceRuntime));
 	}
 
 	// Auto-switch to Files tab when display_file is triggered

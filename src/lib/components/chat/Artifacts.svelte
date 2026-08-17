@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { onMount, getContext, createEventDispatcher } from 'svelte';
+	import { onMount, onDestroy, getContext, createEventDispatcher } from 'svelte';
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
 
@@ -17,7 +17,9 @@
 		workspaceChatContextId,
 		workspaceOpenRequestId,
 		workspaceTerminalConnectionId,
-		workspaceUtilityInstances
+		workspaceUtilityInstances,
+		workspaceActiveFile,
+		workspaceOpenFilePaths
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 	import { injectCsp } from '$lib/utils/csp';
@@ -35,14 +37,17 @@
 	import WorkspaceBrowser from './Artifacts/WorkspaceBrowser.svelte';
 	import WorkspaceLauncher from './Artifacts/WorkspaceLauncher.svelte';
 	import WebPreviewRenderer from './Artifacts/WebPreviewRenderer.svelte';
+	import WorkspaceDocumentPanels from './Artifacts/WorkspaceDocumentPanels.svelte';
 	import { getCanvasNoteArtifactsFromHistory } from './Artifacts/canvas';
 	import { getWebPreviewsFromHistory } from './Artifacts/webPreview';
 	import { selectTransientCanvasDocument } from '$lib/apis/chats';
 	import {
 		buildWorkspaceTabs,
 		buildWorkspaceFileContent,
-		replaceWorkspaceFileContent,
+		upsertWorkspaceFileContent,
+		limitWorkspaceFileContents,
 		buildWorkspaceUtilityContents,
+		getWorkspaceDocumentFormatForViewer,
 		getWorkspaceContentId,
 		getWorkspaceInstanceId,
 		getNextWorkspaceInstanceTitle,
@@ -74,6 +79,12 @@
 	let workspaceContentOrder: string[] = [];
 	let selectedContentIdx = 0;
 	let closedWorkspaceContentIds = new Set<string>();
+	let activeFileContextKey = '';
+	let openedFileRuntimeKey = '';
+	let openedFileRecency: string[] = [];
+	let activeOpenedFileId = '';
+	let queuedFileFocusId = '';
+	let fileFocusQueued = false;
 	const WORKSPACE_STATE_VERSION = 1;
 	const workspaceStateKey = (id: string) =>
 		`open-webui.workspace.tabs.v${WORKSPACE_STATE_VERSION}:${id}`;
@@ -109,7 +120,7 @@
 					: [],
 				filesOpened: Boolean(value.filesOpened),
 				openedFiles: Array.isArray(value.openedFiles)
-					? value.openedFiles.filter((item: unknown) => typeof item === 'string').slice(-1)
+					? value.openedFiles.filter((item: unknown) => typeof item === 'string').slice(-4)
 					: [],
 				utilities: Array.isArray(value.utilities)
 					? value.utilities
@@ -157,12 +168,16 @@
 		workspaceContentOrder = state?.order ?? [];
 		filesOpened = state?.filesOpened ?? false;
 		openedFileContents = (state?.openedFiles ?? []).map(buildWorkspaceFileContent);
+		openedFileRecency = openedFileContents.map((content, index) =>
+			getWorkspaceContentId(content, index)
+		);
 		workspaceUtilityInstances.set(state?.utilities ?? []);
 	};
 	$: selectedContent = contents[selectedContentIdx];
 	$: selectedContentId = selectedContent
 		? getWorkspaceContentId(selectedContent, selectedContentIdx)
 		: '';
+	$: workspacePanelId = `workspace-panel-${selectedContentIdx}`;
 	$: selectedIsCanvasNote = selectedContent?.type === 'canvas-note';
 	$: selectedHasArtifactActions = ['iframe', 'svg'].includes(selectedContent?.type);
 	$: workspaceTabs = buildWorkspaceTabs(contents);
@@ -170,6 +185,7 @@
 
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
+	const MAX_OPEN_DOCUMENTS = 4;
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
@@ -177,6 +193,36 @@
 	);
 	$: workspaceTerminalId = workspaceRuntime.terminalId;
 	$: workspaceFilesAvailable = showFiles && workspaceRuntime.files;
+	$: documentViewerEnabled = $config?.features?.enable_document_viewer === true;
+	$: {
+		const nextRuntimeKey = `${workspaceRuntime.kind}:${workspaceRuntime.terminalId ?? ''}`;
+		if (nextRuntimeKey !== openedFileRuntimeKey) {
+			const previousRuntimeKey = openedFileRuntimeKey;
+			openedFileRuntimeKey = nextRuntimeKey;
+			if (previousRuntimeKey && openedFileContents.length > 0) {
+				const previousFileIds = openedFileContents.map((content, index) =>
+					getWorkspaceContentId(content, index)
+				);
+				openedFileContents = [];
+				openedFileRecency = [];
+				workspaceContentOrder = workspaceContentOrder.filter((id) => !previousFileIds.includes(id));
+			}
+		}
+	}
+	$: {
+		const activePath =
+			selectedContent?.type === 'workspace-file' ? (selectedContent.path ?? '') : '';
+		const activeFormat = activePath
+			? getWorkspaceDocumentFormatForViewer(activePath, documentViewerEnabled)
+			: null;
+		const nextContextKey = activePath && activeFormat ? `${activeFormat}:${activePath}` : '';
+		if (nextContextKey !== activeFileContextKey) {
+			activeFileContextKey = nextContextKey;
+			workspaceActiveFile.set(
+				activePath && activeFormat ? { path: activePath, format: activeFormat } : null
+			);
+		}
+	}
 
 	function navigateContent(direction: 'prev' | 'next') {
 		selectedContentIdx =
@@ -188,6 +234,9 @@
 	async function selectWorkspaceContent(index: number) {
 		const content = contents[index];
 		if (!content) return;
+
+		selectedContentIdx = index;
+		artifactCode.set(getWorkspaceContentId(content, index));
 
 		if ($chatId && content.canvasId) {
 			try {
@@ -211,17 +260,18 @@
 					)
 				);
 			} catch {
-				toast.error($i18n.t('Document could not be opened'));
-				return;
+				toast.error($i18n.t('Canvas focus could not be saved'));
 			}
 		}
-
-		selectedContentIdx = index;
-		artifactCode.set(getWorkspaceContentId(content, index));
 	}
 
 	function syncVisibleWorkspaceContents() {
 		const newContents = getVisibleWorkspaceContents(sourceContents, closedWorkspaceContentIds);
+		workspaceOpenFilePaths.set(
+			newContents
+				.filter((content) => content.type === 'workspace-file' && content.path)
+				.map((content) => content.path as string)
+		);
 
 		if (newContents.length === 0) {
 			contents = [];
@@ -270,7 +320,7 @@
 		const nextSourceContents = [
 			...utilityContents.filter((content) => content.workspaceId === WORKSPACE_FILES_ID),
 			...artifactSourceContents,
-			...(workspaceRuntime.kind === 'terminal' ? openedFileContents : []),
+			...(workspaceRuntime.files ? openedFileContents : []),
 			...utilityInstanceContents,
 			...utilityContents.filter((content) => content.workspaceId !== WORKSPACE_FILES_ID)
 		];
@@ -326,18 +376,59 @@
 		else openWorkspaceUtility(kind);
 	}
 
-	function openWorkspaceFile(path: string) {
-		const previousFileIds = openedFileContents.map((content, index) =>
-			getWorkspaceContentId(content, index)
-		);
-		workspaceContentOrder = workspaceContentOrder.filter((id) => !previousFileIds.includes(id));
-		openedFileContents = replaceWorkspaceFileContent(openedFileContents, path);
+	function openWorkspaceFile(path: string): boolean {
+		if (
+			!workspaceRuntime.files ||
+			!getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)
+		) {
+			return false;
+		}
 		const id = `workspace:file:${path}`;
+		const nextContents = upsertWorkspaceFileContent(openedFileContents, path);
+		const nextRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
+		const limited = limitWorkspaceFileContents(
+			nextContents,
+			nextRecency,
+			selectedContent?.type === 'workspace-file' ? selectedContentId : '',
+			MAX_OPEN_DOCUMENTS
+		);
+		openedFileContents = limited.contents;
+		openedFileRecency = limited.recency;
+		workspaceContentOrder = workspaceContentOrder.filter(
+			(candidate) => !limited.evictedIds.includes(candidate)
+		);
+		for (const evictedId of limited.evictedIds) {
+			const evicted = nextContents.find(
+				(content, index) => getWorkspaceContentId(content, index) === evictedId
+			);
+			if (evicted) {
+				toast.message(
+					$i18n.t('Closed {{name}} to keep the workspace responsive.', {
+						name: evicted.title ?? 'document'
+					})
+				);
+			}
+		}
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
 		closedWorkspaceContentIds.delete(id);
 		rebuildWorkspaceContents();
 		persistWorkspaceState();
-		artifactCode.set(id);
+		scheduleWorkspaceFileFocus(id);
+		return true;
+	}
+
+	function touchOpenedFile(id: string) {
+		openedFileRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
+	}
+
+	function scheduleWorkspaceFileFocus(id: string) {
+		queuedFileFocusId = id;
+		if (fileFocusQueued) return;
+		fileFocusQueued = true;
+		queueMicrotask(() => {
+			fileFocusQueued = false;
+			artifactCode.set(queuedFileFocusId);
+		});
 	}
 
 	function reorderWorkspaceTabs(sourceId: string, targetId: string) {
@@ -364,6 +455,7 @@
 			? getWorkspaceContentId(selectedContent, selectedContentIdx)
 			: '';
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds).add(tab.id);
+		openedFileRecency = openedFileRecency.filter((id) => id !== tab.id);
 		syncVisibleWorkspaceContents();
 
 		if (contents.length === 0) {
@@ -477,12 +569,18 @@
 		const unsubscribeOpenRequest = workspaceOpenRequestId.subscribe((value) => {
 			if (!value) return;
 			workspaceOpenRequestId.set(null);
-			if (!closedWorkspaceContentIds.has(value)) return;
+			if (closedWorkspaceContentIds.has(value)) {
+				closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
+				closedWorkspaceContentIds.delete(value);
+				syncVisibleWorkspaceContents();
+				persistWorkspaceState();
+			}
 
-			closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
-			closedWorkspaceContentIds.delete(value);
-			syncVisibleWorkspaceContents();
-			persistWorkspaceState();
+			const reopenedIndex = contents.findIndex(
+				(content, index) => getWorkspaceContentId(content, index) === value
+			);
+			if (reopenedIndex !== -1) selectedContentIdx = reopenedIndex;
+			artifactCode.set(value);
 		});
 
 		const unsubscribeArtifactContents = artifactContents.subscribe((value) => {
@@ -497,6 +595,11 @@
 		};
 	});
 
+	onDestroy(() => {
+		workspaceActiveFile.set(null);
+		workspaceOpenFilePaths.set([]);
+	});
+
 	$: {
 		const nextWorkspaceChatId = $chatId ?? '';
 		if (shouldResetWorkspaceForChatChange($workspaceChatContextId, nextWorkspaceChatId)) {
@@ -505,6 +608,11 @@
 			rebuildWorkspaceContents();
 		}
 		workspaceChatContextId.set(nextWorkspaceChatId);
+	}
+
+	$: if (selectedContentId !== activeOpenedFileId) {
+		activeOpenedFileId = selectedContentId;
+		if (selectedContent?.type === 'workspace-file') touchOpenedFile(selectedContentId);
 	}
 
 	$: {
@@ -667,95 +775,114 @@
 			<div class=" absolute top-0 left-0 right-0 bottom-0 z-10"></div>
 		{/if}
 
-		<div class="flex-1 min-h-0 w-full h-full" id="workspace-active-content" role="tabpanel">
+		<div class="flex-1 min-h-0 w-full h-full">
 			<div class=" h-full flex flex-col">
 				{#if contents.length > 0}
 					<div class="relative max-w-full w-full h-full">
+						<WorkspaceDocumentPanels
+							{contents}
+							{selectedContentId}
+							runtime={workspaceRuntime}
+							chatId={$chatId}
+						/>
 						{#each contents as content, index (getWorkspaceContentId(content, index))}
 							{#if content.type === 'workspace-browser'}
 								<div
+									id={`workspace-panel-${index}`}
+									role="tabpanel"
+									aria-labelledby={`workspace-tab-${index}`}
+									hidden={selectedContentId !== getWorkspaceContentId(content, index)}
 									class="absolute inset-0"
-									class:invisible={selectedContentId !== getWorkspaceContentId(content, index)}
-									class:pointer-events-none={selectedContentId !==
-										getWorkspaceContentId(content, index)}
 								>
-									<WorkspaceBrowser {overlay} terminalId={content.terminalId ?? null} />
+									<WorkspaceBrowser
+										{overlay}
+										terminalId={content.terminalId ?? null}
+										active={selectedContentId === getWorkspaceContentId(content, index)}
+									/>
 								</div>
 							{/if}
 						{/each}
-						<div
-							class="absolute inset-0"
-							class:invisible={['workspace-terminal', 'workspace-browser'].includes(
-								contents[selectedContentIdx].type
-							)}
-							class:pointer-events-none={['workspace-terminal', 'workspace-browser'].includes(
-								contents[selectedContentIdx].type
-							)}
-						>
-							{#if contents[selectedContentIdx].type === 'workspace-terminal'}
-								<!-- The persistent terminal renderer is owned by ChatControls. -->
-							{:else if contents[selectedContentIdx].type === 'iframe'}
-								<iframe
-									bind:this={iframeElement}
-									title="Content"
-									srcdoc={injectCsp(
-										contents[selectedContentIdx].content,
-										$config?.ui?.iframe_csp ?? ''
-									)}
-									class="w-full border-0 h-full rounded-none"
-									sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ??
-									false)
-										? ' allow-forms'
-										: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false)
-										? ' allow-same-origin'
-										: ''}"
-									on:load={iframeLoadHandler}
-								></iframe>
-							{:else if contents[selectedContentIdx].type === 'svg'}
-								<SvgPanZoom
-									className=" w-full h-full max-h-full overflow-hidden"
-									svg={contents[selectedContentIdx].content}
-								/>
-							{:else if contents[selectedContentIdx].type === 'canvas-note'}
-								<NoteCanvas
-									chatId={$chatId}
-									canvasId={contents[selectedContentIdx].canvasId ?? ''}
-									noteId={contents[selectedContentIdx].noteId ?? ''}
-									title={contents[selectedContentIdx].title ?? ''}
-									content={contents[selectedContentIdx].content}
-									titleEdited={contents[selectedContentIdx].titleEdited ?? false}
-									canUndoAiUpdate={contents[selectedContentIdx].canUndoAiUpdate ?? false}
-									showClose={!hasWorkspaceTabs}
-									on:close={closeWorkspace}
-								/>
-							{:else if contents[selectedContentIdx].type === 'web-preview'}
-								{#key contents[selectedContentIdx].previewId}
-									<WebPreviewRenderer
-										artifact={contents[selectedContentIdx] as any}
-										chatId={$chatId ?? ''}
-										{codeInterpreterEnabled}
-										iframeCsp={$config?.ui?.iframe_csp ?? ''}
-										sandboxAllowForms={$settings?.iframeSandboxAllowForms ?? false}
-										sandboxAllowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
-									/>
-								{/key}
-							{:else if contents[selectedContentIdx].type === 'workspace-files' || contents[selectedContentIdx].type === 'workspace-file'}
-								{#if workspaceRuntime.kind === 'terminal'}
-									<FileNav
-										{onAttach}
-										{overlay}
-										chatId={$chatId}
-										showTerminal={false}
-										initialFilePath={contents[selectedContentIdx].path ?? null}
-										onOpenFile={openWorkspaceFile}
-									/>
-								{:else if workspaceRuntime.kind === 'pyodide'}
-									<PyodideFileNav {overlay} />
-								{/if}
-							{:else if contents[selectedContentIdx].type === 'workspace-browser'}
-								<!-- Browser instances stay mounted above so each tab preserves its preview. -->
+						{#each contents as content, index (getWorkspaceContentId(content, index))}
+							{#if content.type !== 'workspace-file' && content.type !== 'workspace-browser' && index !== selectedContentIdx}
+								<div
+									id={`workspace-panel-${index}`}
+									role="tabpanel"
+									aria-labelledby={`workspace-tab-${index}`}
+									hidden
+								></div>
 							{/if}
-						</div>
+						{/each}
+						{#if !['workspace-file', 'workspace-browser'].includes(contents[selectedContentIdx].type)}
+							<div
+								id={workspacePanelId}
+								role="tabpanel"
+								aria-labelledby={`workspace-tab-${selectedContentIdx}`}
+								class:pointer-events-none={contents[selectedContentIdx].type ===
+									'workspace-terminal'}
+								class="absolute inset-0"
+							>
+								{#if contents[selectedContentIdx].type === 'workspace-terminal'}
+									<!-- The persistent terminal renderer is owned by ChatControls. -->
+								{:else if contents[selectedContentIdx].type === 'iframe'}
+									<iframe
+										bind:this={iframeElement}
+										title="Content"
+										srcdoc={injectCsp(
+											contents[selectedContentIdx].content,
+											$config?.ui?.iframe_csp ?? ''
+										)}
+										class="w-full border-0 h-full rounded-none"
+										sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ??
+										false)
+											? ' allow-forms'
+											: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false)
+											? ' allow-same-origin'
+											: ''}"
+										on:load={iframeLoadHandler}
+									></iframe>
+								{:else if contents[selectedContentIdx].type === 'svg'}
+									<SvgPanZoom
+										className=" w-full h-full max-h-full overflow-hidden"
+										svg={contents[selectedContentIdx].content}
+									/>
+								{:else if contents[selectedContentIdx].type === 'canvas-note'}
+									<NoteCanvas
+										chatId={$chatId}
+										canvasId={contents[selectedContentIdx].canvasId ?? ''}
+										noteId={contents[selectedContentIdx].noteId ?? ''}
+										title={contents[selectedContentIdx].title ?? ''}
+										content={contents[selectedContentIdx].content}
+										titleEdited={contents[selectedContentIdx].titleEdited ?? false}
+										canUndoAiUpdate={contents[selectedContentIdx].canUndoAiUpdate ?? false}
+										showClose={!hasWorkspaceTabs}
+										on:close={closeWorkspace}
+									/>
+								{:else if contents[selectedContentIdx].type === 'web-preview'}
+									{#key contents[selectedContentIdx].previewId}
+										<WebPreviewRenderer
+											artifact={contents[selectedContentIdx] as any}
+											chatId={$chatId ?? ''}
+											codeInterpreterEnabled={showFiles && codeInterpreterEnabled}
+											iframeCsp={$config?.ui?.iframe_csp ?? ''}
+											sandboxAllowForms={$settings?.iframeSandboxAllowForms ?? false}
+											sandboxAllowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
+										/>
+									{/key}
+								{:else if contents[selectedContentIdx].type === 'workspace-files'}
+									{#if workspaceRuntime.kind === 'terminal'}
+										<FileNav
+											{onAttach}
+											{overlay}
+											chatId={$chatId}
+											initialFilePath={contents[selectedContentIdx].path ?? null}
+											onOpenFile={openWorkspaceFile}
+										/>
+									{:else if workspaceRuntime.kind === 'pyodide'}
+										<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
+									{/if}
+								{/if}
+							</div>
+						{/if}
 					</div>
 				{:else}
 					<WorkspaceLauncher

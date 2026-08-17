@@ -46,6 +46,7 @@
 	export let shareEnabled: boolean = false;
 	export let scrollTop = 0;
 	export let scrollToTop: (() => void) | null = null;
+	export let workspaceDefaultContentId = WORKSPACE_LAUNCHER_ID;
 
 	export let chat;
 	export let history;
@@ -240,7 +241,7 @@
 									showControls.set(false);
 									return;
 								}
-								artifactCode.set(WORKSPACE_LAUNCHER_ID);
+								artifactCode.set(workspaceDefaultContentId);
 								showArtifacts.set(true);
 								showControls.set(true);
 							}}

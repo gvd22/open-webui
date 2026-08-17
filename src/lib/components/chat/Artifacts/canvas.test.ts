@@ -191,6 +191,7 @@ describe('Canvas tool state', () => {
 				content: '# Meine Bananen-Notiz\n\nLokal bearbeitet',
 				title_edited: true,
 				updated_at: 30,
+				content_hash: 'current-hash',
 				note_id: 'note-1'
 			})
 		).toMatchObject({
@@ -198,6 +199,7 @@ describe('Canvas tool state', () => {
 			content: '# Meine Bananen-Notiz\n\nLokal bearbeitet',
 			titleEdited: true,
 			updatedAt: 30,
+			contentHash: 'current-hash',
 			noteId: 'note-1'
 		});
 	});
@@ -236,6 +238,32 @@ describe('Canvas tool state', () => {
 		).toMatchObject({
 			content: '# Plan\n\nTeilweise aktualisiert',
 			hasContentPayload: true
+		});
+	});
+
+	it('keeps a newer compact revision pending when persisted Canvas state is stale', () => {
+		const [reference] = getCanvasNoteArtifactsFromOutput([
+			{
+				type: 'function_call_output',
+				output: JSON.stringify({
+					type: 'canvas.document',
+					canvasId: 'canvas-1',
+					title: 'Plan',
+					updatedAt: 50
+				})
+			}
+		]);
+
+		expect(
+			mergePersistedCanvasArtifact(reference, {
+				title: 'Plan',
+				content: '# Plan\n\nOlder content',
+				updated_at: 40
+			})
+		).toMatchObject({
+			content: '',
+			hasContentPayload: false,
+			updatedAt: 50
 		});
 	});
 

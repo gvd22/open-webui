@@ -24,7 +24,7 @@
 	import Refresh from '$lib/components/icons/Refresh.svelte';
 	import type { WebPreviewArtifact, WebPreviewFile } from './webPreview';
 	import { composeWebPreviewHtml, mergeLocalWebPreviewDraft } from './webPreview';
-	import { buildWebPreviewSandbox } from './webPreviewSandbox';
+	import { buildWebPreviewSandbox, resolveWebPreviewCsp } from './webPreviewSandbox';
 	import { resolveWorkspaceRuntime } from './workspace';
 	import { createSerializedSaveQueue, registerWorkspaceSaveBarrier } from './serializedSaveQueue';
 
@@ -484,7 +484,7 @@
 			{#key reloadKey}
 				<iframe
 					{title}
-					srcdoc={injectCsp(previewHtml, iframeCsp)}
+					srcdoc={injectCsp(previewHtml, resolveWebPreviewCsp(iframeCsp))}
 					class="h-full min-h-0 w-full border-0 bg-white"
 					sandbox={buildWebPreviewSandbox({
 						allowForms: sandboxAllowForms,

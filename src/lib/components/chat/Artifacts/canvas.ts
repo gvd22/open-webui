@@ -207,10 +207,12 @@ export const mergePersistedCanvasArtifact = (
 
 	const persistedUpdatedAt = Number(persisted.updated_at ?? 0);
 	const artifactUpdatedAt = Number(artifact.updatedAt ?? 0);
+	const persistedCanHydrate = !artifactUpdatedAt || persistedUpdatedAt >= artifactUpdatedAt;
 	const persistedIsNewer =
-		artifact.hasContentPayload === false ||
-		!artifactUpdatedAt ||
-		persistedUpdatedAt > artifactUpdatedAt;
+		persistedCanHydrate &&
+		(artifact.hasContentPayload === false ||
+			!artifactUpdatedAt ||
+			persistedUpdatedAt > artifactUpdatedAt);
 
 	return {
 		...artifact,
@@ -224,7 +226,7 @@ export const mergePersistedCanvasArtifact = (
 			? Boolean(persisted.last_ai_update)
 			: Boolean(artifact.canUndoAiUpdate),
 		updatedAt: Math.max(persistedUpdatedAt, artifactUpdatedAt),
-		contentHash: artifact.contentHash,
-		hasContentPayload: true
+		contentHash: persisted.content_hash ?? artifact.contentHash,
+		hasContentPayload: persistedCanHydrate ? true : artifact.hasContentPayload
 	};
 };

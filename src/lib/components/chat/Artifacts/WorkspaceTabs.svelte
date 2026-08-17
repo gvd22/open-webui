@@ -19,7 +19,7 @@
 	export let filesAvailable = false;
 	export let onSelect: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onClose: () => void = () => {};
-	export let onCloseTab: (tab: WorkspaceTab) => void = () => {};
+	export let onCloseTab: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onReorder: (sourceId: string, targetId: string) => void = () => {};
 	export let onOpenFiles: () => void = () => {};
 	export let onOpenTerminal: () => void = () => {};
@@ -33,7 +33,7 @@
 	let addButtonElement: HTMLButtonElement;
 	let addMenuElement: HTMLElement;
 	let closeButtonElement: HTMLButtonElement;
-	$: hasAddActions = hasWorkspaceAddActions(terminalId, filesAvailable);
+	$: hasAddActions = hasWorkspaceAddActions(terminalId);
 
 	const closeAddMenuOnEscape = (event: KeyboardEvent) => {
 		if (event.key === 'Escape' && showAddMenu) {
@@ -85,6 +85,7 @@
 
 	const iconKind = (kind: string) => {
 		if (kind === 'canvas-note') return 'document';
+		if (kind === 'workspace-file') return 'document';
 		if (kind === 'web-preview') return 'browser';
 		if (kind.includes('terminal')) return 'terminal';
 		if (kind.includes('browser')) return 'browser';
@@ -145,7 +146,7 @@
 
 	const closeTabAndFocus = async (tab: WorkspaceTab) => {
 		const closedIndex = tabs.findIndex((item) => item.id === tab.id);
-		onCloseTab(tab);
+		await onCloseTab(tab);
 		await tick();
 		const remainingTabs = getTabElements();
 		if (remainingTabs.length) {
@@ -170,7 +171,6 @@
 		showAddMenu = false;
 		pressedTabId = tab.id;
 		pointerStart = { x: event.clientX, y: event.clientY };
-
 		const move = (moveEvent: MouseEvent) => {
 			if (!pressedTabId) return;
 			const distance = Math.hypot(
@@ -191,8 +191,6 @@
 			window.removeEventListener('mouseup', end);
 			if (draggedTabId && dragTargetId && draggedTabId !== dragTargetId) {
 				onReorder(draggedTabId, dragTargetId);
-			} else if (!draggedTabId) {
-				void selectTab(tab);
 			}
 			finishTabDrag();
 		};
@@ -231,11 +229,13 @@
 						type="button"
 						draggable="false"
 						role="tab"
+						id={`workspace-tab-${tab.index}`}
 						aria-selected={tab.index === selectedIndex}
+						aria-controls={`workspace-panel-${tab.index}`}
 						tabindex={tab.index === selectedIndex ? 0 : -1}
-						aria-controls="workspace-active-content"
 						title={tab.title}
 						data-workspace-id={tab.id}
+						data-workspace-tab-index={tab.index}
 						class="flex h-8 w-full min-w-0 items-center gap-2 px-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 dark:focus-visible:ring-gray-500 {tab.closable
 							? 'pr-8'
 							: 'pr-3'}"

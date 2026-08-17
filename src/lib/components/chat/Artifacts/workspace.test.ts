@@ -5,22 +5,33 @@ import {
 	buildWorkspaceFileContent,
 	buildWorkspaceUtilityContents,
 	getVisibleWorkspaceContents,
+	getDefaultWorkspaceContentId,
 	getWorkspaceContentId,
 	getWorkspaceModelFocus,
 	getWorkspaceInstanceId,
 	getNextWorkspaceInstanceTitle,
+	getWorkspaceFileRefreshAction,
+	getWorkspaceFileUpdateAction,
 	hasWorkspaceAddActions,
 	isKeyboardActivationClick,
+	limitWorkspaceFileContents,
 	moveWorkspaceContent,
+	nextDocumentLoadSequence,
 	orderWorkspaceContents,
 	replaceWorkspaceFileContent,
 	resolveBoundWorkspaceTerminal,
+	upsertWorkspaceFileContent,
+	getWorkspaceDocumentFormat,
+	getWorkspaceDocumentFormatForViewer,
+	getWorkspaceFileOpenTarget,
+	isWorkspaceDocumentPath,
 	resolveWorkspaceRuntime,
 	shouldResetWorkspaceForChatChange,
 	shouldShowWorkspaceTabs,
 	WORKSPACE_FILES_ID,
 	WORKSPACE_TERMINAL_ID,
-	WORKSPACE_BROWSER_ID
+	WORKSPACE_BROWSER_ID,
+	type WorkspaceContent
 } from './workspace';
 
 describe('workspace tabs', () => {
@@ -69,10 +80,21 @@ describe('workspace tabs', () => {
 		expect(resolveBoundWorkspaceTerminal(terminals, null)).toBeNull();
 	});
 
-	it('shows the add control only when at least one action is available', () => {
-		expect(hasWorkspaceAddActions(null, false)).toBe(false);
-		expect(hasWorkspaceAddActions('terminal-1', false)).toBe(true);
-		expect(hasWorkspaceAddActions(null, true)).toBe(true);
+	it('opens Files directly when Pyodide is the only workspace runtime', () => {
+		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, true))).toBe(
+			'workspace:files'
+		);
+		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, false))).toBe(
+			'workspace:launcher'
+		);
+		expect(
+			getDefaultWorkspaceContentId(resolveWorkspaceRuntime([{ id: 'terminal-1' }], null, true))
+		).toBe('workspace:launcher');
+	});
+
+	it('shows the add control only for managed Terminal environments', () => {
+		expect(hasWorkspaceAddActions(null)).toBe(false);
+		expect(hasWorkspaceAddActions('terminal-1')).toBe(true);
 	});
 
 	it('distinguishes keyboard activation from a pointer click fallback', () => {
@@ -207,21 +229,128 @@ describe('workspace tabs', () => {
 		expect(getNextWorkspaceInstanceTitle('browser', ['Browser 2'])).toBe('Browser 3');
 	});
 
-	it('keeps exactly one file object tab and replaces it in place', () => {
-		const first = replaceWorkspaceFileContent([], '/workspace/reports/brief.md');
-		const repeated = replaceWorkspaceFileContent(first, '/workspace/reports/brief.md');
-		const second = replaceWorkspaceFileContent(repeated, '/workspace/data.csv');
+	it('keeps one stable tab per open document file', () => {
+		const first = upsertWorkspaceFileContent([], '/workspace/reports/brief.docx');
+		const repeated = upsertWorkspaceFileContent(first, '/workspace/reports/brief.docx');
+		const second = upsertWorkspaceFileContent(repeated, '/workspace/slides/update.pptx');
 
 		expect(repeated).toBe(first);
-		expect(buildWorkspaceFileContent('/workspace/reports/brief.md')).toMatchObject({
+		expect(buildWorkspaceFileContent('/workspace/reports/brief.docx')).toMatchObject({
 			type: 'workspace-file',
-			workspaceId: 'workspace:file:/workspace/reports/brief.md',
-			title: 'brief.md',
-			path: '/workspace/reports/brief.md'
+			workspaceId: 'workspace:file:/workspace/reports/brief.docx',
+			title: 'brief.docx',
+			path: '/workspace/reports/brief.docx',
+			fileFormat: 'docx'
 		});
 		expect(buildWorkspaceTabs(second).map(({ id, title }) => ({ id, title }))).toEqual([
-			{ id: 'workspace:file:/workspace/data.csv', title: 'data.csv' }
+			{ id: 'workspace:file:/workspace/reports/brief.docx', title: 'brief.docx' },
+			{ id: 'workspace:file:/workspace/slides/update.pptx', title: 'update.pptx' }
 		]);
+	});
+
+	it('keeps four documents across ten opens without evicting the active document', () => {
+		let contents: WorkspaceContent[] = [];
+		let recency: string[] = [];
+		const activeId = 'workspace:file:/workspace/0.pdf';
+		const evictedIds: string[] = [];
+
+		for (let index = 0; index < 10; index += 1) {
+			const path = `/workspace/${index}.pdf`;
+			const id = `workspace:file:${path}`;
+			contents = upsertWorkspaceFileContent(contents, path);
+			recency = [...recency.filter((candidate) => candidate !== id), id];
+			const limited = limitWorkspaceFileContents(contents, recency, activeId, 4);
+
+			expect(limited.evictedIds).not.toContain(activeId);
+			contents = limited.contents;
+			recency = limited.recency;
+			evictedIds.push(...limited.evictedIds);
+		}
+
+		expect(contents.map((content) => content.path)).toEqual([
+			'/workspace/0.pdf',
+			'/workspace/7.pdf',
+			'/workspace/8.pdf',
+			'/workspace/9.pdf'
+		]);
+		expect(evictedIds).toEqual([
+			'workspace:file:/workspace/1.pdf',
+			'workspace:file:/workspace/2.pdf',
+			'workspace:file:/workspace/3.pdf',
+			'workspace:file:/workspace/4.pdf',
+			'workspace:file:/workspace/5.pdf',
+			'workspace:file:/workspace/6.pdf'
+		]);
+	});
+
+	it('keeps refresh generations monotonic so stale renders cannot win', () => {
+		expect(nextDocumentLoadSequence(9)).toBe(10);
+		expect(nextDocumentLoadSequence(10)).toBe(11);
+	});
+
+	it('refreshes active Pyodide documents and defers inactive matching documents', () => {
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', true)).toBe('refresh');
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', false)).toBe('defer');
+		expect(getWorkspaceFileRefreshAction(['/other.docx'], '/one.docx', true)).toBe('ignore');
+		expect(getWorkspaceFileRefreshAction(undefined, '/one.docx', false)).toBe('defer');
+	});
+
+	it('keeps deletion and rename lifecycle events distinct from refreshes', () => {
+		expect(
+			getWorkspaceFileUpdateAction({ path: '/one.docx', kind: 'deleted' }, '/one.docx', true)
+		).toBe('deleted');
+		expect(
+			getWorkspaceFileUpdateAction(
+				{ path: '/renamed.docx', previousPath: '/one.docx', kind: 'renamed' },
+				'/one.docx',
+				true
+			)
+		).toBe('renamed');
+		expect(getWorkspaceFileUpdateAction({ kind: 'unknown' }, '/one.docx', false)).toBe('defer');
+	});
+
+	it('routes only the lightweight document formats to the document viewer', () => {
+		expect(getWorkspaceDocumentFormat('/workspace/report.PDF')).toBe('pdf');
+		expect(getWorkspaceDocumentFormat('/workspace/report.docx')).toBe('docx');
+		expect(getWorkspaceDocumentFormat('/workspace/slides.pptx')).toBe('pptx');
+		for (const path of [
+			'/workspace/table.xlsx',
+			'/workspace/legacy.xls',
+			'/workspace/data.csv',
+			'/workspace/report.odt',
+			'/workspace/table.ods',
+			'/workspace/slides.odp',
+			'/workspace/legacy.doc',
+			'/workspace/legacy.ppt'
+		]) {
+			expect(getWorkspaceDocumentFormat(path)).toBeNull();
+			expect(isWorkspaceDocumentPath(path)).toBe(false);
+		}
+	});
+
+	it('routes dedicated document formats only when the rollout is enabled', () => {
+		for (const path of [
+			'/workspace/report.pdf',
+			'/workspace/report.docx',
+			'/workspace/deck.pptx'
+		]) {
+			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
+			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBe(
+				getWorkspaceDocumentFormat(path)
+			);
+		}
+
+		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
+			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBeNull();
+		}
+	});
+
+	it('keeps unsupported formats in Files for both Terminal and Pyodide callers', () => {
+		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+			expect(getWorkspaceFileOpenTarget(path)).toBe('files');
+		}
+		expect(getWorkspaceFileOpenTarget('/workspace/report.pdf')).toBe('document-viewer');
 	});
 
 	it('preserves a custom tab order and appends unknown items', () => {

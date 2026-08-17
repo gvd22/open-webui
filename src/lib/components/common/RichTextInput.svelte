@@ -656,6 +656,11 @@
 		editor.commands.setContent(content);
 	};
 
+	export const setValue = (content) => {
+		value = content;
+		onValueChange();
+	};
+
 	const selectTemplate = () => {
 		if (value !== '') {
 			// After updating the state, try to find and select the next template

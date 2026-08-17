@@ -12,11 +12,11 @@
 		showFileNavDir,
 		selectedTerminalId,
 		artifactCode,
+		workspaceFileUpdate,
 		workspaceTerminalConnectionId
 	} from '$lib/stores';
 	import {
 		getCwd,
-		getTerminalConfig,
 		listFiles,
 		readFile,
 		downloadFileBlob,
@@ -48,17 +48,19 @@
 	import BulkActionBar from './FileNav/BulkActionBar.svelte';
 	import PortList from './FileNav/PortList.svelte';
 	import PortPreview from './FileNav/PortPreview.svelte';
-	import XTerminal from './XTerminal.svelte';
-	import { isKeyboardActivationClick, WORKSPACE_TERMINAL_ID } from './Artifacts/workspace';
+	import {
+		getWorkspaceFileOpenTarget,
+		isKeyboardActivationClick,
+		WORKSPACE_TERMINAL_ID
+	} from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
 	export let onAttach: ((blob: Blob, name: string, contentType: string) => void) | null = null;
 	export let overlay = false;
 	export let chatId: string | null = null;
-	export let showTerminal = true;
 	export let initialFilePath: string | null = null;
-	export let onOpenFile: (path: string) => void = () => {};
+	export let onOpenFile: (path: string) => boolean = () => false;
 
 	const openWorkspaceTerminal = () => {
 		const terminalId =
@@ -72,40 +74,7 @@
 		artifactCode.set(WORKSPACE_TERMINAL_ID);
 	};
 
-	// ── Terminal panel state ────────────────────────────────────────────
-	let terminalExpanded = false;
-	let terminalHeight = 200; // px, default when expanded
-	let isDraggingHandle = false;
 	let containerEl: HTMLElement;
-	let terminalConnected = false;
-	let terminalConnecting = false;
-	let terminalEnabled = true;
-
-	const toggleTerminal = () => {
-		terminalExpanded = !terminalExpanded;
-	};
-
-	const onHandleMouseDown = (e: MouseEvent) => {
-		e.preventDefault();
-		isDraggingHandle = true;
-		const startY = e.clientY;
-		const startHeight = terminalHeight;
-
-		const onMouseMove = (ev: MouseEvent) => {
-			const delta = startY - ev.clientY;
-			const maxH = containerEl ? containerEl.clientHeight - 100 : 500;
-			terminalHeight = Math.max(80, Math.min(maxH, startHeight + delta));
-		};
-
-		const onMouseUp = () => {
-			isDraggingHandle = false;
-			window.removeEventListener('mousemove', onMouseMove);
-			window.removeEventListener('mouseup', onMouseUp);
-		};
-
-		window.addEventListener('mousemove', onMouseMove);
-		window.addEventListener('mouseup', onMouseUp);
-	};
 
 	// ── Directory state ──────────────────────────────────────────────────
 	let currentPath = savedPath;
@@ -267,13 +236,15 @@
 	let shiftKey = false;
 
 	// ── Terminal resolution ──────────────────────────────────────────────
-	let selectedTerminal: { url: string; key: string } | null = null;
+	let selectedTerminal: { id: string | null; url: string; key: string } | null = null;
 
-	const getTerminal = (): { url: string; key: string } | null => {
+	const getTerminal = (): { id: string | null; url: string; key: string } | null => {
 		const systemTerminal = $selectedTerminalId
 			? (($terminalServers ?? []).find((t) => t.id === $selectedTerminalId) ?? null)
 			: ($terminalServers?.[0] ?? null);
-		return systemTerminal?.url ? { url: systemTerminal.url, key: localStorage.token } : null;
+		return systemTerminal?.url
+			? { id: systemTerminal.id ?? null, url: systemTerminal.url, key: localStorage.token }
+			: null;
 	};
 
 	// Detect terminal or chat changes — the explicit store references ensure
@@ -309,18 +280,6 @@
 				const requestedTerminalUrl = terminal.url;
 				const requestedChatId = chatId;
 				(async () => {
-					if (terminalChanged) {
-						const config = await getTerminalConfig(terminal.url, terminal.key);
-						if (
-							destroyed ||
-							contextRequestId !== contextRequestSequence ||
-							selectedTerminal?.url !== requestedTerminalUrl ||
-							chatId !== requestedChatId
-						)
-							return;
-						terminalEnabled = config?.features?.terminal !== false;
-					}
-
 					const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
 					if (
 						destroyed ||
@@ -500,7 +459,9 @@
 
 		const filePath = `${currentPath}${entry.name}`;
 		appliedInitialFilePath = filePath;
-		if (notifyWorkspace) onOpenFile(filePath);
+		const fileOpenTarget = getWorkspaceFileOpenTarget(filePath);
+		if (notifyWorkspace && fileOpenTarget === 'document-viewer' && onOpenFile(filePath)) return;
+		if (notifyWorkspace && fileOpenTarget === 'files') onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 
 		const terminal = selectedTerminal;
@@ -538,6 +499,7 @@
 					terminal.key,
 					filePath,
 					sessionId,
+					undefined,
 					fileAbortController.signal
 				);
 				if (result) {
@@ -552,6 +514,7 @@
 					terminal.key,
 					filePath,
 					sessionId,
+					undefined,
 					fileAbortController.signal
 				);
 				if (result) {
@@ -800,6 +763,14 @@
 		if (!terminal) return;
 
 		const result = await deleteEntry(terminal.url, terminal.key, path, chatId ?? undefined);
+		if (result) {
+			workspaceFileUpdate.set({
+				path,
+				kind: result.type === 'file' ? 'deleted' : 'unknown',
+				terminalId: terminal.id,
+				revision: Date.now()
+			});
+		}
 		toast[result ? 'success' : 'error'](
 			$i18n.t(result ? '{{name}} deleted' : 'Failed to delete {{name}}', { name })
 		);
@@ -835,6 +806,13 @@
 		if ('error' in result) {
 			toast.error(result.error);
 		} else {
+			workspaceFileUpdate.set({
+				path: destination,
+				previousPath: source,
+				kind: source.endsWith('/') ? 'unknown' : 'renamed',
+				terminalId: terminal.id,
+				revision: Date.now()
+			});
 			toast.success($i18n.t('Moved {{name}}', { name: fileName }));
 		}
 		await loadDir(currentPath);
@@ -860,6 +838,13 @@
 		if ('error' in result) {
 			toast.error(result.error);
 		} else {
+			workspaceFileUpdate.set({
+				path: destination,
+				previousPath: oldPath,
+				kind: 'renamed',
+				terminalId: terminal.id,
+				revision: Date.now()
+			});
 			toast.success($i18n.t('Renamed to {{name}}', { name: newName }));
 		}
 		await loadDir(currentPath);
@@ -942,7 +927,15 @@
 				p.replace(/\/$/, ''),
 				chatId ?? undefined
 			);
-			if (result) ok++;
+			if (result) {
+				ok++;
+				workspaceFileUpdate.set({
+					path: p.replace(/\/$/, ''),
+					kind: result.type === 'file' ? 'deleted' : 'unknown',
+					terminalId: terminal.id,
+					revision: Date.now()
+				});
+			}
 		}
 		toast[ok > 0 ? 'success' : 'error'](
 			$i18n.t('Deleted {{ok}} of {{total}} items', { ok, total: paths.length })
@@ -1069,17 +1062,6 @@
 			const requestedChatId = chatId;
 
 			void (async () => {
-				// Discover server features on initial mount
-				const config = await getTerminalConfig(terminal.url, terminal.key);
-				if (
-					destroyed ||
-					contextRequestId !== contextRequestSequence ||
-					selectedTerminal?.url !== requestedTerminalUrl ||
-					chatId !== requestedChatId
-				)
-					return;
-				terminalEnabled = config?.features?.terminal !== false;
-
 				if (chatId || savedPath === '/') {
 					// Fetch session-specific cwd from the server (or global default for new chats)
 					const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
@@ -1522,7 +1504,7 @@
 				<PortPreview
 					baseUrl={selectedTerminal?.url ?? ''}
 					port={previewPort}
-					overlay={overlay || isDraggingHandle}
+					{overlay}
 					onClose={() => {
 						previewPort = null;
 					}}
@@ -1556,7 +1538,7 @@
 					}}
 					baseUrl={selectedTerminal?.url ?? ''}
 					apiKey={selectedTerminal?.key ?? ''}
-					overlay={overlay || isDraggingHandle}
+					{overlay}
 					onSave={async (content) => {
 						const terminal = selectedTerminal;
 						if (!terminal || !selectedFile) return;
@@ -1726,76 +1708,6 @@
 						previewPort = e.detail;
 					}}
 				/>
-			</div>
-		{/if}
-
-		<!-- Terminal bottom panel -->
-		{#if showTerminal && terminalEnabled}
-			<div class="shrink-0 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850">
-				{#if terminalExpanded}
-					<!-- Drag handle (at top of panel) -->
-					<!-- svelte-ignore a11y-no-static-element-interactions -->
-					<div class="relative cursor-row-resize group" on:mousedown={onHandleMouseDown}>
-						<div
-							class="h-px bg-transparent group-hover:bg-black/10 dark:group-hover:bg-white/10 transition"
-						/>
-						<div class="absolute inset-x-0 -top-1.5 -bottom-1.5" />
-					</div>
-				{/if}
-
-				<!-- Toggle header (full-width button) -->
-				<button
-					class="w-full flex items-center gap-2 px-3 py-1 mb-0.5 text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition"
-					on:click={toggleTerminal}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 20 20"
-						fill="currentColor"
-						class="size-3.5"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M3.25 3A2.25 2.25 0 0 0 1 5.25v9.5A2.25 2.25 0 0 0 3.25 17h13.5A2.25 2.25 0 0 0 19 14.75v-9.5A2.25 2.25 0 0 0 16.75 3H3.25Zm.943 8.752a.75.75 0 0 1 .055-1.06L6.128 9l-1.88-1.693a.75.75 0 1 1 1.004-1.114l2.5 2.25a.75.75 0 0 1 0 1.114l-2.5 2.25a.75.75 0 0 1-1.06-.055ZM9.75 10.25a.75.75 0 0 0 0 1.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z"
-							clip-rule="evenodd"
-						/>
-					</svg>
-					<span class="font-normal">{$i18n.t('Terminal')}</span>
-
-					{#if terminalExpanded}
-						<div
-							class="w-1.5 h-1.5 rounded-full transition-colors {terminalConnected
-								? 'bg-emerald-500'
-								: terminalConnecting
-									? 'bg-yellow-500 animate-pulse'
-									: 'bg-gray-400'}"
-						/>
-					{/if}
-
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 20 20"
-						fill="currentColor"
-						class="size-3 ml-auto transition-transform {terminalExpanded ? 'rotate-180' : ''}"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M9.47 6.47a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 1 1-1.06 1.06L10 8.06l-3.72 3.72a.75.75 0 0 1-1.06-1.06l4.25-4.25Z"
-							clip-rule="evenodd"
-						/>
-					</svg>
-				</button>
-
-				{#if terminalExpanded}
-					<div style="height: {terminalHeight}px" class="min-h-0">
-						<XTerminal
-							overlay={overlay || isDraggingHandle}
-							bind:connected={terminalConnected}
-							bind:connecting={terminalConnecting}
-							{chatId}
-						/>
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>

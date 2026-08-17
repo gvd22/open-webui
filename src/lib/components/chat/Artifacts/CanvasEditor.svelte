@@ -59,6 +59,7 @@
 	let isApplyingExternalContent = false;
 	let suppressExternalSaveUntil = Date.now() + 300;
 	let initializedEditorCanvasId = '';
+	let richTextInput: any = null;
 	let unregisterSaveBarrier = () => {};
 
 	$: generatedTitle = titleValue || generateCanvasTitle(md || value || content, title);
@@ -75,6 +76,7 @@
 		json = null;
 		lastLocalContent = nextContent;
 		queueMicrotask(() => {
+			richTextInput?.setValue(nextContent);
 			isApplyingExternalContent = false;
 		});
 	};
@@ -224,22 +226,53 @@
 			const current = ((get(artifactContents) ?? []) as any[]).find(
 				(item) => item?.canvasId === canvasId
 			);
-			const note = await promoteTransientCanvasDocument(localStorage.token, chatId, canvasId, {
+			const promotion = {
 				title: titleValue || generatedTitle,
 				content: md || value || content,
 				html,
 				json,
 				expected_updated_at: current?.updatedAt ?? null,
 				expected_content_hash: current?.contentHash ?? null
-			});
+			};
+			let note;
+			try {
+				note = await promoteTransientCanvasDocument(
+					localStorage.token,
+					chatId,
+					canvasId,
+					promotion
+				);
+			} catch (error: any) {
+				if (error?.status !== 409) throw error;
+
+				const latest = await selectTransientCanvasDocument(localStorage.token, chatId, canvasId);
+				if (latest.title !== promotion.title || latest.content !== promotion.content) {
+					applyExternalContent(latest.content ?? '');
+					titleValue = latest.title ?? titleValue;
+					updateCanvasState({
+						title: titleValue,
+						content: latest.content ?? '',
+						updatedAt: latest.updated_at,
+						contentHash: latest.contentHash
+					});
+					toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
+					return;
+				}
+
+				note = await promoteTransientCanvasDocument(localStorage.token, chatId, canvasId, {
+					...promotion,
+					expected_updated_at: latest.updated_at,
+					expected_content_hash: latest.contentHash
+				});
+			}
 			linkedNoteId = note?.id ?? '';
 
 			if (linkedNoteId) {
 				updateCanvasState({ noteId: linkedNoteId, title: titleValue || generatedTitle });
 				toast.success($i18n.t('Added to notes'));
 			}
-		} catch (error) {
-			toast.error(`${error}`);
+		} catch (error: any) {
+			toast.error(error?.detail?.message ?? error?.detail ?? error?.message ?? `${error}`);
 		} finally {
 			saving = false;
 		}
@@ -357,10 +390,11 @@
 	<div class="min-h-0 flex-1 overflow-auto px-4 pb-4">
 		{#key canvasId}
 			<RichTextInput
+				bind:this={richTextInput}
 				bind:editor
 				id={`canvas-${canvasId}`}
 				className="input-prose-sm min-h-[20rem] px-0.5"
-				bind:value
+				{value}
 				documentId={`canvas:${canvasId}`}
 				collaboration={false}
 				socket={$socket as any}

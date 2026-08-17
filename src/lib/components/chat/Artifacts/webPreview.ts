@@ -174,6 +174,14 @@ const inlineCssAssets = (css: string, fromPath: string, files: Record<string, We
 		return path && files[path] ? `url("${dataUrl(files[path])}")` : match;
 	});
 
+const isJavaScriptMime = (mime: string) =>
+	[
+		'text/javascript',
+		'application/javascript',
+		'text/ecmascript',
+		'application/ecmascript'
+	].includes(mime.toLowerCase().split(';', 1)[0].trim());
+
 export const composeWebPreviewHtml = (
 	files: Record<string, WebPreviewFile>,
 	entrypoint = 'index.html'
@@ -197,7 +205,7 @@ export const composeWebPreviewHtml = (
 			const path = resolvePreviewPath(reference, entrypoint);
 			const file = path ? files[path] : undefined;
 			const attributes = `${before}${after}`.trim();
-			return file?.mime === 'text/javascript'
+			return file && isJavaScriptMime(file.mime)
 				? `<script${attributes ? ` ${attributes}` : ''} data-preview-file="${path}">${file.content}<\/script>`
 				: match;
 		}

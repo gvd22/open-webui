@@ -1,11 +1,18 @@
 <script context="module">
-	let savedPyodidePath = '/mnt/uploads';
+	import { PYODIDE_WORKSPACE_DIRECTORY } from '$lib/pyodide/workspace';
+
+	let savedPyodidePath = PYODIDE_WORKSPACE_DIRECTORY;
 </script>
 
 <script lang="ts">
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
-	import { pyodideWorker } from '$lib/stores';
+	import { pyodideWorker, showFileNavPath } from '$lib/stores';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import {
+		asPyodideWorkspaceDirectory,
+		getPyodideWorkspaceBreadcrumbs,
+		getPyodideWorkspacePath
+	} from '$lib/pyodide/workspace';
 	import type { FileEntry } from '$lib/apis/terminal';
 
 	import FileNavToolbar from './FileNav/FileNavToolbar.svelte';
@@ -15,10 +22,12 @@
 	import Spinner from '../common/Spinner.svelte';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
+	import { getWorkspaceFileOpenTarget } from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
 	export let overlay = false;
+	export let onOpenFile: (path: string) => boolean = () => false;
 
 	// ── State ─────────────────────────────────────────────────────────────
 	let currentPath = savedPyodidePath;
@@ -129,19 +138,7 @@
 
 	// ── Breadcrumbs ───────────────────────────────────────────────────────
 
-	const buildBreadcrumbs = (path: string) => {
-		const parts = path.split('/').filter(Boolean);
-		return parts.reduce(
-			(acc, part) => {
-				const prev = acc[acc.length - 1];
-				acc.push({ label: part, path: `${prev.path}${part}/` });
-				return acc;
-			},
-			[{ label: '/', path: '/' }]
-		);
-	};
-
-	$: breadcrumbs = buildBreadcrumbs(currentPath);
+	$: breadcrumbs = getPyodideWorkspaceBreadcrumbs(currentPath);
 
 	// ── Operations ────────────────────────────────────────────────────────
 
@@ -150,7 +147,7 @@
 		error = null;
 		selectedFile = null;
 		clearPreview();
-		currentPath = path.endsWith('/') ? path : path + '/';
+		currentPath = asPyodideWorkspaceDirectory(path);
 		savedPyodidePath = currentPath;
 		pushNavHistory(currentPath);
 
@@ -170,13 +167,16 @@
 		loading = false;
 	};
 
-	const openEntry = async (entry: FileEntry) => {
+	const openEntry = async (entry: FileEntry, notifyWorkspace = true) => {
 		if (entry.type === 'directory') {
 			await loadDir(`${currentPath}${entry.name}/`);
 			return;
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
+		const fileOpenTarget = getWorkspaceFileOpenTarget(filePath);
+		if (notifyWorkspace && fileOpenTarget === 'document-viewer' && onOpenFile(filePath)) return;
+		if (notifyWorkspace && fileOpenTarget === 'files') onOpenFile(filePath);
 		pushNavHistory(currentPath, filePath);
 		selectedFile = filePath;
 		fileLoading = true;
@@ -201,6 +201,19 @@
 			fileContent = 'Failed to read file';
 		}
 		fileLoading = false;
+	};
+
+	const openRequestedFile = async (filePath: string) => {
+		const normalized = getPyodideWorkspacePath(
+			filePath.startsWith('/') ? filePath : `${currentPath}${filePath}`
+		);
+		if (!normalized) return;
+		const separator = normalized.lastIndexOf('/');
+		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
+		const name = normalized.slice(separator + 1);
+		if (!name) return;
+		await loadDir(directory);
+		await openEntry({ name, type: 'file', size: 0 });
 	};
 
 	const clearPreview = () => {
@@ -237,6 +250,11 @@
 	const doDelete = async () => {
 		try {
 			await sendWorkerMessage({ type: 'fs:delete', path: deletePath });
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: { paths: [deletePath], kind: 'deleted' }
+				})
+			);
 			if (selectedFile === deletePath) {
 				selectedFile = null;
 				clearPreview();
@@ -337,14 +355,22 @@
 		loadDir(currentPath);
 	};
 
+	let unsubscribeDisplayFile: (() => void) | null = null;
+
 	onMount(() => {
 		ensureWorker();
 		loadDir(currentPath);
 		window.addEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile = showFileNavPath.subscribe((filePath) => {
+			if (!filePath) return;
+			showFileNavPath.set(null);
+			void openRequestedFile(filePath);
+		});
 	});
 
 	onDestroy(() => {
 		window.removeEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile?.();
 	});
 </script>
 
@@ -386,7 +412,7 @@
 	{/if}
 
 	{#if overlay}
-		<div class="absolute inset-0 z-10 pointer-events-none" />
+		<div class="absolute inset-0 z-10 pointer-events-none"></div>
 	{/if}
 
 	<!-- Toolbar (shared with FileNav) -->

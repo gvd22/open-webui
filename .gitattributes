@@ -47,3 +47,8 @@
 # Misc
 *.env text eol=lf
 *.lock text eol=lf
+
+# Document viewer fixtures
+*.pdf binary
+*.docx binary
+*.pptx binary

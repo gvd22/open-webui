@@ -50,6 +50,7 @@ from open_webui.utils.canvas import (
     canvas_timestamp,
     generate_canvas_title,
     linked_canvas_note_exists,
+    serialize_canvas_documents,
     require_canvas_precondition,
     set_active_canvas_document,
     sync_linked_canvas_note_content,
@@ -1357,6 +1358,7 @@ async def get_chat_by_id(id: str, user=Depends(get_verified_user), db: AsyncSess
 
     if chat:
         data = ChatResponse.model_validate(chat, from_attributes=True).model_dump()
+        data['chat'] = serialize_canvas_documents(data['chat'])
         data['context_usage'] = await get_chat_context_usage(chat)
         return data
 

@@ -1,4 +1,5 @@
 import { loadPyodide, type PyodideInterface } from 'pyodide';
+import { PYODIDE_WORKSPACE_ROOT, requirePyodideWorkspacePath } from '$lib/pyodide/workspace';
 
 declare global {
 	interface Window {
@@ -47,7 +48,7 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 	});
 
 	// Create the upload directory and mount IDBFS for persistence
-	const uploadDir = '/mnt/uploads';
+	const uploadDir = PYODIDE_WORKSPACE_ROOT;
 	self.pyodide.FS.mkdirTree(uploadDir);
 	self.pyodide.FS.mount(self.pyodide.FS.filesystems.IDBFS, {}, '/mnt');
 
@@ -71,6 +72,7 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 
 	const micropip = self.pyodide.pyimport('micropip');
 	await micropip.install(packages);
+	await resetPythonWorkspace();
 }
 
 /**
@@ -108,7 +110,14 @@ function persistFS() {
 // FS operations
 // ---------------------------------------------------------------------------
 
-function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = '/mnt/uploads') {
+async function resetPythonWorkspace() {
+	await self.pyodide.runPythonAsync(`import os
+os.environ["HOME"] = "${PYODIDE_WORKSPACE_ROOT}"
+os.chdir("${PYODIDE_WORKSPACE_ROOT}")`);
+}
+
+function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = PYODIDE_WORKSPACE_ROOT) {
+	dir = requirePyodideWorkspacePath(dir);
 	try {
 		self.pyodide.FS.stat(dir);
 	} catch {
@@ -116,11 +125,13 @@ function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = '/mnt
 	}
 
 	for (const file of files) {
-		self.pyodide.FS.writeFile(`${dir}/${file.name}`, new Uint8Array(file.data));
+		const target = requirePyodideWorkspacePath(`${dir}/${file.name}`);
+		self.pyodide.FS.writeFile(target, new Uint8Array(file.data));
 	}
 }
 
 function fsList(path: string) {
+	path = requirePyodideWorkspacePath(path);
 	const entries: { name: string; type: 'file' | 'directory'; size: number }[] = [];
 	try {
 		const items = self.pyodide.FS.readdir(path).filter((n: string) => n !== '.' && n !== '..');
@@ -144,11 +155,15 @@ function fsList(path: string) {
 }
 
 function fsRead(path: string): ArrayBuffer {
+	path = requirePyodideWorkspacePath(path);
 	const data: Uint8Array = (self.pyodide.FS as any).readFile(path) as Uint8Array;
 	return data.buffer as ArrayBuffer;
 }
 
 function fsDelete(path: string) {
+	path = requirePyodideWorkspacePath(path);
+	if (path === PYODIDE_WORKSPACE_ROOT)
+		throw new Error('The Pyodide workspace root cannot be deleted');
 	try {
 		const stat = self.pyodide.FS.stat(path);
 		if (self.pyodide.FS.isDir(stat.mode)) {
@@ -167,7 +182,7 @@ function fsDelete(path: string) {
 }
 
 function fsMkdir(path: string) {
-	self.pyodide.FS.mkdirTree(path);
+	self.pyodide.FS.mkdirTree(requirePyodideWorkspacePath(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +205,7 @@ async function executeCode(
 	}
 
 	try {
+		await resetPythonWorkspace();
 		// check if matplotlib is imported in the code
 		if (code.includes('matplotlib')) {
 			// Override plt.show() to return base64 image
@@ -279,7 +295,18 @@ self.onmessage = async (event) => {
 
 		case 'fs:read': {
 			try {
+				const stat = self.pyodide.FS.stat(data.path);
+				if (self.pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+				if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+					throw new Error('File metadata is invalid');
+				}
+				if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+					throw new Error('File exceeds the read limit');
+				}
 				const buffer = fsRead(data.path);
+				if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+					throw new Error('File exceeds the read limit');
+				}
 				self.postMessage({ id, type: 'fs:read', data: buffer }, { transfer: [buffer] });
 			} catch (err: unknown) {
 				self.postMessage({

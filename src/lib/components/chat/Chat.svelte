@@ -47,6 +47,9 @@
 		workspaceTerminalConnectionId,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceFileUpdate,
+		workspaceActiveFile,
+		workspaceOpenFilePaths,
 		chatRequestQueues,
 		desktopEvent
 	} from '$lib/stores';
@@ -120,7 +123,10 @@
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
 	import {
+		getDefaultWorkspaceContentId,
 		getWorkspaceModelFocus,
+		isWorkspaceDocumentPath,
+		resolveWorkspaceRuntime,
 		WORKSPACE_TERMINAL_ID,
 		type WorkspaceModelFocus
 	} from './Artifacts/workspace';
@@ -336,6 +342,13 @@
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
+	$: workspaceDefaultContentId = getDefaultWorkspaceContentId(
+		resolveWorkspaceRuntime(
+			$terminalServers,
+			$selectedTerminalId,
+			codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
+		)
+	);
 	let webSearchActive = false;
 	let showWebSearchConfirm = false;
 	let pendingWebSearchPrompt: string | null = null;
@@ -933,13 +946,32 @@
 	const terminalEventHandler = (type: string, data: any) => {
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
-			displayFileHandler(data.path, { showControls, showFileNavPath });
+			if ($workspaceOpenFilePaths.includes(data.path)) {
+				workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
+			} else {
+				displayFileHandler(data.path, { showControls, showFileNavPath });
+			}
 		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
 			if (!data?.path) return;
+			if (isWorkspaceDocumentPath(data.path)) {
+				if ($workspaceOpenFilePaths.includes(data.path)) {
+					workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
+				} else {
+					displayFileHandler(data.path, { showControls, showFileNavPath });
+				}
+			}
 			showFileNavDir.set(data.path);
 		} else if (type === 'terminal:run_command') {
+			// A shell command can change any path (including rename/delete). Mark open
+			// viewers for a cheap verify on activation instead of guessing changed paths.
+			const terminalId =
+				data?.terminal_id ?? $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
+			workspaceFileUpdate.set({
+				kind: 'unknown',
+				terminalId: terminalId ?? null,
+				revision: Date.now()
+			});
 			showFileNavDir.set('/');
-			const terminalId = $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
 			// Historical terminal events are replayed while a chat is restored. Only a live
 			// model run should reveal the right-side terminal workspace.
 			if (generating && terminalId) {
@@ -1325,13 +1357,17 @@
 		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
 		audioQueue.set(audioQueueInstance);
 
-		const pageSubscribe = page.subscribe(async (p) => {
-			if (p.url.pathname === '/' || p.url.pathname.startsWith('/folders/')) {
-				await tick();
-				initNewChat();
-			}
+		let initialPageInitialization: Promise<void> | null = null;
+		const pageSubscribe = page.subscribe((p) => {
+			const initialization = (async () => {
+				if (p.url.pathname === '/' || p.url.pathname.startsWith('/folders/')) {
+					await tick();
+					await initNewChat();
+				}
 
-			stopAudio();
+				stopAudio();
+			})();
+			if (!initialPageInitialization) initialPageInitialization = initialization;
 		});
 
 		const showControlsSubscribe = showControls.subscribe(async (value) => {
@@ -1369,6 +1405,10 @@
 		);
 
 		const init = async () => {
+			// The page store emits immediately. Restore the draft only after the initial
+			// new-chat defaults have finished, otherwise they can overwrite feature toggles.
+			await initialPageInitialization;
+
 			if (!chatIdProp) {
 				loading = false;
 				await tick();
@@ -1650,6 +1690,16 @@
 			const refreshedChat = await getChatById(localStorage.token, $chatId);
 			const canvases = refreshedChat?.chat?._canvas_documents ?? {};
 			const previews = refreshedChat?.chat?._web_preview_documents ?? {};
+			if (chat?.chat) {
+				chat = {
+					...chat,
+					chat: {
+						...chat.chat,
+						_canvas_documents: canvases,
+						_web_preview_documents: previews
+					}
+				};
+			}
 			(artifactContents as any).update((items: any[] | null) =>
 				(items ?? []).map((item) => {
 					if (item?.type === 'canvas-note' && canvases[item.canvasId]) {
@@ -3338,6 +3388,7 @@
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
 				terminal_id: terminalEnabled ? (activeTerminalId ?? undefined) : undefined,
 				workspace_focus: workspaceFocus,
+				workspace_file: $workspaceActiveFile ?? undefined,
 				tool_servers: [
 					...($toolServers ?? []).filter(
 						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
@@ -4044,6 +4095,7 @@
 								}
 							}}
 							{history}
+							{workspaceDefaultContentId}
 							title={$chatTitle}
 							shareEnabled={!!history.currentId}
 							{initNewChat}
@@ -4216,7 +4268,15 @@
 										}}
 										onChange={(data) => {
 											if (!$temporaryChatEnabled) {
-												saveDraft(data, $chatId);
+												saveDraft(
+													{
+														...data,
+														webSearchEnabled,
+														imageGenerationEnabled,
+														codeInterpreterEnabled
+													},
+													$chatId
+												);
 											}
 										}}
 										onWebSearchToggle={handleWebSearchToggle}
@@ -4342,7 +4402,12 @@
 									}}
 									onChange={(data) => {
 										if (!$temporaryChatEnabled) {
-											saveDraft(data);
+											saveDraft({
+												...data,
+												webSearchEnabled,
+												imageGenerationEnabled,
+												codeInterpreterEnabled
+											});
 										}
 									}}
 									on:submit={async (e) => {
