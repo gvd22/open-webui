@@ -31,7 +31,8 @@
 		web_preview_select: ['Opening web preview', 'Web preview opened'],
 		web_preview_list: ['Checking web previews', 'Web previews checked'],
 		web_preview_read_file: ['Reading web preview', 'Web preview read'],
-		web_preview_replace_text: ['Updating web preview', 'Web preview updated']
+		web_preview_replace_text: ['Updating web preview', 'Web preview updated'],
+		web_preview_import_runtime_file: ['Importing preview data', 'Preview data imported']
 	};
 	$: label = labels[name] ?? labels.web_preview_update;
 

@@ -10,6 +10,7 @@ from open_webui.models.config import Config
 from open_webui.routers.chats import WebPreviewDocumentForm, update_transient_web_preview
 from open_webui.tools.builtin import (
     web_preview_create,
+    web_preview_import_runtime_file,
     web_preview_read_file,
     web_preview_replace_text,
     web_preview_update,
@@ -295,6 +296,166 @@ def test_canvas_and_web_preview_are_independent_model_tools(monkeypatch):
         'canvas_read_document',
         'canvas_replace_text',
     }
+
+
+def test_runtime_import_tool_is_exposed_only_with_an_active_runtime(monkeypatch):
+    chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
+    chat = SimpleNamespace(id=chat_id, meta={})
+    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
+    monkeypatch.setattr(Config, 'get_many', AsyncMock(return_value={}))
+
+    model = {
+        'info': {
+            'meta': {
+                'builtinTools': {'web_preview': True},
+                'capabilities': {'web_preview': True},
+            }
+        }
+    }
+    without_runtime = asyncio.run(
+        get_builtin_tools(
+            Request({'type': 'http', 'method': 'POST', 'path': '/'}),
+            {'__user__': {'id': 'user-1', 'role': 'admin'}, '__metadata__': {'chat_id': chat_id}},
+            model=model,
+        )
+    )
+    with_terminal = asyncio.run(
+        get_builtin_tools(
+            Request({'type': 'http', 'method': 'POST', 'path': '/'}),
+            {
+                '__user__': {'id': 'user-1', 'role': 'admin'},
+                '__metadata__': {'chat_id': chat_id, 'terminal_id': 'terminal-1'},
+            },
+            model=model,
+        )
+    )
+
+    assert 'web_preview_import_runtime_file' not in without_runtime
+    assert 'web_preview_import_runtime_file' in with_terminal
+
+
+def test_runtime_import_tool_is_exposed_with_active_pyodide(monkeypatch):
+    chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
+    chat = SimpleNamespace(id=chat_id, meta={})
+    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
+    monkeypatch.setattr(
+        Config,
+        'get_many',
+        AsyncMock(return_value={'code_interpreter.enable': True}),
+    )
+    monkeypatch.setattr(Config, 'get', AsyncMock(return_value='pyodide'))
+
+    tools = asyncio.run(
+        get_builtin_tools(
+            Request({'type': 'http', 'method': 'POST', 'path': '/'}),
+            {'__user__': {'id': 'user-1', 'role': 'admin'}, '__metadata__': {'chat_id': chat_id}},
+            features={'code_interpreter': True},
+            model={
+                'info': {
+                    'meta': {
+                        'builtinTools': {'web_preview': True, 'code_interpreter': True},
+                        'capabilities': {'web_preview': True, 'code_interpreter': True},
+                    }
+                }
+            },
+        )
+    )
+
+    assert 'execute_code' in tools
+    assert 'web_preview_import_runtime_file' in tools
+
+
+def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(monkeypatch):
+    preview_id = 'preview-1'
+    document = {
+        'preview_id': preview_id,
+        'title': 'Dashboard',
+        'entrypoint': 'index.html',
+        'files': normalize_web_preview_files({'index.html': '<h1>Dashboard</h1>'}),
+        'updated_at': 10,
+        'exported_path': None,
+        'exported_runtime': None,
+    }
+    chat = SimpleNamespace(
+        id='chat-1',
+        user_id='user-1',
+        chat={WEB_PREVIEW_DOCUMENTS_KEY: {preview_id: document}},
+    )
+    calls = []
+
+    async def event_call(event):
+        calls.append(event)
+        return {'content': '{"values":[1,2,3]}'}
+
+    async def mutate_chat(_id, mutator, **_kwargs):
+        chat.chat, result = mutator(dict(chat.chat), None)
+        return chat, result
+
+    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
+    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+
+    result = json.loads(
+        asyncio.run(
+            web_preview_import_runtime_file(
+                preview_id,
+                '/workspace/results.json',
+                expected_updated_at=10,
+                expected_content_hash=web_preview_content_hash(document),
+                target_path='data/results.json',
+                __event_call__=event_call,
+                __metadata__={'terminal_id': 'terminal-1', 'session_id': 'socket-1'},
+                __chat_id__=chat.id,
+                __user__={'id': 'user-1'},
+            )
+        )
+    )
+
+    imported = chat.chat[WEB_PREVIEW_DOCUMENTS_KEY][preview_id]['files']['data/results.json']
+    assert result['previewId'] == preview_id
+    assert result['updatedAt'] > 10
+    assert imported == {'content': '{"values":[1,2,3]}', 'mime': 'application/json'}
+    assert calls[0]['type'] == 'workspace:read_runtime_file'
+    assert isinstance(calls[0]['data']['id'], str)
+    assert calls[0]['data']['runtime'] == 'terminal'
+    assert calls[0]['data']['terminal_id'] == 'terminal-1'
+    assert calls[0]['data']['source_path'] == '/workspace/results.json'
+    assert calls[0]['data']['max_bytes'] == 512_000
+
+
+def test_runtime_file_import_rejects_stale_preview_before_reading_runtime(monkeypatch):
+    preview_id = 'preview-1'
+    document = {
+        'preview_id': preview_id,
+        'title': 'Dashboard',
+        'entrypoint': 'index.html',
+        'files': normalize_web_preview_files({'index.html': '<h1>Dashboard</h1>'}),
+        'updated_at': 11,
+    }
+    chat = SimpleNamespace(
+        id='chat-1',
+        user_id='user-1',
+        chat={WEB_PREVIEW_DOCUMENTS_KEY: {preview_id: document}},
+    )
+    event_call = AsyncMock(return_value={'content': 'should not be read'})
+    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
+
+    result = json.loads(
+        asyncio.run(
+            web_preview_import_runtime_file(
+                preview_id,
+                '/mnt/uploads/results.csv',
+                expected_updated_at=10,
+                expected_content_hash='stale',
+                __event_call__=event_call,
+                __metadata__={'session_id': 'socket-1'},
+                __chat_id__=chat.id,
+                __user__={'id': 'user-1'},
+            )
+        )
+    )
+
+    assert result['type'] == 'web_preview.conflict'
+    event_call.assert_not_awaited()
 
 
 def test_create_then_update_reuses_stable_preview_id(monkeypatch):

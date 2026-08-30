@@ -32,6 +32,8 @@ WORKSPACE_TOOL_ARGUMENT_KEYS = {
     'end_line',
     'expected_content_hash',
     'expected_updated_at',
+    'source_path',
+    'target_path',
 }
 WORKSPACE_RESULT_CONTENT_TYPES = {
     'canvas.document': {'content'},
@@ -46,6 +48,11 @@ HTML, CSS, or JavaScript experience, use the web_preview tools. Do not answer wi
 HTML/CSS/JavaScript code block instead. Use web_preview_create for a new preview and update the
 existing preview when the request refers to one already in this chat. You may still use short code
 snippets when the user explicitly asks for code rather than an interactive preview."""
+
+WEB_PREVIEW_RUNTIME_IMPORT_PROMPT = """[WEB PREVIEW RUNTIME FILES]
+When code execution or a Terminal command creates a text data file that an existing Web Preview
+should display, call web_preview_import_runtime_file with the active preview version. This copies
+one snapshot into the preview; do not paste large generated data into web_preview_update."""
 
 
 def _compact_workspace_arguments(arguments: Any) -> str:
@@ -296,6 +303,8 @@ def build_workspace_context_prompt(
     prompts = []
     if 'web_preview_create' in tool_names:
         prompts.append(WEB_PREVIEW_ROUTING_PROMPT)
+    if 'web_preview_import_runtime_file' in tool_names:
+        prompts.append(WEB_PREVIEW_RUNTIME_IMPORT_PROMPT)
     if budgets['canvas']:
         prompt = build_active_canvas_prompt(
             chat_data,

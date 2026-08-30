@@ -94,6 +94,7 @@ from open_webui.utils.sanitize import sanitize_code
 log = logging.getLogger(__name__)
 
 MAX_KNOWLEDGE_BASE_SEARCH_ITEMS = 10_000
+WEB_PREVIEW_RUNTIME_IMPORT_MAX_BYTES = 512_000
 
 
 def _canvas_tool_error(message: str) -> str:
@@ -910,6 +911,119 @@ async def web_preview_replace_text(
 
     try:
         document = await _mutate_web_preview_chat(chat, mutate)
+    except (RuntimeError, ValueError) as exc:
+        return _web_preview_error(str(exc))
+    return _web_preview_document(document)
+
+
+async def web_preview_import_runtime_file(
+    preview_id: str,
+    source_path: str,
+    expected_updated_at: int,
+    expected_content_hash: str,
+    target_path: str = '',
+    __event_call__: callable = None,
+    __metadata__: dict | None = None,
+    __chat_id__: str | None = None,
+    __user__: dict | None = None,
+) -> str:
+    """Copy one text file from the active runtime into an existing Web Preview.
+
+    Use this after code execution or a Terminal command creates or transforms data that the
+    Web Preview should display. The imported file is a snapshot: the preview remains usable if
+    the runtime later stops or the source file changes.
+
+    :param preview_id: Stable Web Preview ID receiving the file.
+    :param source_path: Absolute path to a text file in the active Pyodide or Terminal workspace.
+    :param expected_updated_at: Required updatedAt from the current Web Preview reference.
+    :param expected_content_hash: Required contentHash from the current Web Preview reference.
+    :param target_path: Optional relative path inside the preview, for example data/results.json.
+    :return: The updated Web Preview metadata.
+    """
+    chat = await _get_canvas_chat(__chat_id__, __user__)
+    if chat is None:
+        return _web_preview_error('Web Preview is available only in a saved chat.')
+    if __event_call__ is None:
+        return _web_preview_error('The active runtime is not connected to this chat.')
+
+    source_path = str(source_path or '').strip()
+    if not source_path.startswith('/') or '\x00' in source_path or len(source_path) > 1_024:
+        return _web_preview_error('source_path must be an absolute runtime workspace path.')
+    source_name = source_path.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]
+    if not source_name:
+        return _web_preview_error('source_path must reference a file.')
+    target_path = str(target_path or f'data/{source_name}')
+    try:
+        target_path = next(iter(normalize_web_preview_files({target_path: ''})))
+    except ValueError as exc:
+        return _web_preview_error(str(exc))
+
+    current = ((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {}).get(preview_id)
+    if not current:
+        return _web_preview_error('Web Preview not found in this chat.')
+    try:
+        require_web_preview_precondition(
+            preview_id,
+            current,
+            expected_updated_at,
+            expected_content_hash,
+        )
+    except WebPreviewConflictError as exc:
+        return _web_preview_conflict(exc)
+
+    metadata = __metadata__ or {}
+    terminal_id = str(metadata.get('terminal_id') or '')
+    runtime = 'terminal' if terminal_id else 'pyodide'
+    response = await __event_call__(
+        {
+            'type': 'workspace:read_runtime_file',
+            'data': {
+                'id': str(uuid.uuid4()),
+                'runtime': runtime,
+                'terminal_id': terminal_id or None,
+                'chat_id': __chat_id__,
+                'source_path': source_path,
+                'max_bytes': WEB_PREVIEW_RUNTIME_IMPORT_MAX_BYTES,
+                'session_id': metadata.get('session_id'),
+            },
+        }
+    )
+    if not isinstance(response, dict) or response.get('error'):
+        message = response.get('error') if isinstance(response, dict) else None
+        return _web_preview_error(message or 'The runtime file could not be read.')
+    content = response.get('content')
+    if not isinstance(content, str):
+        return _web_preview_error('Only UTF-8 text files can be imported into a Web Preview.')
+    if len(content.encode('utf-8')) > WEB_PREVIEW_RUNTIME_IMPORT_MAX_BYTES:
+        return _web_preview_error('The runtime file is too large to import into a Web Preview.')
+
+    def mutate(chat_data: dict, _session):
+        documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+        current = documents.get(preview_id)
+        if not current:
+            raise ValueError('Web Preview not found in this chat.')
+        require_web_preview_precondition(
+            preview_id,
+            current,
+            expected_updated_at,
+            expected_content_hash,
+        )
+        files = dict(current.get('files') or {})
+        files[target_path] = {'content': content}
+        normalized_files = normalize_web_preview_files(files)
+        updated = {
+            **current,
+            'files': normalized_files,
+            'updated_at': web_preview_timestamp(current.get('updated_at')),
+        }
+        documents[preview_id] = updated
+        chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+        return chat_data, updated
+
+    try:
+        document = await _mutate_web_preview_chat(chat, mutate)
+    except WebPreviewConflictError as exc:
+        return _web_preview_conflict(exc)
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
     return _web_preview_document(document)

@@ -267,4 +267,24 @@ describe('Web Preview contract', () => {
 			{ name: 'web_preview_replace_text', done: true, artifact: { previewId: 'preview-1' } }
 		]);
 	});
+
+	it('renders a runtime data import as a Web Preview update activity', () => {
+		const output = buildOutputDisplayItems([
+			{
+				type: 'function_call',
+				call_id: 'import-1',
+				name: 'web_preview_import_runtime_file',
+				status: 'completed'
+			},
+			{ ...toolOutput('preview-1'), call_id: 'import-1' }
+		]);
+
+		expect(output.filter((item) => item.type === 'web_preview_activity')).toMatchObject([
+			{
+				name: 'web_preview_import_runtime_file',
+				done: true,
+				artifact: { previewId: 'preview-1' }
+			}
+		]);
+	});
 });

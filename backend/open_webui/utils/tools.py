@@ -58,6 +58,7 @@ from open_webui.tools.builtin import (
     canvas_select_document,
     canvas_update_document,
     web_preview_create,
+    web_preview_import_runtime_file,
     web_preview_list,
     web_preview_read_file,
     web_preview_replace_text,
@@ -768,16 +769,21 @@ async def get_builtin_tools(
         and get_model_capability('web_preview', False)
         and supports_chat_workspace_tools(chat_id, chat)
     ):
-        builtin_functions.extend(
-            [
-                web_preview_create,
-                web_preview_update,
-                web_preview_select,
-                web_preview_list,
-                web_preview_read_file,
-                web_preview_replace_text,
-            ]
+        web_preview_functions = [
+            web_preview_create,
+            web_preview_update,
+            web_preview_select,
+            web_preview_list,
+            web_preview_read_file,
+            web_preview_replace_text,
+        ]
+        pyodide_runtime_active = (
+            execute_code in builtin_functions
+            and await Config.get('code_interpreter.engine', 'pyodide') == 'pyodide'
         )
+        if metadata.get('terminal_id') or pyodide_runtime_active:
+            web_preview_functions.append(web_preview_import_runtime_file)
+        builtin_functions.extend(web_preview_functions)
 
     # Channels tools - search channels and messages
     if is_builtin_tool_enabled('channels') and config.get('channels.enable') and await has_user_permission('channels'):

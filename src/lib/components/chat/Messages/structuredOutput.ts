@@ -158,7 +158,8 @@ const WEB_PREVIEW_TOOL_NAMES = new Set([
 	'web_preview_select',
 	'web_preview_list',
 	'web_preview_read_file',
-	'web_preview_replace_text'
+	'web_preview_replace_text',
+	'web_preview_import_runtime_file'
 ]);
 
 function getTextFromParts(parts: OutputContentPart[] = []): string {

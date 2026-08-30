@@ -31,6 +31,7 @@
 		channels,
 		channelId,
 		terminalServers,
+		selectedTerminalId,
 		showControls,
 		showFileNavPath,
 		showFileNavDir,
@@ -41,6 +42,7 @@
 	} from '$lib/stores';
 	import { refreshChatList } from '$lib/stores/chatList';
 	import { getFileContentById } from '$lib/apis/files';
+	import { downloadFileBlobDetailed } from '$lib/apis/terminal';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -286,6 +288,68 @@
 			pyodideWorker.set(worker);
 		}
 		return worker;
+	};
+
+	const decodeRuntimeText = (buffer) => {
+		try {
+			return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+		} catch {
+			throw new Error('Only UTF-8 text files can be imported into a Web Preview.');
+		}
+	};
+
+	const readPyodideRuntimeFile = (id, path, maxBytes) => {
+		const worker = getOrCreateWorker();
+		return new Promise((resolve, reject) => {
+			const onMessage = (event) => {
+				if (event.data?.id !== id || event.data?.type !== 'fs:read') return;
+				clearTimeout(timeout);
+				worker.removeEventListener('message', onMessage);
+				if (event.data.error) {
+					reject(new Error(event.data.error));
+					return;
+				}
+				resolve(decodeRuntimeText(event.data.data));
+			};
+			const timeout = setTimeout(() => {
+				worker.removeEventListener('message', onMessage);
+				reject(new Error('Pyodide timed out while reading the file.'));
+			}, 30000);
+			worker.addEventListener('message', onMessage);
+			worker.postMessage({ type: 'fs:read', id, path, maxBytes });
+		});
+	};
+
+	const readRuntimeFileForPreview = async (data) => {
+		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
+		const sourcePath = String(data?.source_path ?? '');
+		if (data?.runtime === 'terminal') {
+			const terminal = ($terminalServers ?? []).find(
+				(item) => item.id === (data.terminal_id || $selectedTerminalId)
+			);
+			if (!terminal?.url) throw new Error('The selected Terminal is unavailable.');
+			const result = await downloadFileBlobDetailed(
+				terminal.url,
+				localStorage.token,
+				sourcePath,
+				data.chat_id,
+				maxBytes
+			);
+			if (!result.ok) {
+				const message =
+					result.reason === 'too-large'
+						? 'The runtime file is too large to import into a Web Preview.'
+						: result.reason === 'missing'
+							? 'The runtime file no longer exists.'
+							: 'The Terminal file could not be read.';
+				throw new Error(message);
+			}
+			return decodeRuntimeText(await result.blob.arrayBuffer());
+		}
+		if (data?.runtime === 'pyodide') {
+			return await readPyodideRuntimeFile(data.id, sourcePath, maxBytes);
+		}
+		throw new Error('No supported runtime is active.');
 	};
 
 	const invalidatePyodideWorkspaceFiles = () => {
@@ -573,6 +637,13 @@
 			if (type === 'execute:python') {
 				console.log('execute:python', data);
 				executePythonAsWorker(data.id, data.code, cb, data.files || []);
+				return;
+			} else if (type === 'workspace:read_runtime_file') {
+				try {
+					cb({ content: await readRuntimeFileForPreview(data) });
+				} catch (error) {
+					cb({ error: error instanceof Error ? error.message : String(error) });
+				}
 				return;
 			} else if (type === 'execute:tool') {
 				console.log('execute:tool', data);
