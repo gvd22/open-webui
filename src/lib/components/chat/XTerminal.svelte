@@ -8,6 +8,8 @@
 	import { terminalServers, selectedTerminalId } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
+	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
 	import { getTerminalConnectionContextKey, isCurrentTerminalSocket } from './terminalConnection';
 
 	const i18n = getContext('i18n');
@@ -144,7 +146,13 @@
 					return;
 				}
 				// First-message auth (no token in URL)
-				connectionSocket.send(JSON.stringify({ type: 'auth', token: authToken.trim(), chat_id: authChatId || undefined }));
+				connectionSocket.send(
+					JSON.stringify({
+						type: 'auth',
+						token: authToken.trim(),
+						chat_id: authChatId || undefined
+					})
+				);
 				connected = true;
 				connecting = false;
 				// Focus the terminal so it receives keyboard input immediately
@@ -344,4 +352,28 @@
 		class="absolute inset-0 px-0.5"
 		class:pointer-events-none={overlay}
 	></div>
+	{#if !connected}
+		<div class="absolute top-2 right-2 text-gray-300">
+			{#if connecting}
+				<div
+					role="status"
+					aria-label={$i18n.t('Connecting...')}
+					class="flex size-8 items-center justify-center"
+				>
+					<Spinner className="size-4" />
+				</div>
+			{:else}
+				<Tooltip content={$i18n.t('Reconnect')}>
+					<button
+						type="button"
+						aria-label={$i18n.t('Reconnect')}
+						class="flex size-8 items-center justify-center rounded-lg bg-gray-900 hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
+						on:click={connect}
+					>
+						<ArrowPath className="size-4" />
+					</button>
+				</Tooltip>
+			{/if}
+		</div>
+	{/if}
 </div>

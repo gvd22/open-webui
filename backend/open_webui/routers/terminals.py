@@ -184,7 +184,10 @@ async def proxy_terminal(
     headers = {'X-User-Id': user.id}
     # Forward per-session cwd tracking header
     if session_id:
-        headers['X-Session-Id'] = session_id
+        # Open Terminal uses this header as the PTY ID on creation. Let it
+        # allocate a unique shell; the trusted context still scopes the worker.
+        if not (request.method == 'POST' and safe_path.rstrip('/') == 'api/terminals'):
+            headers['X-Session-Id'] = session_id
         context_id = terminal_context_id(connection, {'chat_id': session_id}, 'chat')
         context_config = terminal_context_config(connection, 'chat')
         if isinstance(context_config, dict) and context_config.get('context_id') == 'chat_id' and not context_id:
