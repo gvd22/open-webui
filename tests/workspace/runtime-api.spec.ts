@@ -25,12 +25,25 @@ const createChat = async (
 	token: string,
 	label: string
 ): Promise<TestChat> => {
+	const messageId = crypto.randomUUID();
 	const response = await request.post('/api/v1/chats/new', {
 		headers: authorizationHeaders(token),
 		data: {
 			chat: {
 				title: `Runtime API diagnostic ${label} ${Date.now()}`,
-				history: { currentId: null, messages: {} }
+				history: {
+					currentId: messageId,
+					messages: {
+						[messageId]: {
+							id: messageId,
+							role: 'assistant',
+							content: 'Runtime browser test fixture.',
+							parentId: null,
+							childrenIds: [],
+							done: true
+						}
+					}
+				}
 			},
 			folder_id: null
 		}
@@ -43,7 +56,7 @@ const createChat = async (
 
 const outputContains = (result: unknown, value: string) => JSON.stringify(result).includes(value);
 
-test.describe('workspace Terminal API diagnostics', () => {
+test.describe('workspace Terminal diagnostics and Browser regression', () => {
 	test.describe.configure({ mode: 'serial' });
 
 	let request: APIRequestContext;
@@ -259,5 +272,46 @@ test.describe('workspace Terminal API diagnostics', () => {
 		expect(conflict.status()).toBe(400);
 		expect(otherChatPort.ok()).toBeFalsy();
 		expect(await otherChatPort.text()).not.toContain(marker);
+	});
+
+	test('known gap: isolated Browser loads session-protected local script files', async ({
+		page
+	}) => {
+		const chatId = chats[0].id;
+		for (const [name, content] of Object.entries({
+			'index.html':
+				'<!doctype html><title>Runtime browser fixture</title><h1>Runtime browser fixture</h1><p id="count">0</p><button id="increment">Increment</button><script src="app.js"></script>',
+			'app.js':
+				'document.querySelector("#increment").onclick = () => { document.querySelector("#count").textContent = "1"; };'
+		})) {
+			const write = await request.post(terminalPath(chatId, 'files/write'), {
+				headers: authorizationHeaders(token),
+				data: { path: `${TEST_DIRECTORY}/${name}`, content }
+			});
+			expect(write.ok()).toBeTruthy();
+		}
+
+		const signIn = await page.request.post('/api/v1/auths/signin', {
+			data: { email: '', password: '' }
+		});
+		expect(signIn.ok()).toBeTruthy();
+		await page.addInitScript(
+			(token) => localStorage.setItem('token', token),
+			(await signIn.json()).token
+		);
+		await page.goto(`/c/${chatId}`);
+		await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+		await page.getByRole('button', { name: 'Browser', exact: true }).click();
+		await page.getByRole('button', { name: `localhost:${PORT} python3`, exact: true }).click();
+		const frame = page.frameLocator('iframe');
+		await expect(frame.getByRole('heading', { name: 'Runtime browser fixture' })).toBeVisible();
+		await expect(page.locator('iframe')).not.toHaveAttribute('sandbox', /allow-same-origin/);
+		await frame.getByRole('button', { name: 'Increment', exact: true }).click();
+		// Keep the desired behavior executable without counting the known 401 as a pass.
+		test.fail(
+			true,
+			'Opaque iframe subresource requests omit the session cookie; app.js returns 401.'
+		);
+		await expect(frame.locator('#count')).toHaveText('1');
 	});
 });
