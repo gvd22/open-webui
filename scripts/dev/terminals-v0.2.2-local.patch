@@ -1,0 +1,39 @@
+diff --git a/terminals/backends/docker.py b/terminals/backends/docker.py
+index 4dbf24b..df785ea 100644
+--- a/terminals/backends/docker.py
++++ b/terminals/backends/docker.py
+@@ -99,7 +99,7 @@ class DockerBackend(Backend):
+ 
+         host_config: dict = {
+             "Binds": [f"{host_data_dir}:/home/user"],
+-            "PublishAllPorts": True,
++            "PortBindings": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}]},
+         }
+         if self._mounts:
+             host_config["Mounts"] = self._mounts
+@@ -299,6 +299,13 @@ class DockerBackend(Backend):
+         adopted_specs: dict[str, dict] = {}
+         for container in containers:
+             info = await container.show()
++            data_root = Path(settings.docker_data_dir).resolve()
++            if not any(
++                mount.get("Destination") == "/home/user"
++                and Path(mount.get("Source", "")).resolve().is_relative_to(data_root)
++                for mount in info.get("Mounts", [])
++            ):
++                continue
+             name = info.get("Name", "").lstrip("/")
+             labels = info.get("Config", {}).get("Labels", {})
+ 
+@@ -387,6 +394,11 @@ class DockerBackend(Backend):
+             info = await container.show()
+             state = info.get("State", {})
+             if state.get("Running"):
++                for tracked in self._instances.values():
++                    if tracked["instance_id"] == instance_id:
++                        tracked.update(await self._extract_instance_info(
++                            container, tracked["instance_name"], tracked["api_key"]
++                        ))
+                 return "running"
+             return "stopped"
+         except aiodocker.exceptions.DockerError:
