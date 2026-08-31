@@ -17,7 +17,10 @@
 	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import type { WebPreviewArtifact } from '../Artifacts/webPreview';
+	import {
+		mergePersistedWebPreview,
+		type WebPreviewArtifact
+	} from '../Artifacts/webPreview';
 
 	export let name = '';
 	export let done = false;
@@ -38,35 +41,37 @@
 
 	const openPreview = async () => {
 		if (!artifact) return;
-		if ($chatId && artifact.source === 'tool') {
+
+		const targetArtifact = artifact;
+		const targetChatId = $chatId;
+		const targetPreviewId = targetArtifact.previewId;
+
+		if (targetChatId && targetArtifact.source === 'tool') {
 			try {
 				const document = await selectTransientWebPreview(
 					localStorage.token,
-					$chatId,
-					artifact.previewId
+					targetChatId,
+					targetPreviewId
 				);
+				if ($chatId !== targetChatId) return;
+
 				(artifactContents as any).update((items: any[] | null) =>
 					(items ?? []).map((item) =>
-						item?.previewId === artifact?.previewId
-							? {
-									...item,
-									title: document.title,
-									entrypoint: document.entrypoint,
-									files: document.files,
-									content: document.files?.[document.entrypoint]?.content ?? '',
-									updatedAt: document.updated_at,
-									contentHash: document.contentHash
-								}
+						item?.previewId === targetPreviewId
+							? mergePersistedWebPreview(item as WebPreviewArtifact, document)
 							: item
 					)
 				);
 			} catch {
+				if ($chatId !== targetChatId) return;
 				toast.error($i18n.t('Preview could not be refreshed'));
 				return;
 			}
 		}
-		workspaceOpenRequestId.set(artifact.previewId);
-		artifactCode.set(artifact.previewId as any);
+
+		if ($chatId !== targetChatId) return;
+		workspaceOpenRequestId.set(targetPreviewId);
+		artifactCode.set(targetPreviewId);
 		showEmbeds.set(false);
 		if (!$showArtifacts) showArtifacts.set(true);
 		if (!$showControls) showControls.set(true);
@@ -76,7 +81,7 @@
 {#if artifact && done && !error}
 	<button
 		type="button"
-		class="w-fit py-1 text-left text-[0.9375rem] text-gray-500 transition hover:text-gray-700 dark:hover:text-gray-300"
+		class="block max-w-full w-fit py-1 text-left text-[0.9375rem] text-gray-500 transition hover:text-gray-700 dark:hover:text-gray-300"
 		aria-label={`${$i18n.t(label[1])}: ${artifact.title}`}
 		on:click={openPreview}
 	>

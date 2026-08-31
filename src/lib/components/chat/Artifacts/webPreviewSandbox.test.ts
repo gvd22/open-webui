@@ -7,6 +7,11 @@ import {
 } from './webPreviewSandbox';
 
 describe('buildWebPreviewSandbox', () => {
+	it('honors native script and download restrictions independently', () => {
+		expect(buildWebPreviewSandbox({ allowForms: false, allowScripts: false, allowDownloads: false })).toBe('');
+		expect(buildWebPreviewSandbox({ allowForms: false, allowScripts: false })).toBe('allow-downloads');
+		expect(buildWebPreviewSandbox({ allowForms: false, allowDownloads: false, allowSameOrigin: true })).toBe('allow-scripts');
+	});
 	it('allows scripts and downloads without granting same-origin access', () => {
 		const sandbox = buildWebPreviewSandbox({ allowForms: false, allowSameOrigin: true });
 

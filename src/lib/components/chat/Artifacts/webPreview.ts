@@ -98,7 +98,7 @@ export const getWebPreviewErrorFromOutput = (output: any[] = []) => {
 		if (item?.type !== 'function_call_output') continue;
 		try {
 			const parsed = JSON.parse(getToolOutputText(item));
-			if (parsed?.type === 'web_preview.error') return String(parsed.message ?? '');
+			if (['web_preview.error', 'web_preview.conflict'].includes(parsed?.type)) return String(parsed.message ?? '');
 		} catch {
 			// Other tool output belongs to the generic renderer.
 		}
@@ -182,6 +182,28 @@ const isJavaScriptMime = (mime: string) =>
 		'application/ecmascript'
 	].includes(mime.toLowerCase().split(';', 1)[0].trim());
 
+const virtualFetchScript = (files: Record<string, WebPreviewFile>, entrypoint: string) => {
+	// The registry is data, not executable markup, even when a file contains a closing script tag.
+	const registry = JSON.stringify({ files, entrypoint }).replace(/</g, '\\u003c');
+	return `<script data-preview-runtime="files">(() => {
+  const registry = ${registry};
+  const nativeFetch = window.fetch.bind(window);
+  const base = new URL(registry.entrypoint, 'https://web-preview.invalid/');
+  window.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), base);
+    if (url.origin !== base.origin) return nativeFetch(input, init);
+    const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (!['GET', 'HEAD'].includes(method)) return new Response('Preview files are read-only', { status: 405 });
+    let path;
+    try { path = decodeURIComponent(url.pathname.slice(1)); }
+    catch { return new Response('Invalid preview file path', { status: 400 }); }
+    const file = Object.prototype.hasOwnProperty.call(registry.files, path) ? registry.files[path] : null;
+    if (!file) return new Response('Preview file not found: ' + path, { status: 404 });
+    return new Response(method === 'HEAD' ? null : file.content, { headers: { 'Content-Type': file.mime || 'text/plain' } });
+  };
+})();<\/script>`;
+};
+
 export const composeWebPreviewHtml = (
 	files: Record<string, WebPreviewFile>,
 	entrypoint = 'index.html'
@@ -194,7 +216,7 @@ export const composeWebPreviewHtml = (
 		(match, before, _quote, reference, after) => {
 			const path = resolvePreviewPath(reference, entrypoint);
 			const file = path ? files[path] : undefined;
-			return file?.mime === 'text/css'
+			return path && file?.mime === 'text/css'
 				? `<style data-preview-file="${path}">${inlineCssAssets(file.content, path, files)}</style>`
 				: match;
 		}
@@ -210,7 +232,11 @@ export const composeWebPreviewHtml = (
 				: match;
 		}
 	);
-	return replaceLocalReferences(html, entrypoint, files);
+	html = replaceLocalReferences(html, entrypoint, files);
+	const runtime = virtualFetchScript(files, entrypoint);
+	return /<head\b[^>]*>/i.test(html)
+		? html.replace(/<head\b[^>]*>/i, (head) => head + runtime)
+		: runtime + html;
 };
 
 export const mergePersistedWebPreview = (
@@ -235,6 +261,15 @@ export const mergePersistedWebPreview = (
 	};
 };
 
+export const preserveNewerWebPreview = (
+	incoming: WebPreviewArtifact,
+	current?: WebPreviewArtifact
+): WebPreviewArtifact =>
+	current && current.hasFilePayload && Number(current.updatedAt ?? 0) > 0 &&
+	Number(current.updatedAt ?? 0) >= Number(incoming.updatedAt ?? 0)
+		? { ...incoming, ...current }
+		: incoming;
+
 export const mergeLocalWebPreviewDraft = (
 	artifact: WebPreviewArtifact,
 	draft: Pick<WebPreviewArtifact, 'title' | 'entrypoint' | 'files'>
@@ -243,3 +278,15 @@ export const mergeLocalWebPreviewDraft = (
 	...draft,
 	content: draft.files[draft.entrypoint]?.content ?? ''
 });
+
+export const getWebPreviewExportPath = (
+	root: string, previewId: string, slug: string, previousPath = ''
+) => {
+	const base = `${root.replace(/\/$/, '')}/previews/`;
+	if (previousPath.length > base.length && previousPath.startsWith(base) && !previousPath.split('/').some((part) => part === '..' || part === '.')) {
+		return previousPath;
+	}
+	const id = previewId.replace(/[^a-zA-Z0-9_-]/g, '');
+	if (!id) throw new Error('Preview identity is required for export');
+	return `${base}${slug.replace(/[^a-z0-9-]/g, '') || 'web-preview'}-${id}`;
+};

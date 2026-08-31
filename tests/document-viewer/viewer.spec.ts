@@ -123,6 +123,82 @@ test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page
 	expect((await secondSlideTitle.boundingBox())?.width).toBeGreaterThan(20);
 });
 
+test('opens requested workspace document pages without changing default zoom', async ({ page }) => {
+	await page.goto('/?format=pdf&targetPage=2');
+	await expect(page.getByText('2 / 2')).toBeVisible();
+	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
+
+	await page.goto('/?format=docx&targetPage=2');
+	const wordViewport = page.getByTestId('word-document-viewport');
+	await expect(page.getByText('KOBY-BASIC-DOCX-2-PAGES')).toBeVisible();
+	await expect
+		.poll(() => wordViewport.evaluate((viewport) => viewport.scrollTop))
+		.toBeGreaterThan(0);
+	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
+
+	await page.goto('/?format=pptx&targetPage=2');
+	await expect(page.getByText('KOBY profiling slide 2')).toBeVisible();
+	await expect(page.getByText('2 / 2')).toBeVisible();
+	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
+});
+
+test('zooms, pans, resets, and reopens every document viewer', async ({ page }) => {
+	const viewers = {
+		pdf: {
+			ready: () => page.getByText('KOBY-BASIC-PDF-2-PAGES'),
+			viewport: () => page.getByRole('region', { name: /PDF document/ })
+		},
+		docx: {
+			ready: () => page.getByText('KOBY-BASIC-DOCX-2-PAGES'),
+			viewport: () => page.getByTestId('word-document-viewport')
+		},
+		pptx: {
+			ready: () => page.getByText('KOBY-BASIC-PPTX-2-SLIDES'),
+			viewport: () => page.getByTestId('powerpoint-document-viewport')
+		}
+	} as const;
+
+	for (const [format, viewer] of Object.entries(viewers)) {
+		await page.goto(`/?format=${format}`);
+		await expect(viewer.ready()).toBeVisible();
+
+		const resetZoom = page.getByLabel('Reset zoom');
+		await page.getByLabel('Zoom in').click();
+		await expect(resetZoom).toHaveText('110%');
+
+		await viewer.viewport().hover();
+		await page.keyboard.down('Meta');
+		await page.mouse.wheel(0, -100);
+		await page.keyboard.up('Meta');
+		await expect(resetZoom).toHaveText('122%');
+
+		for (let index = 0; index < 8; index += 1) await page.getByLabel('Zoom in').click();
+		await expect(resetZoom).toHaveText('202%');
+		await viewer.viewport().hover();
+		await page.mouse.wheel(240, 240);
+		await expect
+			.poll(() =>
+				viewer.viewport().evaluate((element) => element.scrollLeft > 0 && element.scrollTop > 0)
+			)
+			.toBe(true);
+
+		await resetZoom.click();
+		await expect(resetZoom).toHaveText('100%');
+
+		await page.goto(`/?format=${format}`);
+		await expect(viewer.ready()).toBeVisible();
+		await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
+		await expect
+			.poll(() =>
+				viewer.viewport().evaluate((element) => ({
+					left: element.scrollLeft,
+					top: element.scrollTop
+				}))
+			)
+			.toEqual({ left: 0, top: 0 });
+	}
+});
+
 test('keeps the last valid DOCX and its download when an update is corrupt', async ({ page }) => {
 	await page.goto('/?format=docx');
 	await expect(page.getByText('KOBY-BASIC-DOCX-2-PAGES')).toBeVisible();

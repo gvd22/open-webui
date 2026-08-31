@@ -32,7 +32,7 @@ const generateUserColor = () => {
 export type EditorContentGetter = () => {
 	md: string;
 	html: string;
-	json: string;
+	json: unknown;
 };
 
 // Custom Yjs Socket.IO provider
@@ -41,6 +41,7 @@ export class SocketIOCollaborationProvider {
 	private readonly awareness = new SimpleAwareness(this.doc);
 	private isConnected = false;
 	private synced = false;
+	private syncingInitialContent = false;
 	private editor: Editor | null = null;
 	private editorContentGetter: EditorContentGetter | null = null;
 
@@ -48,7 +49,7 @@ export class SocketIOCollaborationProvider {
 		private readonly documentId: string,
 		private readonly socket: Socket,
 		private readonly user: SessionUser,
-		private readonly initialContent: string | null = null
+		private readonly initialContent: unknown = null
 	) {
 		this.setupEventListeners();
 	}
@@ -82,9 +83,57 @@ export class SocketIOCollaborationProvider {
 	public setEditor(editor: Editor, editorContentGetter: EditorContentGetter) {
 		this.editor = editor;
 		this.editorContentGetter = editorContentGetter;
+
+		if (this.socket.connected && !this.isConnected) {
+			this.isConnected = true;
+		}
+		if (this.isConnected) {
+			this.joinDocument();
+		}
+	}
+
+	public get isApplyingInitialContent() {
+		return this.syncingInitialContent;
+	}
+
+	private applyInitialContent() {
+		if (!this.editor || !this.initialContent) return;
+
+		this.syncingInitialContent = true;
+		try {
+			if (typeof this.initialContent === 'string') {
+				this.editor.commands.setContent(this.initialContent);
+				return;
+			}
+
+			const doc = prosemirrorJSONToYDoc(this.editor.schema, this.initialContent);
+			Y.applyUpdate(this.doc, Y.encodeStateAsUpdate(doc));
+		} finally {
+			this.syncingInitialContent = false;
+		}
+	}
+
+	private emitDocumentUpdate(update: Uint8Array) {
+		if (!this.editor || !this.isConnected) return;
+
+		this.socket.emit('ydoc:document:update', {
+			document_id: this.documentId,
+			user_id: this.user?.id,
+			socket_id: this.socket.id,
+			update: Array.from(update),
+			data: {
+				content: this.editorContentGetter?.() ?? {
+					md: '',
+					html: '',
+					json: ''
+				}
+			}
+		});
 	}
 
 	private joinDocument() {
+		if (!this.editor) return;
+
 		const userColor = generateUserColor();
 		this.socket.emit('ydoc:document:join', {
 			document_id: this.documentId,
@@ -124,38 +173,22 @@ export class SocketIOCollaborationProvider {
 						const state = new Uint8Array(data.state);
 
 						if (state.length === 2 && state[0] === 0 && state[1] === 0) {
-							// Empty state, check if we have content to initialize
-							// check if editor empty as well
-							// const editor = await getEditorInstance();
-
-							const isEmptyEditor = !this.editor?.getText().trim();
-							if (isEmptyEditor && this.editor) {
-								if (this.initialContent && (data?.sessions ?? ['']).length === 1) {
-									// Check if initialContent is HTML (string) or JSON (object)
-									if (typeof this.initialContent === 'string') {
-										// HTML content - let the editor parse it, then sync to Yjs
-										this.editor.commands.setContent(this.initialContent);
-										// The Yjs plugin will automatically sync the content
-									} else {
-										// JSON content - use the existing approach
-										const editorYdoc = prosemirrorJSONToYDoc(
-											this.editor.schema,
-											this.initialContent
-										);
-										if (editorYdoc) {
-											Y.applyUpdate(this.doc, Y.encodeStateAsUpdate(editorYdoc));
-										}
-									}
+							if (
+								this.editor &&
+								!this.editor.getText().trim() &&
+								this.initialContent &&
+								[...(data.sessions ?? [])].sort()[0] === this.socket.id
+							) {
+								// Seed promoted Markdown before any local empty paragraph can be saved.
+								this.synced = true;
+								this.applyInitialContent();
+								if (this.doc.getXmlFragment('prosemirror').length > 0) {
+									this.emitDocumentUpdate(Y.encodeStateAsUpdate(this.doc));
 								}
 							} else {
 								// If the editor already has content, we don't need to send an empty state
 								if (this.doc.getXmlFragment('prosemirror').length > 0) {
-									this.socket.emit('ydoc:document:update', {
-										document_id: this.documentId,
-										user_id: this.user?.id,
-										socket_id: this.socket.id,
-										update: Y.encodeStateAsUpdate(this.doc)
-									});
+									this.emitDocumentUpdate(Y.encodeStateAsUpdate(this.doc));
 								} else {
 									console.warn('Yjs document is empty, not sending state.');
 								}
@@ -194,21 +227,17 @@ export class SocketIOCollaborationProvider {
 
 		// Listen for document updates from Yjs
 		this.doc.on('update', async (update, origin) => {
-			if (this.editor && origin !== 'server' && this.isConnected) {
+			if (
+				this.editor &&
+				origin !== 'server' &&
+				this.isConnected &&
+				this.synced &&
+				!this.syncingInitialContent
+			) {
 				await tick(); // Ensure the DOM is updated before sending
-				this.socket.emit('ydoc:document:update', {
-					document_id: this.documentId,
-					user_id: this.user?.id,
-					socket_id: this.socket.id,
-					update: Array.from(update),
-					data: {
-						content: this.editorContentGetter?.() ?? {
-							md: '',
-							html: '',
-							json: ''
-						}
-					}
-				});
+				if (this.synced && !this.syncingInitialContent) {
+					this.emitDocumentUpdate(update);
+				}
 			}
 		});
 
@@ -233,7 +262,6 @@ export class SocketIOCollaborationProvider {
 
 		if (this.socket.connected) {
 			this.isConnected = true;
-			this.joinDocument();
 		}
 	}
 

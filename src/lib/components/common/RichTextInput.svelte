@@ -94,6 +94,12 @@
 		}
 	});
 
+	// Registered after use(gfm) to override its checkbox rule; taskListItems owns the marker.
+	turndownService.addRule('taskItemCheckbox', {
+		filter: (node) => node.nodeName === 'INPUT' && node.getAttribute('type') === 'checkbox',
+		replacement: () => ''
+	});
+
 	turndownService.addRule('taskListItems', {
 		filter: (node) =>
 			node.nodeName === 'LI' &&
@@ -101,7 +107,8 @@
 				node.getAttribute('data-checked') === 'false'),
 		replacement: function (content, node) {
 			const checked = node.getAttribute('data-checked') === 'true';
-			content = content.replace(/^\s+/, '');
+			// Trim TipTap's block wrapper; 4-space continuation keeps sublists and fences nested.
+			content = content.trim().replace(/\n(?=.)/g, '\n    ');
 			return `- [${checked ? 'x' : ' '}] ${content}\n`;
 		}
 	});
@@ -116,6 +123,11 @@
 			const mentionChar = ch === '/' ? '$' : ch;
 			return `<${mentionChar}${id}>`;
 		}
+	});
+
+	turndownService.addRule('underline', {
+		filter: 'u',
+		replacement: (content) => `<u>${content}</u>`
 	});
 
 	import { onMount, onDestroy, tick, getContext } from 'svelte';
@@ -191,6 +203,7 @@
 	export let oncompositionstart = (e) => {};
 	export let oncompositionend = (e) => {};
 	export let onChange = (e) => {};
+	export let onProgrammaticChange = (e) => {};
 
 	// create a lowlight instance with all languages loaded
 	const lowlight = createLowlight(
@@ -322,6 +335,16 @@
 	let element: Element | null = null;
 
 	let pendingUpdate = null;
+	let suppressOnChange = false;
+
+	const setContentWithoutChange = (nextContent) => {
+		suppressOnChange = true;
+		try {
+			editor.commands.setContent(nextContent);
+		} finally {
+			suppressOnChange = false;
+		}
+	};
 
 	const options = {
 		throwOnError: false
@@ -334,7 +357,7 @@
 	}
 
 	$: if (value === null && html !== null && editor) {
-		editor.commands.setContent(html);
+		setContentWithoutChange(html);
 	}
 
 	export const getWordAtDocPos = () => {
@@ -576,7 +599,7 @@
 		}
 	};
 
-	export const focus = () => {
+	export const focus = (options: FocusOptions = {}) => {
 		if (editor && editor.view) {
 			// Check if the editor is destroyed
 			if (editor.isDestroyed) {
@@ -584,9 +607,13 @@
 			}
 
 			try {
-				editor.view.focus();
-				// Scroll to the current selection
-				editor.view.dispatch(editor.view.state.tr.scrollIntoView());
+				if (options.preventScroll && editor.view.dom instanceof HTMLElement) {
+					editor.view.dom.focus(options);
+				} else {
+					editor.view.focus();
+					// Scroll to the current selection
+					editor.view.dispatch(editor.view.state.tr.scrollIntoView());
+				}
 			} catch (e) {
 				// sometimes focusing throws an error, ignore
 				console.warn('Error focusing editor', e);
@@ -754,7 +781,7 @@
 			}
 		}
 
-		if (collaboration && documentId && socket && user) {
+		if (collaboration && editable && documentId && socket && user) {
 			const { SocketIOCollaborationProvider } = await import('./RichTextInput/Collaboration');
 			provider = new SocketIOCollaborationProvider(documentId, socket, user, content);
 		}
@@ -898,7 +925,7 @@
 					: []),
 				...(collaboration && provider ? [provider.getEditorExtension()] : [])
 			],
-			content: collaboration ? undefined : content,
+			content: provider ? undefined : content,
 			autofocus: messageInput ? true : false,
 			onTransaction: () => {
 				if (!editor) return;
@@ -940,11 +967,20 @@
 						.replace(/\u00a0/g, ' ');
 				}
 
-				onChange({
+				const nextContent = {
 					html: htmlValue,
 					json: jsonValue,
 					md: mdValue
-				});
+				};
+				if (suppressOnChange || provider?.isApplyingInitialContent) {
+					onProgrammaticChange({
+						...nextContent,
+						wordCount: editor.storage.characterCount.words(),
+						charCount: editor.storage.characterCount.characters()
+					});
+				} else {
+					onChange(nextContent);
+				}
 
 				if (json) {
 					value = jsonValue;
@@ -1312,7 +1348,12 @@
 			.replace(/\u00a0/g, ' ');
 
 		if (value === '') {
-			editor.commands.clearContent(); // Clear content if value is empty
+			suppressOnChange = true;
+			try {
+				editor.commands.clearContent(); // Clear content if value is empty
+			} finally {
+				suppressOnChange = false;
+			}
 			selectTemplate();
 
 			return;
@@ -1320,18 +1361,18 @@
 
 		if (json) {
 			if (!equal(value, jsonValue)) {
-				editor.commands.setContent(value);
+				setContentWithoutChange(value);
 				selectTemplate();
 			}
 		} else {
 			if (raw) {
 				if (value !== htmlValue) {
-					editor.commands.setContent(value);
+					setContentWithoutChange(value);
 					selectTemplate();
 				}
 			} else {
 				if (value !== mdValue) {
-					editor.commands.setContent(
+					setContentWithoutChange(
 						preserveBreaks
 							? value
 							: marked.parse(value.replaceAll(`\n<br/>`, `<br/>`), {

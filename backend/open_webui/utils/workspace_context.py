@@ -22,6 +22,12 @@ SOFT_OBJECT_CONTEXT_CHARS = {'canvas': 16_000, 'web_preview': 32_000}
 HARD_OBJECT_CONTEXT_CHARS = {'canvas': 64_000, 'web_preview': 128_000}
 
 WORKSPACE_TOOL_PREFIXES = ('canvas_', 'web_preview_')
+WORKSPACE_CONTEXT_MARKERS = (
+    '[CANVAS CONTEXT]',
+    '[WEB PREVIEW CONTEXT]',
+    '[WEB PREVIEW ROUTING]',
+    '[WEB PREVIEW RUNTIME FILES]',
+)
 WORKSPACE_TOOL_ARGUMENT_KEYS = {
     'canvas_id',
     'preview_id',
@@ -105,10 +111,16 @@ def compact_workspace_tool_output(output: list[dict]) -> list[dict]:
     The canonical content remains attached to the chat and can be loaded with
     the read tools. Non-Workspace output is returned unchanged.
     """
+    completed_call_ids = {
+        item.get('call_id') for item in output or []
+        if item.get('type') == 'function_call_output'
+    }
+    # Pending approvals must retain executable arguments until a result exists.
     tool_names = {
         item.get('call_id'): item.get('name', '')
         for item in output or []
         if item.get('type') == 'function_call'
+        and item.get('call_id') in completed_call_ids
         and str(item.get('name', '')).startswith(WORKSPACE_TOOL_PREFIXES)
     }
     if not tool_names:
@@ -124,6 +136,27 @@ def compact_workspace_tool_output(output: list[dict]) -> list[dict]:
         elif item.get('type') == 'function_call_output':
             _compact_workspace_result_item(item)
     return compact
+
+
+def remove_workspace_context_prompts(messages: list[dict]) -> list[dict]:
+    """Remove generated workspace sections before rebuilding current context."""
+    cleaned = []
+    for message in messages or []:
+        if message.get('role') != 'system' or not isinstance(message.get('content'), str):
+            cleaned.append(message)
+            continue
+
+        content = message['content']
+        marker_positions = [content.find(marker) for marker in WORKSPACE_CONTEXT_MARKERS]
+        marker_positions = [position for position in marker_positions if position >= 0]
+        if not marker_positions:
+            cleaned.append(message)
+            continue
+
+        content = content[: min(marker_positions)].rstrip()
+        if content:
+            cleaned.append({**message, 'content': content})
+    return cleaned
 
 
 def build_cancelled_workspace_output_update(output: list[dict], *, realtime: bool) -> dict:

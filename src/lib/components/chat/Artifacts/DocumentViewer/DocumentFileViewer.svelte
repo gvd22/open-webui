@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import {
 		pyodideWorker,
@@ -27,12 +29,13 @@
 		type WorkspaceDocumentFormat,
 		type WorkspaceRuntime
 	} from '../workspace';
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let path: string;
 	export let format: WorkspaceDocumentFormat;
 	export let runtime: WorkspaceRuntime;
 	export let chatId: string | null = null;
+	export let targetPage: number | null = null;
 
 	let root: HTMLDivElement;
 	// Runtime reads are candidates until the renderer confirms this exact buffer.
@@ -106,7 +109,7 @@
 	};
 
 	const loadFile = async (isRefresh = false) => {
-		if (!mounted || runtime.kind === 'none') return;
+		if (!mounted) return;
 		const generation = (loadGeneration = nextDocumentLoadSequence(loadGeneration));
 		loadAbortController?.abort();
 		const abortController = new AbortController();
@@ -115,6 +118,7 @@
 		else loading = true;
 
 		try {
+			if (!runtime.files) throw new Error('unavailable');
 			const nextData =
 				runtime.kind === 'terminal'
 					? await readTerminalFile(abortController.signal)
@@ -340,6 +344,7 @@
 	{#if format === 'pdf' && candidateData}
 		<PDFViewer
 			data={pdfData}
+			{targetPage}
 			on:preview-rendered={handlePreviewRendered}
 			on:preview-failed={handlePreviewFailed}
 			className="w-full h-full bg-[#f5f4f1] dark:bg-[#171719] px-3 pt-12 pb-16 sm:px-6"
@@ -347,12 +352,14 @@
 	{:else if format === 'docx' && candidateData}
 		<WordDocumentViewer
 			data={candidateData}
+			{targetPage}
 			on:preview-rendered={handlePreviewRendered}
 			on:preview-failed={handlePreviewFailed}
 		/>
 	{:else if format === 'pptx' && candidateData}
 		<PowerPointDocumentViewer
 			data={candidateData}
+			{targetPage}
 			on:preview-rendered={handlePreviewRendered}
 			on:preview-failed={handlePreviewFailed}
 		/>

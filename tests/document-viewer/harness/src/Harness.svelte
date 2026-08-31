@@ -21,6 +21,8 @@
 	setContext('i18n', i18n);
 
 	const format = new URLSearchParams(window.location.search).get('format') ?? 'pdf';
+	const targetPage =
+		Number(new URLSearchParams(window.location.search).get('targetPage')) || undefined;
 	const runtimeSessionId =
 		localStorage.getItem('viewer-runtime-session') ?? `viewer-browser-test-${crypto.randomUUID()}`;
 	localStorage.setItem('viewer-runtime-session', runtimeSessionId);
@@ -48,7 +50,7 @@
 					buildWorkspaceFileContent(documents.docx.path)
 				]
 			: hasDedicatedDocument && document
-				? [buildWorkspaceFileContent(document.path)]
+				? [buildWorkspaceFileContent(document.path, targetPage)]
 				: [];
 	let selectedIndex = 0;
 	let openedFileRecency: string[] = [];

@@ -65,6 +65,7 @@ def test_title_and_active_prompt_include_complete_preview_context():
     assert '"path":"index.html"' in prompt
     assert '"truncated":false' in prompt
     assert 'web_preview_update' in prompt
+    assert 'previewContentHash' in prompt
 
 
 def test_request_focus_overrides_stored_preview_selection_and_can_be_hidden():
@@ -235,6 +236,7 @@ def test_canvas_and_web_preview_are_independent_model_tools(monkeypatch):
     chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
     chat = SimpleNamespace(id=chat_id, meta={})
     categories = {
+        'user_input',
         'automations',
         'calendar',
         'canvas',
@@ -595,6 +597,8 @@ def test_web_preview_partial_read_and_versioned_replace(monkeypatch):
             )
         )
     )
+    initial_preview = chat.chat[WEB_PREVIEW_DOCUMENTS_KEY][preview_id]
+    assert excerpt['previewContentHash'] == web_preview_content_hash(initial_preview)
     updated = json.loads(
         asyncio.run(
             web_preview_replace_text(

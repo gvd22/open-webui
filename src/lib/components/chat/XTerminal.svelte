@@ -94,6 +94,7 @@
 			let sessionId: string;
 			let wsUrl: string;
 			let authToken: string;
+			let authChatId = '';
 
 			{
 				const base = info.baseUrl.replace(/\/$/, '');
@@ -128,6 +129,7 @@
 
 				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 				wsUrl = `${wsBase}/terminals/${info.serverId}/api/terminals/${sessionId}`;
+				authChatId = requestedChatId ?? '';
 			}
 
 			websocketSession = activeSession;
@@ -142,7 +144,7 @@
 					return;
 				}
 				// First-message auth (no token in URL)
-				connectionSocket.send(JSON.stringify({ type: 'auth', token: authToken.trim() }));
+				connectionSocket.send(JSON.stringify({ type: 'auth', token: authToken.trim(), chat_id: authChatId || undefined }));
 				connected = true;
 				connecting = false;
 				// Focus the terminal so it receives keyboard input immediately
@@ -337,5 +339,9 @@
 </script>
 
 <div class="h-full min-h-0 relative">
-	<div bind:this={terminalEl} class="absolute inset-0 px-0.5" class:pointer-events-none={overlay} />
+	<div
+		bind:this={terminalEl}
+		class="absolute inset-0 px-0.5"
+		class:pointer-events-none={overlay}
+	></div>
 </div>

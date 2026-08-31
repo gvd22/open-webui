@@ -29,6 +29,16 @@ describe('workspace security and configuration invariants', () => {
 		expect(artifacts).toContain("console.warn('Unable to persist workspace tab state'");
 	});
 
+	it('opens Pyodide Files once without reopening a manually closed tab', () => {
+		const artifacts = source('../Artifacts.svelte');
+
+		expect(artifacts).toContain("workspaceRuntime.kind === 'pyodide'");
+		expect(artifacts).toContain('!workspaceRuntime.shell');
+		expect(artifacts).toContain('!filesOpened');
+		expect(artifacts).toContain('!closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)');
+		expect(artifacts).toContain('openWorkspaceFiles();');
+	});
+
 	it('provides roving tab focus and menu keyboard semantics', () => {
 		const tabs = source('./WorkspaceTabs.svelte');
 

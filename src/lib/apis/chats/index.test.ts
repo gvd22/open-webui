@@ -7,7 +7,9 @@ import {
 } from './index';
 
 describe('workspace optimistic save clients', () => {
-	afterEach(() => vi.unstubAllGlobals());
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
 
 	it('sends both the Canvas version and content hash preconditions', async () => {
 		const fetchMock = vi.fn().mockResolvedValue({

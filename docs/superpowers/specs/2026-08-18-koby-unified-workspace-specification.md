@@ -1,8 +1,44 @@
 # KOBY Unified Workspace - Gesamtspezifikation
 
 **Status:** Verbindliche Produkt- und Verhaltensspezifikation  
-**Version:** 1.1  
-**Datum:** 26. August 2026
+**Version:** 1.2
+**Datum:** 31. August 2026
+
+### Upgrade-Vertrag fuer Open WebUI 0.11.1
+
+Die Grundlage ist der exakte Upstream-Tag `v0.11.1`, nicht ein beweglicher `main`-Stand.
+Der zugehoerige Konfigurations- und Abnahmebericht ist
+[Workspace 0.11.1 Upgrade Acceptance](2026-08-31-workspace-v0111-upgrade-acceptance.md).
+Dieser Bericht unterscheidet nachgewiesenes Verhalten von noch offenen Abnahmen.
+
+- Native Tool-Freigaben und `ask_user` werden verwendet. Wenn Tool Permissions aktiv sind,
+  verwenden neue Chats ohne explizite Wahl `ask`; bestehende explizite Entscheidungen und
+  native nicht-interaktive Ausnahmen bleiben bestehen.
+- Warten auf Freigabe oder Antwort ist kein abgeschlossener oder abgestuerzter Turn.
+  Ein Reload erhaelt ausstehende Interaktionen. Gleichzeitige Freigaben duerfen denselben
+  Aufruf nicht zweimal ausfuehren.
+- Freigegebene Aufrufe behalten Chat, Objekt-ID, Runtime-Bindung und urspruenglichen Fokus.
+  Ein Tabwechsel darf sie nicht umleiten. Version und Eigentum werden vor der Mutation erneut
+  geprueft; bei einem Konflikt muss das Modell den aktuellen Stand lesen.
+- Ein Teil-Read liefert einen Datei-Hash fuer Teilersetzungen und bei Web Preview zusaetzlich
+  einen Preview-Hash fuer paketweite Updates und Imports. Mehrere Teilersetzungen verwenden
+  jeweils den neuen Versionsstand; mehrere Dateien koennen alternativ zusammen aktualisiert werden.
+- Neue gespeicherte Chats erhalten genau eine serverseitig gebundene Terminal-Umgebung.
+  Bestehende Bindungen und gemeinsam genutzte Altdateien werden nicht still verschoben.
+  Noch ungespeicherte Chats duerfen keinen gemeinsamen Terminal-Speicher verwenden.
+- Shell, Files, Ports, Dokumente, Exports und Imports verwenden dieselbe vertrauenswuerdige
+  Chat-Zuordnung. Ein ausgefallenes oder gesperrtes Terminal fuehrt nicht zu einem Pyodide-Fallback.
+- Native Script- und Download-Einstellungen gelten auch fuer Web Preview. Dessen iframe
+  bleibt ohne `allow-same-origin`; die Vorschau erhaelt keinen Zugriff auf die Host-Anwendung.
+- Relative `fetch()`-Zugriffe auf virtuelle Text-/JSON-/CSV-Dateien werden aus dem Preview-Paket
+  beantwortet. Sie lesen weder Host-Dateien noch Runtime-Dateien. Unbekannte virtuelle Pfade
+  liefern 404; Schreibmethoden sind nicht erlaubt. Paketinstallation, Module-Bundling und
+  signierte API-Sitzungen gehoeren nicht zu dieser browsernativen Vorschau.
+- Exportordner fuer neue Preview-Exporte enthalten die stabile Preview-ID, damit gleichnamige
+  Objekte einander nicht ueberschreiben. Bestehende gueltige Exportpfade bleiben erhalten.
+- Native Dateiausgaben werden im vorhandenen passenden Viewer geoeffnet. Eine angegebene
+  PDF-Seite oder PPTX-Folie wird beruecksichtigt; Downloads bleiben verfuegbar.
+
 
 ## 1. Zweck und Geltungsbereich
 

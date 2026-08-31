@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { onMount, onDestroy, getContext, createEventDispatcher } from 'svelte';
-	const i18n = getContext('i18n');
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
+	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher();
 
 	import {
@@ -38,7 +40,10 @@
 	import WorkspaceLauncher from './Artifacts/WorkspaceLauncher.svelte';
 	import WebPreviewRenderer from './Artifacts/WebPreviewRenderer.svelte';
 	import WorkspaceDocumentPanels from './Artifacts/WorkspaceDocumentPanels.svelte';
-	import { getCanvasNoteArtifactsFromHistory } from './Artifacts/canvas';
+	import {
+		getCanvasNoteArtifactsFromHistory,
+		mergePersistedCanvasArtifact
+	} from './Artifacts/canvas';
 	import { getWebPreviewsFromHistory } from './Artifacts/webPreview';
 	import { selectTransientCanvasDocument } from '$lib/apis/chats';
 	import {
@@ -66,7 +71,7 @@
 	} from './Artifacts/workspace';
 
 	export let overlay = false;
-	export let history = null;
+	export let history: Record<string, any> | null = null;
 	export let showFiles = false;
 	export let codeInterpreterEnabled = false;
 	export let onAttach: ((blob: Blob, name: string, contentType: string) => void) | null = null;
@@ -189,10 +194,20 @@
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
-		showFiles && codeInterpreterEnabled
+		showFiles && codeInterpreterEnabled,
+		$chatId
 	);
-	$: workspaceTerminalId = workspaceRuntime.terminalId;
+	$: workspaceTerminalId = workspaceRuntime.shell ? workspaceRuntime.terminalId : null;
 	$: workspaceFilesAvailable = showFiles && workspaceRuntime.files;
+	$: if (
+		workspaceRuntime.kind === 'pyodide' &&
+		workspaceRuntime.files &&
+		!workspaceRuntime.shell &&
+		!filesOpened &&
+		!closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)
+	) {
+		openWorkspaceFiles();
+	}
 	$: documentViewerEnabled = $config?.features?.enable_document_viewer === true;
 	$: {
 		const nextRuntimeKey = `${workspaceRuntime.kind}:${workspaceRuntime.terminalId ?? ''}`;
@@ -233,29 +248,27 @@
 
 	async function selectWorkspaceContent(index: number) {
 		const content = contents[index];
+		const targetChatId = $chatId;
 		if (!content) return;
 
 		selectedContentIdx = index;
 		artifactCode.set(getWorkspaceContentId(content, index));
 
-		if ($chatId && content.canvasId) {
+		if (targetChatId && content.canvasId) {
 			try {
 				const document = await selectTransientCanvasDocument(
 					localStorage.token,
-					$chatId,
+					targetChatId,
 					content.canvasId
 				);
+				if ($chatId !== targetChatId) return;
 				(artifactContents as any).update((items: any[]) =>
 					(items ?? []).map((item) =>
 						item?.canvasId === content.canvasId
-							? {
-									...item,
-									title: document.title ?? item.title,
-									content: document.content ?? item.content,
-									titleEdited: Boolean(document.title_edited),
-									updatedAt: document.updated_at ?? item.updatedAt,
-									noteId: document.note_id ?? item.noteId
-								}
+							? mergePersistedCanvasArtifact(item, {
+									...document,
+									content_hash: document.contentHash
+								})
 							: item
 					)
 				);
@@ -325,9 +338,10 @@
 			...utilityContents.filter((content) => content.workspaceId !== WORKSPACE_FILES_ID)
 		];
 		sourceContents = orderWorkspaceContents(nextSourceContents, workspaceContentOrder);
-		workspaceContentOrder = sourceContents.map((content, index) =>
-			getWorkspaceContentId(content, index)
-		);
+		const sourceIds = sourceContents.map((content, index) => getWorkspaceContentId(content, index));
+		// History arrives after the restored utilities during a chat reload. Keep IDs that are
+		// temporarily absent so that their saved positions still apply once artifacts hydrate.
+		workspaceContentOrder = [...new Set([...workspaceContentOrder, ...sourceIds])];
 		syncVisibleWorkspaceContents();
 	}
 
@@ -376,7 +390,7 @@
 		else openWorkspaceUtility(kind);
 	}
 
-	function openWorkspaceFile(path: string): boolean {
+	function openWorkspaceFile(path: string, options: { page?: number | null } = {}): boolean {
 		if (
 			!workspaceRuntime.files ||
 			!getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)
@@ -384,7 +398,7 @@
 			return false;
 		}
 		const id = `workspace:file:${path}`;
-		const nextContents = upsertWorkspaceFileContent(openedFileContents, path);
+		const nextContents = upsertWorkspaceFileContent(openedFileContents, path, options.page);
 		const nextRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
 		const limited = limitWorkspaceFileContents(
 			nextContents,
@@ -560,7 +574,7 @@
 						content.previewId === value ||
 						content.canvasId === value ||
 						content.noteId === value ||
-						content.content.includes(value)
+						content.content.includes(value!)
 				);
 				selectedContentIdx = codeIdx !== -1 ? codeIdx : 0;
 			}
@@ -795,6 +809,7 @@
 									class="absolute inset-0"
 								>
 									<WorkspaceBrowser
+										chatId={$chatId}
 										{overlay}
 										terminalId={content.terminalId ?? null}
 										active={selectedContentId === getWorkspaceContentId(content, index)}
@@ -832,8 +847,11 @@
 											$config?.ui?.iframe_csp ?? ''
 										)}
 										class="w-full border-0 h-full rounded-none"
-										sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ??
-										false)
+										sandbox="{($settings?.iframeSandboxAllowScripts ?? true)
+											? 'allow-scripts'
+											: ''}{($settings?.iframeSandboxAllowDownloads ?? true)
+											? ' allow-downloads'
+											: ''}{($settings?.iframeSandboxAllowForms ?? false)
 											? ' allow-forms'
 											: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false)
 											? ' allow-same-origin'
@@ -864,6 +882,8 @@
 											chatId={$chatId ?? ''}
 											codeInterpreterEnabled={showFiles && codeInterpreterEnabled}
 											iframeCsp={$config?.ui?.iframe_csp ?? ''}
+											sandboxAllowScripts={$settings?.iframeSandboxAllowScripts ?? true}
+											sandboxAllowDownloads={$settings?.iframeSandboxAllowDownloads ?? true}
 											sandboxAllowForms={$settings?.iframeSandboxAllowForms ?? false}
 											sandboxAllowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
 										/>
@@ -886,6 +906,11 @@
 					</div>
 				{:else}
 					<WorkspaceLauncher
+						unavailableReason={workspaceRuntime.kind === 'terminal' && !workspaceRuntime.files
+							? $i18n.t('Send a message to start a chat before opening Terminal files.')
+							: workspaceRuntime.kind === 'unavailable'
+								? $i18n.t('Workspace connections could not be loaded. Reload to retry.')
+								: ''}
 						terminalId={workspaceTerminalId}
 						filesAvailable={workspaceFilesAvailable}
 						onOpenFiles={openWorkspaceFiles}

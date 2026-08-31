@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+	import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
+	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import Spinner from './Spinner.svelte';
 	import DocumentPagination from './DocumentPagination.svelte';
 	import DocumentZoomControls from './DocumentZoomControls.svelte';
@@ -22,6 +23,10 @@
 	export let url: string | null = null;
 	export let data: ArrayBuffer | Uint8Array | null = null;
 	export let className = 'w-full h-[70vh]';
+	export let targetPage: number | null = null;
+
+	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
+	type PdfTextLayer = InstanceType<typeof import('pdfjs-dist').TextLayer>;
 
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': ArrayBuffer | Uint8Array | null;
@@ -32,7 +37,7 @@
 	let sceneElement: HTMLDivElement;
 	let loading = true;
 	let error = '';
-	let pdfDoc: any = null;
+	let pdfDoc: PdfDocument | null = null;
 	let pzInstance: PanZoom | null = null;
 	let zoomLevel = 1;
 	let rerenderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -220,6 +225,14 @@
 		} finally {
 			if (pageRenderTasks.get(wrapper) === renderTask) pageRenderTasks.delete(wrapper);
 		}
+	};
+
+	const scrollToTargetPage = async () => {
+		if (!pdfDoc) return;
+		const page = clampDocumentTargetPage(targetPage, pdfDoc.numPages);
+		if (!page) return;
+		await tick();
+		scrollToPage(page, 'auto');
 	};
 
 	const observePages = () => {
@@ -423,6 +436,10 @@
 		resizeObserver = new ResizeObserver(handleResize);
 		resizeObserver.observe(outerContainer);
 	});
+
+	$: if (!loading && pdfDoc && targetPage) {
+		void scrollToTargetPage();
+	}
 
 	onDestroy(() => {
 		mounted = false;

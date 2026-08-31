@@ -35,28 +35,56 @@ import {
 } from './workspace';
 
 describe('workspace tabs', () => {
+	it('blocks unsaved Terminal storage without falling back to Pyodide', () => {
+		expect(resolveWorkspaceRuntime([{ id: 'managed' }], 'managed', true, null)).toMatchObject({
+			kind: 'terminal',
+			terminalId: 'managed',
+			files: false,
+			writable: false,
+			shell: false,
+			ports: false
+		});
+		expect(resolveWorkspaceRuntime([{ id: 'managed' }], 'managed', true, 'temporary:1').files).toBe(
+			false
+		);
+	});
+	it('excludes managed connections explicitly disabled in chat', () => {
+		expect(
+			resolveWorkspaceRuntime([{ id: 'managed', contexts: { chat: false } }], null, true, 'chat-1')
+				.kind
+		).toBe('pyodide');
+		expect(
+			resolveWorkspaceRuntime(
+				[{ id: 'managed', contexts: { chat: false } }, { id: 'other' }],
+				'managed',
+				true,
+				'chat-1'
+			).kind
+		).toBe('unavailable');
+	});
 	it('uses managed Terminal before Pyodide and never selects direct terminals', () => {
 		expect(
 			resolveWorkspaceRuntime(
 				[{ url: 'https://direct.example' }, { id: 'system-1' }, { id: 'system-2' }] as any,
 				'system-2',
-				true
+				true,
+				'chat-1'
 			)
 		).toMatchObject({ kind: 'terminal', terminalId: 'system-2', files: true, ports: true });
-		expect(resolveWorkspaceRuntime([{ url: 'https://direct.example' }] as any, null, true)).toEqual(
-			{
-				kind: 'pyodide',
-				terminalId: null,
-				files: true,
-				writable: true,
-				shell: false,
-				ports: false
-			}
-		);
+		expect(
+			resolveWorkspaceRuntime([{ url: 'https://direct.example' }] as any, null, true, 'chat-1')
+		).toEqual({
+			kind: 'pyodide',
+			terminalId: null,
+			files: true,
+			writable: true,
+			shell: false,
+			ports: false
+		});
 	});
 
 	it('does not fall back while the managed Terminal catalog is unresolved', () => {
-		expect(resolveWorkspaceRuntime(null, null, true)).toEqual({
+		expect(resolveWorkspaceRuntime(null, null, true, 'chat-1')).toEqual({
 			kind: 'unavailable',
 			terminalId: null,
 			files: false,
@@ -67,9 +95,9 @@ describe('workspace tabs', () => {
 	});
 
 	it('uses Pyodide only without a managed terminal and with a non-Jupyter interpreter', () => {
-		expect(resolveWorkspaceRuntime([], null, true).kind).toBe('pyodide');
+		expect(resolveWorkspaceRuntime([], null, true, 'chat-1').kind).toBe('pyodide');
 		// Jupyter callers pass false because it does not expose the Pyodide Files runtime.
-		expect(resolveWorkspaceRuntime([], null, false).kind).toBe('none');
+		expect(resolveWorkspaceRuntime([], null, false, 'chat-1').kind).toBe('none');
 	});
 
 	it('keeps Browser tabs bound to their original managed Terminal', () => {
@@ -81,14 +109,16 @@ describe('workspace tabs', () => {
 	});
 
 	it('opens Files directly when Pyodide is the only workspace runtime', () => {
-		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, true))).toBe(
+		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, true, 'chat-1'))).toBe(
 			'workspace:files'
 		);
-		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, false))).toBe(
+		expect(getDefaultWorkspaceContentId(resolveWorkspaceRuntime([], null, false, 'chat-1'))).toBe(
 			'workspace:launcher'
 		);
 		expect(
-			getDefaultWorkspaceContentId(resolveWorkspaceRuntime([{ id: 'terminal-1' }], null, true))
+			getDefaultWorkspaceContentId(
+				resolveWorkspaceRuntime([{ id: 'terminal-1' }], null, true, 'chat-1')
+			)
 		).toBe('workspace:launcher');
 	});
 
@@ -231,16 +261,22 @@ describe('workspace tabs', () => {
 
 	it('keeps one stable tab per open document file', () => {
 		const first = upsertWorkspaceFileContent([], '/workspace/reports/brief.docx');
-		const repeated = upsertWorkspaceFileContent(first, '/workspace/reports/brief.docx');
+		const repeated = upsertWorkspaceFileContent(first, '/workspace/reports/brief.docx', 2);
 		const second = upsertWorkspaceFileContent(repeated, '/workspace/slides/update.pptx');
 
-		expect(repeated).toBe(first);
-		expect(buildWorkspaceFileContent('/workspace/reports/brief.docx')).toMatchObject({
+		expect(repeated).not.toBe(first);
+		expect(repeated).toMatchObject([{ targetPage: 2 }]);
+		expect(upsertWorkspaceFileContent(repeated, '/workspace/reports/brief.docx', 2)).toBe(repeated);
+		expect(upsertWorkspaceFileContent(repeated, '/workspace/reports/brief.docx')).toMatchObject([
+			{ targetPage: undefined }
+		]);
+		expect(buildWorkspaceFileContent('/workspace/reports/brief.docx', 2)).toMatchObject({
 			type: 'workspace-file',
 			workspaceId: 'workspace:file:/workspace/reports/brief.docx',
 			title: 'brief.docx',
 			path: '/workspace/reports/brief.docx',
-			fileFormat: 'docx'
+			fileFormat: 'docx',
+			targetPage: 2
 		});
 		expect(buildWorkspaceTabs(second).map(({ id, title }) => ({ id, title }))).toEqual([
 			{ id: 'workspace:file:/workspace/reports/brief.docx', title: 'brief.docx' },

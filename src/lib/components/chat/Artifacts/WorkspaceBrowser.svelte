@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 
 	import { getListeningPorts, type ListeningPort } from '$lib/apis/terminal';
 	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
@@ -20,9 +22,10 @@
 		WORKSPACE_TERMINAL_ID
 	} from './workspace';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let overlay = false;
+	export let chatId: string | null = null;
 	export let terminalId: string | null = null;
 	export let active = true;
 
@@ -40,6 +43,7 @@
 	const loadPorts = async (showLoading = true) => {
 		const requestId = ++portsRequestSequence;
 		const requestedTerminal = terminal;
+		const requestedChatId = chatId;
 		if (!requestedTerminal) {
 			ports = [];
 			selectedPort = null;
@@ -49,16 +53,16 @@
 		if (showLoading) loading = true;
 		try {
 			const nextPorts = await getListeningPorts(requestedTerminal.url, localStorage.token, {
-				throwOnError: true
+				throwOnError: true, chatId: requestedChatId
 			});
-			if (requestId !== portsRequestSequence || terminal?.id !== requestedTerminal.id) return;
+			if (requestId !== portsRequestSequence || chatId !== requestedChatId || terminal?.id !== requestedTerminal.id) return;
 			ports = nextPorts;
 			loadError = '';
 			if (selectedPort !== null && !ports.some((port) => port.port === selectedPort)) {
 				selectedPort = null;
 			}
 		} catch {
-			if (requestId !== portsRequestSequence || terminal?.id !== requestedTerminal.id) return;
+			if (requestId !== portsRequestSequence || chatId !== requestedChatId || terminal?.id !== requestedTerminal.id) return;
 			ports = [];
 			selectedPort = null;
 			loadError = $i18n.t('Terminal is currently unavailable');
@@ -78,8 +82,10 @@
 		if (isKeyboardActivationClick(event.detail)) action();
 	};
 
-	$: if (active && terminal?.url && terminal.url !== loadedTerminalUrl) {
-		loadedTerminalUrl = terminal.url;
+	$: if (active && terminal?.url && `${terminal.url}:${chatId}` !== loadedTerminalUrl) {
+		loadedTerminalUrl = `${terminal.url}:${chatId}`;
+		ports = [];
+		selectedPort = null;
 		loadPorts();
 	}
 
@@ -118,6 +124,7 @@
 
 {#if selectedPort !== null && terminal}
 	<PortPreview
+		{chatId}
 		baseUrl={terminal.url}
 		port={selectedPort}
 		{overlay}

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher, getContext, onDestroy, onMount, tick } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import DocumentZoomToolbar from '$lib/components/common/DocumentZoomToolbar.svelte';
 	import {
@@ -9,14 +11,16 @@
 		getDocumentWheelZoomDelta,
 		panDocumentViewport
 	} from '$lib/components/common/documentZoom';
+	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import { hardenDocumentLinks, validateDocxArchive } from './security';
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': { data: ArrayBuffer };
 		'preview-failed': { data: ArrayBuffer };
 	}>();
 
 	export let data: ArrayBuffer;
+	export let targetPage: number | null = null;
 
 	let viewport: HTMLDivElement;
 	let documentRoot: HTMLDivElement;
@@ -31,6 +35,8 @@
 	let resizeObserver: ResizeObserver | null = null;
 	let resizeFrame = 0;
 	let dragStart: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null;
+	let appliedTargetPage: number | null = null;
+	let appliedTargetData: ArrayBuffer | null = null;
 
 	const fitDocumentToViewport = () => {
 		const pages = Array.from(
@@ -112,6 +118,20 @@
 		resizeFrame = requestAnimationFrame(fitDocumentToViewport);
 	};
 
+	const scrollToTargetPage = async () => {
+		if (!viewport || !documentRoot || !renderedData) return;
+		const pages = Array.from(documentRoot.querySelectorAll<HTMLElement>('section.koby-docx'));
+		const page = clampDocumentTargetPage(targetPage, pages.length);
+		if (!page || (page === appliedTargetPage && renderedData === appliedTargetData)) return;
+
+		await tick();
+		const target = pages[page - 1];
+		if (!target) return;
+		viewport.scrollTo({ top: target.offsetTop, behavior: 'auto' });
+		appliedTargetPage = page;
+		appliedTargetData = renderedData;
+	};
+
 	const renderDocument = async () => {
 		if (!mounted || !documentRoot || data === renderedData) return;
 		const generation = ++renderGeneration;
@@ -151,6 +171,7 @@
 			if (generation !== renderGeneration) return;
 			if (viewport) viewport.scrollTop = previousScrollTop;
 			fitDocumentToViewport();
+			await scrollToTargetPage();
 			dispatch('preview-rendered', { data: candidateData });
 		} catch (cause) {
 			if (generation !== renderGeneration) return;
@@ -176,6 +197,11 @@
 	});
 
 	$: if (mounted && data !== attemptedData) void renderDocument();
+	$: if (!targetPage) {
+		appliedTargetPage = null;
+		appliedTargetData = null;
+	}
+	$: if (mounted && renderedData && targetPage) void scrollToTargetPage();
 </script>
 
 <div class="relative h-full min-h-0 overflow-hidden">

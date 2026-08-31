@@ -23,7 +23,7 @@
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import Refresh from '$lib/components/icons/Refresh.svelte';
 	import type { WebPreviewArtifact, WebPreviewFile } from './webPreview';
-	import { composeWebPreviewHtml, mergeLocalWebPreviewDraft } from './webPreview';
+	import { composeWebPreviewHtml, mergeLocalWebPreviewDraft, getWebPreviewExportPath } from './webPreview';
 	import { buildWebPreviewSandbox, resolveWebPreviewCsp } from './webPreviewSandbox';
 	import { resolveWorkspaceRuntime } from './workspace';
 	import { createSerializedSaveQueue, registerWorkspaceSaveBarrier } from './serializedSaveQueue';
@@ -34,6 +34,8 @@
 	export let codeInterpreterEnabled = false;
 	export let iframeCsp = '';
 	export let sandboxAllowForms = false;
+	export let sandboxAllowScripts = true;
+	export let sandboxAllowDownloads = true;
 	export let sandboxAllowSameOrigin = false;
 
 	let mode: 'preview' | 'code' = 'preview';
@@ -70,7 +72,8 @@
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
-		codeInterpreterEnabled
+		codeInterpreterEnabled,
+		chatId
 	);
 	$: runtimeTerminal =
 		workspaceRuntime.kind === 'terminal'
@@ -185,7 +188,7 @@
 						: item
 				)
 			);
-			if (snapshot.notifyExport) toast.success($i18n.t('Saved to Files'));
+			if (snapshot.notifyExport) toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
 		} catch (error: any) {
 			dirty = true;
 			saveFailed = true;
@@ -296,7 +299,7 @@
 		const cwd = await getCwd(runtimeTerminal.url, localStorage.token, chatId);
 		if (!cwd) throw new Error('Terminal unavailable');
 		const root = (cwd.root?.path || cwd.cwd || '/workspace').replace(/\/$/, '');
-		const base = `${root}/previews/${projectSlug()}`;
+		const base = getWebPreviewExportPath(root, artifact.previewId, projectSlug(), exportedRuntime === 'terminal' ? exportedPath : '');
 		const directories = new Set([`${root}/previews`, base]);
 		for (const path of Object.keys(files)) {
 			const parts = path.split('/').slice(0, -1);
@@ -326,7 +329,7 @@
 	};
 
 	const exportToPyodide = async () => {
-		const base = `/mnt/uploads/previews/${projectSlug()}`;
+		const base = getWebPreviewExportPath('/mnt/uploads', artifact.previewId, projectSlug(), exportedRuntime === 'pyodide' ? exportedPath : '');
 		await sendWorkerMessage({ type: 'fs:mkdir', path: '/mnt/uploads/previews' });
 		await sendWorkerMessage({ type: 'fs:mkdir', path: base });
 		const directories = new Set<string>();
@@ -443,6 +446,8 @@
 		</div>
 		<Tooltip content={$i18n.t('Reload')}>
 			<button
+				type="button"
+				aria-label={$i18n.t('Reload')}
 				class="flex size-8 items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-gray-900"
 				on:click={() => (reloadKey += 1)}
 			>
@@ -454,6 +459,8 @@
 				content={exportedPath ? $i18n.t('Apply changes to Files') : $i18n.t('Save to Files')}
 			>
 				<button
+					type="button"
+					aria-label={exportedPath ? $i18n.t('Apply changes to Files') : $i18n.t('Save to Files')}
 					disabled={exporting}
 					class="flex size-8 items-center justify-center rounded-md hover:bg-gray-100 disabled:opacity-40 dark:hover:bg-gray-900"
 					on:click={exportToFiles}
@@ -464,6 +471,8 @@
 		{/if}
 		<Tooltip content={$i18n.t('Download')}>
 			<button
+				type="button"
+				aria-label={$i18n.t('Download')}
 				class="flex size-8 items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-gray-900"
 				on:click={download}
 			>
@@ -487,6 +496,8 @@
 					srcdoc={injectCsp(previewHtml, resolveWebPreviewCsp(iframeCsp))}
 					class="h-full min-h-0 w-full border-0 bg-white"
 					sandbox={buildWebPreviewSandbox({
+						allowScripts: sandboxAllowScripts,
+						allowDownloads: sandboxAllowDownloads,
 						allowForms: sandboxAllowForms,
 						allowSameOrigin: sandboxAllowSameOrigin
 					})}

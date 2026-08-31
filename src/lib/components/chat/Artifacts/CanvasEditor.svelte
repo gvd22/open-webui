@@ -269,7 +269,7 @@
 
 			if (linkedNoteId) {
 				updateCanvasState({ noteId: linkedNoteId, title: titleValue || generatedTitle });
-				toast.success($i18n.t('Added to notes'));
+				toast.success($i18n.t('Added to notes'), { position: 'bottom-right' });
 			}
 		} catch (error: any) {
 			toast.error(error?.detail?.message ?? error?.detail ?? error?.message ?? `${error}`);
@@ -297,8 +297,8 @@
 				updatedAt: document.updated_at,
 				contentHash: document.contentHash
 			});
-			toast.success($i18n.t('AI change undone'));
-		} catch (error) {
+			toast.success($i18n.t('AI change undone'), { position: 'bottom-right' });
+		} catch (error: any) {
 			toast.error(error?.detail ?? $i18n.t('AI change could not be undone'));
 		}
 	};

@@ -2,6 +2,7 @@
 	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { decodeRuntimeText, readWorkspaceText } from '$lib/pyodide/readWorkspaceText';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -11,6 +12,8 @@
 	import { onMount, tick, setContext, onDestroy } from 'svelte';
 	import {
 		config,
+		models,
+		appData,
 		user,
 		settings,
 		theme,
@@ -31,7 +34,6 @@
 		channels,
 		channelId,
 		terminalServers,
-		selectedTerminalId,
 		showControls,
 		showFileNavPath,
 		showFileNavDir,
@@ -42,7 +44,7 @@
 	} from '$lib/stores';
 	import { refreshChatList } from '$lib/stores/chatList';
 	import { getFileContentById } from '$lib/apis/files';
-	import { downloadFileBlobDetailed } from '$lib/apis/terminal';
+	import { readFile } from '$lib/apis/terminal';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -66,7 +68,7 @@
 		removeTerminalConnection
 	} from '$lib/utils/connections';
 
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL, WEBUI_HOSTNAME } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import {
 		bestMatchingLanguage,
 		cleanText,
@@ -218,13 +220,15 @@
 				}
 			}
 
-			// Send heartbeat every 30 seconds
-			heartbeatInterval = setInterval(() => {
-				if (_socket.connected) {
-					console.log('Sending heartbeat');
-					_socket.emit('heartbeat', {});
-				}
-			}, 30000);
+			heartbeatInterval = setInterval(
+				() => {
+					if (_socket.connected) {
+						console.log('Sending heartbeat');
+						_socket.emit('heartbeat', {});
+					}
+				},
+				($config?.features?.websocket_heartbeat_interval ?? 30) * 1000
+			);
 
 			if (deploymentId !== null) {
 				WEBUI_DEPLOYMENT_ID.set(deploymentId);
@@ -271,6 +275,10 @@
 				heartbeatInterval = null;
 			}
 
+			if (reason === 'io server disconnect') {
+				_socket.connect();
+			}
+
 			if (details) {
 				console.log('Additional details:', details);
 			}
@@ -290,64 +298,28 @@
 		return worker;
 	};
 
-	const decodeRuntimeText = (buffer) => {
-		try {
-			return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-		} catch {
-			throw new Error('Only UTF-8 text files can be imported into a Web Preview.');
-		}
-	};
-
-	const readPyodideRuntimeFile = (id, path, maxBytes) => {
-		const worker = getOrCreateWorker();
-		return new Promise((resolve, reject) => {
-			const onMessage = (event) => {
-				if (event.data?.id !== id || event.data?.type !== 'fs:read') return;
-				clearTimeout(timeout);
-				worker.removeEventListener('message', onMessage);
-				if (event.data.error) {
-					reject(new Error(event.data.error));
-					return;
-				}
-				resolve(decodeRuntimeText(event.data.data));
-			};
-			const timeout = setTimeout(() => {
-				worker.removeEventListener('message', onMessage);
-				reject(new Error('Pyodide timed out while reading the file.'));
-			}, 30000);
-			worker.addEventListener('message', onMessage);
-			worker.postMessage({ type: 'fs:read', id, path, maxBytes });
-		});
-	};
-
 	const readRuntimeFileForPreview = async (data) => {
 		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
 		const sourcePath = String(data?.source_path ?? '');
 		if (data?.runtime === 'terminal') {
 			const terminal = ($terminalServers ?? []).find(
-				(item) => item.id === (data.terminal_id || $selectedTerminalId)
+				(item) => item.id === data.terminal_id
 			);
 			if (!terminal?.url) throw new Error('The selected Terminal is unavailable.');
-			const result = await downloadFileBlobDetailed(
+			const content = await readFile(
 				terminal.url,
 				localStorage.token,
 				sourcePath,
 				data.chat_id,
-				maxBytes
 			);
-			if (!result.ok) {
-				const message =
-					result.reason === 'too-large'
-						? 'The runtime file is too large to import into a Web Preview.'
-						: result.reason === 'missing'
-							? 'The runtime file no longer exists.'
-							: 'The Terminal file could not be read.';
-				throw new Error(message);
+			if (content === null) throw new Error('The Terminal file could not be read.');
+			if (new TextEncoder().encode(content).byteLength > maxBytes) {
+				throw new Error('The runtime file is too large to import into a Web Preview.');
 			}
-			return decodeRuntimeText(await result.blob.arrayBuffer());
+			return content;
 		}
 		if (data?.runtime === 'pyodide') {
-			return await readPyodideRuntimeFile(data.id, sourcePath, maxBytes);
+			return await readWorkspaceText(getOrCreateWorker(), data.id, sourcePath, maxBytes);
 		}
 		throw new Error('No supported runtime is active.');
 	};
@@ -516,8 +488,52 @@
 		return { toolServer, toolServerData, token };
 	};
 
+	const isDirectTerminalServer = (serverUrl) =>
+		!!serverUrl &&
+		(($settings?.terminalServers ?? []).some((server) => server.url === serverUrl) ||
+			($terminalServers ?? []).some((server) => !server.id && server.url === serverUrl));
+
+	const terminalFileResult = (result, params, serverUrl, chatId) => {
+		const path = result?.path ?? params?.path;
+		const name =
+			result?.name ??
+			String(path ?? '')
+				.split('/')
+				.filter(Boolean)
+				.at(-1) ??
+			'file';
+		const contentType = result?.content_type ?? result?.mime_type ?? 'application/octet-stream';
+
+		return {
+			...(result ?? {}),
+			type: 'file',
+			source: 'open_terminal',
+			displayed: true,
+			terminal_selector: serverUrl,
+			terminal_url: serverUrl,
+			session_id: chatId,
+			path,
+			full_path: result?.full_path ?? path,
+			name,
+			mime_type: contentType,
+			content_type: contentType,
+			page: result?.page ?? params?.page
+		};
+	};
+
 	const executeTool = async (data, cb, chatId) => {
 		const { toolServer, toolServerData, token } = resolveToolServer(data.server?.url);
+		const defaultInline =
+			data?.name === 'display_file' &&
+			data?.params?.path &&
+			data?.params?.inline === undefined &&
+			$settings?.terminalFileDisplay === 'inline' &&
+			isDirectTerminalServer(data.server?.url);
+		const params = defaultInline ? { ...data.params, inline: true } : data?.params;
+		const serverParams = data?.name === 'display_file' && params ? { ...params } : params;
+		if (serverParams && data?.name === 'display_file') {
+			delete serverParams.page;
+		}
 
 		console.log('executeTool', data, toolServer);
 
@@ -526,36 +542,35 @@
 				token,
 				toolServer.url,
 				data?.name,
-				data?.params,
+				serverParams,
 				toolServerData,
 				chatId
 			);
 
 			console.log('executeToolServer', res);
+			const result = Array.isArray(res) ? res[0] : res;
+			const inlineDisplayFile =
+				data?.name === 'display_file' && params?.path && params?.inline === true;
+			const output =
+				inlineDisplayFile && result?.exists !== false
+					? Array.isArray(res)
+						? [terminalFileResult(result, params, toolServer.url, chatId)]
+						: terminalFileResult(result, params, toolServer.url, chatId)
+					: res;
 
-			if (data?.name === 'display_file' && data?.params?.path) {
-				if (res?.exists !== false) {
-					if ($workspaceOpenFilePaths.includes(data.params.path)) {
-						workspaceFileUpdate.set({
-							path: data.params.path,
-							kind: 'changed',
-							revision: Date.now()
-						});
-					} else {
-						displayFileHandler(data.params.path, { showControls, showFileNavPath });
-					}
+			if (data?.name === 'display_file' && params?.path && !inlineDisplayFile) {
+				if (result?.exists !== false) {
+					displayFileHandler(
+						params.path,
+						{ showControls, showFileNavPath },
+						{ page: params?.page }
+					);
 				}
 			}
 
-			if (['write_file', 'replace_file_content'].includes(data?.name) && data?.params?.path) {
-				const path = res?.path ?? data.params.path;
-				if (isWorkspaceDocumentPath(path)) {
-					if ($workspaceOpenFilePaths.includes(path)) {
-						workspaceFileUpdate.set({ path, kind: 'changed', revision: Date.now() });
-					} else {
-						displayFileHandler(path, { showControls, showFileNavPath });
-					}
-				}
+			if (['write_file', 'replace_file_content'].includes(data?.name) && params?.path) {
+				const path = result?.path ?? params.path;
+				workspaceFileUpdate.set({ path, kind: 'changed', revision: Date.now() });
 				showFileNavDir.set(path);
 			}
 
@@ -564,7 +579,7 @@
 			}
 
 			if (cb) {
-				cb(structuredClone(res));
+				cb(structuredClone(output));
 			}
 		} else {
 			if (cb) {
@@ -574,6 +589,38 @@
 	};
 
 	const chatEventHandler = async (event, cb) => {
+		const type = event?.data?.type ?? null;
+		const data = event?.data?.data ?? null;
+		const socketId = $socket?.id;
+
+		// Session-targeted RPC must bypass visibility, the electron focus bridge,
+		// and Svelte's flush. Those steps can fail independently of the worker
+		// callback that the backend is waiting for.
+		if (data?.session_id && data.session_id === socketId) {
+			if (type === 'execute:python') {
+				console.log('execute:python', data);
+				void executePythonAsWorker(data.id, data.code, cb, data.files || []).catch((error) => {
+					cb?.({ error: error instanceof Error ? error.message : String(error) });
+				});
+				return;
+			} else if (type === 'workspace:read_runtime_file') {
+				try {
+					cb({ content: await readRuntimeFileForPreview(data) });
+				} catch (error) {
+					cb({ error: error instanceof Error ? error.message : String(error) });
+				}
+				return;
+			} else if (type === 'execute:tool') {
+				console.log('execute:tool', data);
+				try {
+					await executeTool(data, cb, event.chat_id);
+				} catch (error) {
+					cb?.({ error: error instanceof Error ? error.message : String(error) });
+				}
+				return;
+			}
+		}
+
 		const chat = $page.url.pathname.includes(`/c/${event.chat_id}`);
 
 		// Skip events from temporary chats that are not the current chat.
@@ -595,8 +642,6 @@
 		}
 
 		await tick();
-		const type = event?.data?.type ?? null;
-		const data = event?.data?.data ?? null;
 
 		// Calendar alerts are not chat-scoped, handle before chat_id checks
 		if (type === 'calendar:alert' && data) {
@@ -623,6 +668,9 @@
 				if ($settings?.notificationEnabled ?? false) {
 					new Notification(`${data.title} / Open WebUI`, {
 						body: timeStr,
+						// LICENSE covers this Open WebUI notification identifier.
+						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+						// https://docs.openwebui.com/license.
 						icon: `${WEBUI_BASE_URL}/static/favicon.png`
 					});
 				}
@@ -633,23 +681,8 @@
 		// Session-targeted RPC calls (code execution, tool calls, direct completion)
 		// must ALWAYS be processed regardless of active chat or tab visibility,
 		// because the backend's sio.call blocks waiting for our callback response.
-		if (data?.session_id === $socket.id) {
-			if (type === 'execute:python') {
-				console.log('execute:python', data);
-				executePythonAsWorker(data.id, data.code, cb, data.files || []);
-				return;
-			} else if (type === 'workspace:read_runtime_file') {
-				try {
-					cb({ content: await readRuntimeFileForPreview(data) });
-				} catch (error) {
-					cb({ error: error instanceof Error ? error.message : String(error) });
-				}
-				return;
-			} else if (type === 'execute:tool') {
-				console.log('execute:tool', data);
-				executeTool(data, cb, event.chat_id);
-				return;
-			} else if (type === 'request:chat:completion') {
+		if (data?.session_id === socketId) {
+			if (type === 'request:chat:completion') {
 				console.log(data, $socket.id);
 				const { session_id, channel, form_data, model } = data;
 
@@ -765,6 +798,9 @@
 						if ($settings?.notificationEnabled ?? false) {
 							new Notification(`${displayTitle} / Open WebUI`, {
 								body: contentPreview,
+								// LICENSE covers this Open WebUI notification identifier.
+								// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+								// https://docs.openwebui.com/license.
 								icon: `${WEBUI_BASE_URL}/static/favicon.png`
 							});
 						}
@@ -870,6 +906,9 @@
 
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
+						// LICENSE covers this Open WebUI notification identifier.
+						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+						// https://docs.openwebui.com/license.
 						new Notification(`${title} / Open WebUI`, {
 							body: data?.content,
 							icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
@@ -1269,6 +1308,10 @@
 		if (backendConfig) {
 			// Save Backend Status to Store
 			await config.set(backendConfig);
+			// LICENSE covers this Open WebUI branding surface, including name, logo,
+			// visual, textual, symbolic identifiers, metadata, and surrounding UI.
+			// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+			// https://docs.openwebui.com/license.
 			await WEBUI_NAME.set(backendConfig.name);
 
 			if ($config) {
@@ -1381,6 +1424,10 @@
 </script>
 
 <svelte:head>
+	<!-- LICENSE covers this Open WebUI branding surface, including name, logo,
+	visual, textual, symbolic identifiers, metadata, and surrounding UI.
+	Do not alter, remove, obscure, or replace it except as LICENSE permits:
+	https://docs.openwebui.com/license. -->
 	<title>{$WEBUI_NAME}</title>
 	<link crossorigin="anonymous" rel="icon" href="{WEBUI_BASE_URL}/static/favicon.png" />
 

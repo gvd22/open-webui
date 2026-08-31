@@ -193,7 +193,17 @@ const getCanvasToolStatusMessage = (output: any[], type: string, field: string):
 };
 
 export const getCanvasToolErrorFromOutput = (output: any[] = []): string =>
-	getCanvasToolStatusMessage(output, 'canvas.error', 'message');
+	getCanvasToolStatusMessage(output, 'canvas.error', 'message') ||
+	getCanvasToolStatusMessage(output, 'canvas.conflict', 'message');
+
+export const preserveNewerCanvas = (
+	incoming: CanvasNoteArtifact,
+	current?: CanvasNoteArtifact
+): CanvasNoteArtifact =>
+	current && current.hasContentPayload !== false && Number(current.updatedAt ?? 0) > 0 &&
+	Number(current.updatedAt ?? 0) >= Number(incoming.updatedAt ?? 0)
+		? { ...incoming, ...current }
+		: incoming;
 
 export const getCanvasToolWarningFromOutput = (output: any[] = []): string =>
 	getCanvasToolStatusMessage(output, 'canvas.document', 'warning') ||

@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from open_webui.utils.workspace_context import (
     build_cancelled_workspace_output_update,
@@ -79,6 +80,16 @@ def test_non_workspace_output_is_not_copied_or_changed():
     output = _tool_output('search_web', {'query': 'canvas'}, {'content': 'result'})
 
     assert compact_workspace_tool_output(output) is output
+
+
+@pytest.mark.parametrize('status', ['in_progress', 'completed', 'pending', 'queued'])
+def test_unexecuted_workspace_calls_keep_full_arguments_for_approval(status):
+    output = _tool_output('web_preview_create',
+        {'title': 'Dashboard', 'files': {'index.html': {'content': '<main>Original</main>'}}},
+        {'type': 'web_preview.document'})[:1]
+    output[0]['status'] = status
+    assert compact_workspace_tool_output(output) is output
+    assert json.loads(output[0]['arguments'])['files']['index.html']['content'] == '<main>Original</main>'
 
 
 def test_cancelled_workspace_stream_persists_compact_output_for_both_save_modes():

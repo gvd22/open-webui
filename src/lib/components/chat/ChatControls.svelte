@@ -1,90 +1,53 @@
-<script context="module" lang="ts">
-	let savedTab: 'controls' | 'overview' = 'controls';
-</script>
-
 <script lang="ts">
-	import { SvelteFlowProvider } from '@xyflow/svelte';
-	import { slide } from 'svelte/transition';
-	import { Pane, PaneResizer } from 'paneforge';
+	import { onMount, tick, getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import { v4 as uuidv4 } from 'uuid';
-
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
+	import { toast } from 'svelte-sonner';
+	import { uploadFile } from '$lib/apis/files';
 	import {
-		config,
-		terminalServers,
-		mobile,
-		showControls,
-		showCallOverlay,
-		showArtifacts,
-		showEmbeds,
-		showFileNavPath,
-		selectedTerminalId,
-		user,
-		artifactCode,
+		config, terminalServers, showControls, showCallOverlay, showArtifacts,
+		showEmbeds, showFileNavPath, selectedTerminalId, artifactCode,
 		workspaceUtilityInstances
 	} from '$lib/stores';
-
-	import { uploadFile } from '$lib/apis/files';
-	import { toast } from 'svelte-sonner';
-
-	import Controls from './Controls/Controls.svelte';
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
+	import ResizableSidePanel from '../common/ResizableSidePanel.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import XTerminal from './XTerminal.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
-	import Overview from './Overview.svelte';
 	import {
 		getDefaultWorkspaceContentId,
 		resolveWorkspaceRuntime,
 		WORKSPACE_FILES_ID
 	} from './Artifacts/workspace';
 
-	const i18n = getContext('i18n');
-
-	export let history;
-	export let models = [];
-
-	export let chatId = null;
-
-	export let chatFiles = [];
-	export let params = {};
-
+	const i18n: Writable<i18nType> = getContext('i18n');
+	export let history: Record<string, any> | null = null;
+	export let models: any[] = [];
+	export let chatId: string | null = null;
+	export let chatUser: any = null;
+	export let chatFiles: any[] = [];
+	export let params: Record<string, any> = {};
 	export let eventTarget: EventTarget;
 	export let submitPrompt: Function;
 	export let stopResponse: Function;
 	export let showMessage: Function;
-	export let files;
-	export let modelId;
-
+	export let files: any[] = [];
+	export let modelId: string | null = null;
 	export let codeInterpreterEnabled = false;
 
-	export let pane: Pane | null = null;
-	export let containerId = 'chat-container';
-
 	let largeScreen = false;
-	let dragged = false;
-	let minSize = 0;
-	let paneReady = false;
+	let resizing = false;
+	let controlsWidth = 600;
 	let workspaceTerminalComponents: Record<string, XTerminal> = {};
 
-	// Tab state for Controls+Files panel
-	let activeTab = savedTab;
-	// svelte-ignore reactive_declaration_module_script_dependency
-	$: {
-		savedTab = activeTab;
-	}
-
-	$: hasMessages = history?.messages && Object.keys(history.messages).length > 0;
-
-	$: showControlsTab = $user?.role === 'admin' || ($user?.permissions?.chat?.controls ?? true);
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
-		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter',
+		chatId
 	);
-	$: showFilesTab = workspaceRuntime.files;
-	$: showOverviewTab = hasMessages;
 
 	const openWorkspaceItem = (id: string) => {
 		artifactCode.set(id);
@@ -92,487 +55,103 @@
 		showControls.set(true);
 	};
 
-	// Tab fallback: if active tab becomes hidden, switch to next available
-	$: if (!showOverviewTab && activeTab === 'overview') activeTab = 'controls';
-	$: if (!showControlsTab && activeTab === 'controls') {
-		if (showOverviewTab) activeTab = 'overview';
-	}
-
-	// The header button now owns a single end-user surface. Technical Controls stay
-	// in administration and never become the empty-chat default.
 	$: if ($showControls && !$showCallOverlay && !$showEmbeds && !$showArtifacts) {
 		openWorkspaceItem(getDefaultWorkspaceContentId(workspaceRuntime));
 	}
+	$: if ($showFileNavPath) openWorkspaceItem(WORKSPACE_FILES_ID);
 
-	// Auto-switch to Files tab when display_file is triggered
-	$: if ($showFileNavPath) {
-		openWorkspaceItem(WORKSPACE_FILES_ID);
-	}
-
-	// Drop stale managed selections after an administrator removes the connection.
-	$: if (
-		$selectedTerminalId &&
-		$terminalServers !== null &&
-		!($terminalServers ?? []).some((t) => t.id === $selectedTerminalId)
-	) {
-		selectedTerminalId.set(null);
-	}
-
-	// Attach a terminal file to the chat input
 	const handleTerminalAttach = async (blob: Blob, name: string, contentType: string) => {
-		const tempItemId = uuidv4();
-		const fileItem = {
-			type: 'file',
-			file: '',
-			id: null,
-			url: '',
-			name,
-			collection_name: '',
-			status: 'uploading',
-			error: '',
-			itemId: tempItemId,
-			size: blob.size
+		const itemId = uuidv4();
+		const pending = {
+			type: 'file', file: '', id: null, url: '', name,
+			collection_name: '', status: 'uploading', error: '', itemId, size: blob.size
 		};
-
-		files = [...files, fileItem];
-
+		files = [...files, pending];
 		try {
 			const file = new File([blob], name, { type: contentType || 'application/octet-stream' });
 			const uploaded = await uploadFile(localStorage.token, file);
 			if (!uploaded) throw new Error('Upload failed');
-
-			const idx = files.findIndex((f) => f.itemId === tempItemId);
-			if (idx !== -1) {
-				files[idx] = {
-					...fileItem,
-					status: 'uploaded',
-					file: uploaded,
-					id: uploaded.id,
-					url: `${uploaded.id}`,
-					collection_name: uploaded?.meta?.collection_name
-				};
-				files = files;
-			}
+			files = files.map((item) => item.itemId !== itemId ? item : {
+				...pending, status: 'uploaded', file: uploaded, id: uploaded.id,
+				url: uploaded.id, collection_name: uploaded?.meta?.collection_name
+			});
 			toast.success($i18n.t('File attached to chat'));
-		} catch (e) {
-			files = files.filter((f) => f.itemId !== tempItemId);
+		} catch {
+			files = files.filter((item) => item.itemId !== itemId);
 			toast.error($i18n.t('Failed to attach file'));
 		}
 	};
 
-	export const openPane = () => {
-		const container = document.getElementById(containerId);
-		if (!container || !pane) return;
-
-		const savedWidth = parseInt(localStorage?.chatControlsSize);
-		const savedSize = savedWidth ? Math.floor((savedWidth / container.clientWidth) * 100) : minSize;
-		if ($showArtifacts) {
-			pane.resize(Math.min(68, Math.max(savedSize, 62)));
-		} else {
-			pane.resize(savedSize);
-		}
-	};
-
-	const handleMediaQuery = async (e) => {
-		if (e.matches) {
-			largeScreen = true;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
-		} else {
-			largeScreen = false;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
-			pane = null;
-		}
-	};
-
-	const onMouseDown = () => {
-		dragged = true;
-	};
-	const onMouseUp = () => {
-		dragged = false;
+	const closeHandler = () => {
+		showControls.set(false);
+		showArtifacts.set(false);
+		showEmbeds.set(false);
+		showCallOverlay.set(false);
 	};
 
 	onMount(() => {
 		const mediaQuery = window.matchMedia('(min-width: 1024px)');
-		mediaQuery.addEventListener('change', handleMediaQuery);
-		handleMediaQuery(mediaQuery);
-
-		let resizeObserver: ResizeObserver | null = null;
-		const unsubscribeShowArtifacts = showArtifacts.subscribe(async (value) => {
-			if (value && paneReady && largeScreen) {
-				await tick();
-				openPane();
-			}
-		});
-		let isDestroyed = false;
-
-		// Wait for Svelte to render the Pane after largeScreen changed
-		const init = async () => {
-			await tick();
-
-			if (isDestroyed) return;
-
-			// If controls were persisted as open, set the pane to the saved size
-			if ($showControls && pane) {
-				openPane();
-			}
-
-			setTimeout(() => {
-				paneReady = true;
-			}, 0);
-
-			const container = document.getElementById(containerId) as HTMLElement;
-			if (!container) return;
-
-			minSize = Math.floor((350 / container.clientWidth) * 100);
-			resizeObserver = new ResizeObserver((entries) => {
-				for (let entry of entries) {
-					const width = entry.contentRect.width;
-					minSize = Math.floor((350 / width) * 100);
-					if ($showControls) {
-						if (pane && pane.isExpanded() && pane.getSize() < minSize) {
-							pane.resize(minSize);
-						} else {
-							let size = Math.floor(
-								(parseInt(localStorage?.chatControlsSize) / container.clientWidth) * 100
-							);
-							if (size < minSize && pane) pane.resize(minSize);
-						}
-					}
-				}
-			});
-			resizeObserver.observe(container);
-		};
-		init();
-
-		document.addEventListener('mousedown', onMouseDown);
-		document.addEventListener('mouseup', onMouseUp);
-
-		return () => {
-			isDestroyed = true;
-			paneReady = false;
-			resizeObserver?.disconnect();
-			unsubscribeShowArtifacts();
-			if (!largeScreen) {
-				showControls.set(false);
-			}
-			mediaQuery.removeEventListener('change', handleMediaQuery);
-			document.removeEventListener('mousedown', onMouseDown);
-			document.removeEventListener('mouseup', onMouseUp);
-		};
+		const update = () => { largeScreen = mediaQuery.matches; };
+		mediaQuery.addEventListener('change', update);
+		update();
+		return () => mediaQuery.removeEventListener('change', update);
 	});
 
-	const closeHandler = () => {
-		if (!largeScreen) {
-			showControls.set(false);
-		}
-		showArtifacts.set(false);
-		showEmbeds.set(false);
-		if ($showCallOverlay) showCallOverlay.set(false);
-	};
-
-	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
 	$: activeWorkspaceTerminal = $workspaceUtilityInstances.find(
 		(instance) => instance.kind === 'terminal' && instance.id === $artifactCode
 	);
 	$: if (activeWorkspaceTerminal && workspaceTerminalComponents[activeWorkspaceTerminal.id]) {
-		void tick().then(() => workspaceTerminalComponents[activeWorkspaceTerminal.id]?.focus());
+		const id = activeWorkspaceTerminal.id;
+		void tick().then(() => workspaceTerminalComponents[id]?.focus());
 	}
 </script>
+
+{#snippet content()}
+	<div class="relative h-full min-h-0 overflow-hidden" id="controls-container">
+		{#if $showCallOverlay}
+			<CallOverlay
+				bind:files {submitPrompt} {stopResponse} {modelId} {chatId} {eventTarget}
+				on:close={closeHandler}
+			/>
+		{:else if $showEmbeds}
+			<Embeds overlay={resizing} />
+		{:else}
+			<Artifacts
+				{history} overlay={resizing} showFiles={workspaceRuntime.files}
+				{codeInterpreterEnabled} onAttach={handleTerminalAttach}
+			/>
+			{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
+				<div
+					class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
+					class:invisible={$artifactCode !== instance.id}
+					class:pointer-events-none={$artifactCode !== instance.id}
+				>
+					<XTerminal
+						bind:this={workspaceTerminalComponents[instance.id]}
+						{chatId} terminalId={instance.terminalId}
+					/>
+				</div>
+			{/each}
+		{/if}
+	</div>
+{/snippet}
 
 {#if !largeScreen}
 	{#if $showControls}
 		<Drawer
-			show={$showControls}
-			onClose={() => showControls.set(false)}
+			show={$showControls} onClose={closeHandler}
 			className="min-h-[100dvh] !bg-white dark:!bg-gray-850"
 		>
-			<div class="h-[100dvh] flex flex-col">
-				{#if $showCallOverlay}
-					<div
-						class="h-full max-h-[100dvh] bg-white text-gray-700 dark:bg-black dark:text-gray-300 flex justify-center"
-					>
-						<CallOverlay
-							bind:files
-							{submitPrompt}
-							{stopResponse}
-							{modelId}
-							{chatId}
-							{eventTarget}
-							on:close={() => showControls.set(false)}
-						/>
-					</div>
-				{:else if $showEmbeds}
-					<Embeds />
-				{:else if $showArtifacts}
-					<div class="relative h-full min-h-0">
-						<Artifacts
-							{history}
-							showFiles={showFilesTab}
-							{codeInterpreterEnabled}
-							onAttach={handleTerminalAttach}
-						/>
-						{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
-							<div
-								class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
-								class:invisible={$artifactCode !== instance.id}
-								class:pointer-events-none={$artifactCode !== instance.id}
-							>
-								<XTerminal
-									bind:this={workspaceTerminalComponents[instance.id]}
-									{chatId}
-									terminalId={instance.terminalId}
-								/>
-							</div>
-						{/each}
-					</div>
-				{:else}
-					<!-- Controls + Files tabs -->
-					<div class="flex flex-col h-full min-h-0">
-						<!-- Tab bar -->
-						<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
-							<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
-								{#if showControlsTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'controls'
-											? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-											: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'controls')}
-									>
-										{$i18n.t('Controls')}
-									</button>
-								{/if}
-								{#if showFilesTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300"
-										on:click={() => openWorkspaceItem(WORKSPACE_FILES_ID)}
-									>
-										{$i18n.t('Files')}
-									</button>
-								{/if}
-								{#if showOverviewTab}
-									<button
-										class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-										'overview'
-											? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-											: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'overview')}
-									>
-										{$i18n.t('Overview')}
-									</button>
-								{/if}
-							</div>
-							<button
-								class="p-1 rounded-lg text-gray-500 dark:text-gray-400"
-								on:click={() => showControls.set(false)}
-								aria-label={$i18n.t('Close')}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.5"
-									class="size-4"
-								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-								</svg>
-							</button>
-						</div>
-
-						<div
-							class="flex-1 min-h-0 {activeTab === 'overview'
-								? 'h-full'
-								: activeTab === 'controls'
-									? 'overflow-y-auto px-3 pt-1'
-									: ''}"
-						>
-							{#if activeTab === 'overview'}
-								<Overview
-									{history}
-									onNodeClick={(e) => {
-										const node = e.node;
-										showMessage(node.data.message, true);
-									}}
-								/>
-							{:else}
-								<Controls embed={true} {models} bind:chatFiles bind:params />
-							{/if}
-						</div>
-					</div>
-				{/if}
-			</div>
+			<div class="h-[100dvh]">{@render content()}</div>
 		</Drawer>
 	{/if}
 {:else}
-	{#if $showControls}
-		<PaneResizer
-			class="relative flex items-center justify-center group border-l border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20"
-			id="controls-resizer"
-		>
-			<div
-				class="absolute -left-1.5 -right-1.5 -top-0 -bottom-0 z-20 cursor-col-resize bg-transparent"
-			/>
-		</PaneResizer>
-	{/if}
-
-	<Pane
-		bind:pane
-		defaultSize={0}
-		onResize={(size) => {
-			if ($showControls && pane.isExpanded()) {
-				if (size < minSize) pane.resize(minSize);
-				if (size < minSize) {
-					localStorage.chatControlsSize = 0;
-				} else {
-					const container = document.getElementById(containerId);
-					localStorage.chatControlsSize = Math.floor((size / 100) * container.clientWidth);
-				}
-			}
-		}}
-		onCollapse={() => {
-			if (paneReady) showControls.set(false);
-		}}
-		collapsible={true}
-		class="z-10 bg-white dark:bg-gray-900"
+	<ResizableSidePanel
+		open={$showControls} bind:width={controlsWidth} bind:isResizing={resizing}
+		minWidth={350} minSiblingWidth={360} closeOnDragBelowMinWidth
+		onClose={closeHandler} storageKey="chatControlsSize"
+		className="h-full z-10 bg-white dark:bg-gray-900"
 	>
-		{#if $showControls}
-			<div class="flex max-h-full min-h-full">
-				<div
-					class="w-full {specialPanel && !$showCallOverlay
-						? ' '
-						: 'bg-white dark:bg-gray-900'} z-40 pointer-events-auto overflow-y-auto scrollbar-hidden"
-					id="controls-container"
-				>
-					{#if $showCallOverlay}
-						<div class="w-full h-full flex justify-center">
-							<CallOverlay
-								bind:files
-								{submitPrompt}
-								{stopResponse}
-								{modelId}
-								{chatId}
-								{eventTarget}
-								on:close={() => showControls.set(false)}
-							/>
-						</div>
-					{:else if $showEmbeds}
-						<Embeds overlay={dragged} />
-					{:else if $showArtifacts}
-						<div class="relative h-full min-h-0">
-							<Artifacts
-								{history}
-								overlay={dragged}
-								showFiles={showFilesTab}
-								{codeInterpreterEnabled}
-								onAttach={handleTerminalAttach}
-							/>
-							{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
-								<div
-									class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
-									class:invisible={$artifactCode !== instance.id}
-									class:pointer-events-none={$artifactCode !== instance.id}
-								>
-									<XTerminal
-										bind:this={workspaceTerminalComponents[instance.id]}
-										{chatId}
-										terminalId={instance.terminalId}
-									/>
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<!-- Controls + Files tabs -->
-						<div class="flex flex-col h-full min-h-0">
-							<!-- Tab bar -->
-							<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
-								<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
-									{#if showControlsTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'controls'
-												? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-												: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'controls')}
-										>
-											{$i18n.t('Controls')}
-										</button>
-									{/if}
-									{#if showFilesTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300"
-											on:click={() => openWorkspaceItem(WORKSPACE_FILES_ID)}
-										>
-											{$i18n.t('Files')}
-										</button>
-									{/if}
-									{#if showOverviewTab}
-										<button
-											class="px-2.5 py-1 text-sm rounded-lg transition whitespace-nowrap {activeTab ===
-											'overview'
-												? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
-												: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-											on:click={() => (activeTab = 'overview')}
-										>
-											{$i18n.t('Overview')}
-										</button>
-									{/if}
-								</div>
-								<button
-									class="p-1 rounded-lg text-gray-500 dark:text-gray-400"
-									on:click={() => showControls.set(false)}
-									aria-label={$i18n.t('Close')}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="1.5"
-										class="size-4"
-									>
-										<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-									</svg>
-								</button>
-							</div>
-
-							<div
-								class="flex-1 min-h-0 {activeTab === 'overview'
-									? 'h-full'
-									: activeTab === 'controls'
-										? 'overflow-y-auto px-3 pt-1'
-										: ''}"
-							>
-								{#if activeTab === 'overview'}
-									<Overview
-										{history}
-										onNodeClick={(e) => {
-											const node = e.node;
-											if (node?.data?.message?.favorite) {
-												history.messages[node.data.message.id].favorite = true;
-											} else {
-												history.messages[node.data.message.id].favorite = null;
-											}
-											showMessage(node.data.message, true);
-										}}
-									/>
-								{:else}
-									<Controls embed={true} {models} bind:chatFiles bind:params />
-								{/if}
-							</div>
-						</div>
-					{/if}
-				</div>
-			</div>
-		{/if}
-	</Pane>
+		{@render content()}
+	</ResizableSidePanel>
 {/if}

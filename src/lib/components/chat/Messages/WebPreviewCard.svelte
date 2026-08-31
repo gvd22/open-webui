@@ -15,7 +15,10 @@
 		showEmbeds,
 		workspaceOpenRequestId
 	} from '$lib/stores';
-	import type { WebPreviewArtifact } from '../Artifacts/webPreview';
+	import {
+		mergePersistedWebPreview,
+		type WebPreviewArtifact
+	} from '../Artifacts/webPreview';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	export let artifact: WebPreviewArtifact;
@@ -26,36 +29,36 @@
 	$: title = current?.title ?? artifact.title;
 
 	const openPreview = async () => {
-		if ($chatId && artifact.source === 'tool') {
+		const targetArtifact = artifact;
+		const targetChatId = $chatId;
+		const targetPreviewId = targetArtifact.previewId;
+
+		if (targetChatId && targetArtifact.source === 'tool') {
 			try {
 				const document = await selectTransientWebPreview(
 					localStorage.token,
-					$chatId,
-					artifact.previewId
+					targetChatId,
+					targetPreviewId
 				);
+				if ($chatId !== targetChatId) return;
+
 				(artifactContents as any).update((items: any[] | null) =>
 					(items ?? []).map((item) =>
-						item?.previewId === artifact.previewId
-							? {
-									...item,
-									title: document.title,
-									entrypoint: document.entrypoint,
-									files: document.files,
-									content: document.files?.[document.entrypoint]?.content ?? '',
-									updatedAt: document.updated_at,
-									contentHash: document.contentHash
-								}
+						item?.previewId === targetPreviewId
+							? mergePersistedWebPreview(item as WebPreviewArtifact, document)
 							: item
 					)
 				);
 			} catch {
+				if ($chatId !== targetChatId) return;
 				toast.error($i18n.t('Preview could not be refreshed'));
 				return;
 			}
 		}
 
-		workspaceOpenRequestId.set(artifact.previewId);
-		(artifactCode as any).set(artifact.previewId);
+		if ($chatId !== targetChatId) return;
+		workspaceOpenRequestId.set(targetPreviewId);
+		artifactCode.set(targetPreviewId);
 		showEmbeds.set(false);
 		showArtifacts.set(true);
 		showControls.set(true);

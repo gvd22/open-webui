@@ -1,3 +1,6 @@
+import { isSavedChatId } from '$lib/utils/chatId';
+import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
+
 export type WorkspaceContent = {
 	type: string;
 	content: string;
@@ -17,6 +20,7 @@ export type WorkspaceContent = {
 	path?: string;
 	terminalId?: string;
 	fileFormat?: WorkspaceDocumentFormat;
+	targetPage?: number;
 };
 
 export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx';
@@ -38,10 +42,10 @@ export type WorkspaceRuntime =
 	| {
 			kind: 'terminal';
 			terminalId: string;
-			files: true;
-			writable: true;
-			shell: true;
-			ports: true;
+			files: boolean;
+			writable: boolean;
+			shell: boolean;
+			ports: boolean;
 	  }
 	| {
 			kind: 'pyodide';
@@ -69,9 +73,10 @@ export type WorkspaceRuntime =
 	  };
 
 export const resolveWorkspaceRuntime = (
-	terminalServers: Array<{ id?: string }> | null | undefined,
+	terminalServers: Array<{ id?: string; contexts?: { chat?: unknown } }> | null | undefined,
 	selectedTerminalId: string | null | undefined,
-	pyodideEnabled: boolean
+	pyodideEnabled: boolean,
+	chatId: string | null
 ): WorkspaceRuntime => {
 	// `null` means the managed Terminal catalog has not loaded or failed to load.
 	// It must not be treated as an authoritative empty catalog because that would
@@ -86,9 +91,25 @@ export const resolveWorkspaceRuntime = (
 			ports: false
 		};
 	}
+	if (
+		selectedTerminalId &&
+		!terminalServers.some(
+			(terminal) => terminal.id === selectedTerminalId && terminal.contexts?.chat !== false
+		)
+	) {
+		return {
+			kind: 'unavailable',
+			terminalId: null,
+			files: false,
+			writable: false,
+			shell: false,
+			ports: false
+		};
+	}
 
-	const systemTerminals = (terminalServers ?? []).filter((terminal): terminal is { id: string } =>
-		Boolean(terminal.id)
+	const systemTerminals = (terminalServers ?? []).filter(
+		(terminal): terminal is { id: string } =>
+			Boolean(terminal.id) && terminal.contexts?.chat !== false
 	);
 	const terminal =
 		systemTerminals.find((candidate) => candidate.id === selectedTerminalId) ?? systemTerminals[0];
@@ -99,10 +120,10 @@ export const resolveWorkspaceRuntime = (
 		return {
 			kind: 'terminal',
 			terminalId: terminal.id,
-			files: true,
-			writable: true,
-			shell: true,
-			ports: true
+			files: isSavedChatId(chatId),
+			writable: isSavedChatId(chatId),
+			shell: isSavedChatId(chatId),
+			ports: isSavedChatId(chatId)
 		};
 	}
 
@@ -183,14 +204,18 @@ export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFor
 export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
 	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
 
-export const buildWorkspaceFileContent = (path: string): WorkspaceContent => ({
-	type: 'workspace-file',
-	workspaceId: getWorkspaceFileId(path),
-	title: path.split('/').filter(Boolean).at(-1) || 'File',
-	content: '',
-	path,
-	fileFormat: getWorkspaceDocumentFormat(path) ?? undefined
-});
+export const buildWorkspaceFileContent = (path: string, targetPage?: unknown): WorkspaceContent => {
+	const page = normalizeDocumentTargetPage(targetPage);
+	return {
+		type: 'workspace-file',
+		workspaceId: getWorkspaceFileId(path),
+		title: path.split('/').filter(Boolean).at(-1) || 'File',
+		content: '',
+		path,
+		fileFormat: getWorkspaceDocumentFormat(path) ?? undefined,
+		...(page ? { targetPage: page } : {})
+	};
+};
 
 export const buildWorkspaceUtilityContents = ({
 	showFiles,
@@ -255,12 +280,19 @@ export const replaceWorkspaceFileContent = (
 
 export const upsertWorkspaceFileContent = (
 	contents: WorkspaceContent[],
-	path: string
+	path: string,
+	targetPage?: unknown
 ): WorkspaceContent[] => {
 	const id = getWorkspaceFileId(path);
-	return contents.some((content, index) => getWorkspaceContentId(content, index) === id)
-		? contents
-		: [...contents, buildWorkspaceFileContent(path)];
+	const page = normalizeDocumentTargetPage(targetPage);
+	const existing = contents.find((content, index) => getWorkspaceContentId(content, index) === id);
+	if (!existing) return [...contents, buildWorkspaceFileContent(path, page)];
+	if ((existing.targetPage ?? null) === page) return contents;
+	return contents.map((content, index) =>
+		getWorkspaceContentId(content, index) === id
+			? { ...content, ...(page ? { targetPage: page } : { targetPage: undefined }) }
+			: content
+	);
 };
 
 export const limitWorkspaceFileContents = (

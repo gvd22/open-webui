@@ -32,10 +32,23 @@ describe('workspace document viewer accessibility contract', () => {
 
 		expect(artifacts).toContain('return false;');
 		expect(artifacts).toContain('return true;');
-		for (const source of [terminalFiles, pyodideFiles]) {
-			expect(source).toContain('export let onOpenFile: (path: string) => boolean = () => false;');
-			expect(source).toMatch(/onOpenFile\(filePath\)\)\s*return;/);
-		}
+		expect(terminalFiles.replace(/\s+/g, ' ')).toContain(
+			'export let onOpenFile: (path: string, options?: { page?: number | null }) => boolean = () => false;'
+		);
+		expect(terminalFiles).toMatch(/onOpenFile\(filePath, \{ page: normalizeDocumentTargetPage/);
+		expect(pyodideFiles).toContain(
+			'export let onOpenFile: (path: string) => boolean = () => false;'
+		);
+		expect(pyodideFiles).toMatch(/onOpenFile\(filePath\)\)\s*return;/);
+	});
+
+	it('passes a workspace document target page to the selected document viewer', () => {
+		const panels = readComponent('WorkspaceDocumentPanels.svelte');
+		const viewer = readComponent('DocumentViewer/DocumentFileViewer.svelte');
+
+		expect(panels).toContain('targetPage={content.targetPage ?? null}');
+		expect(viewer).toContain('export let targetPage: number | null = null;');
+		expect(viewer.match(/\{targetPage\}/g)).toHaveLength(3);
 	});
 
 	it('assigns exactly one existing tabpanel owner to every workspace tab', () => {

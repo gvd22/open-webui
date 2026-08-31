@@ -17,7 +17,11 @@
 	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import { generateCanvasTitle, type CanvasNoteArtifact } from '../Artifacts/canvas';
+	import {
+		generateCanvasTitle,
+		mergePersistedCanvasArtifact,
+		type CanvasNoteArtifact
+	} from '../Artifacts/canvas';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	type WorkspaceItem = {
@@ -63,12 +67,12 @@
 		}
 	};
 	const errorLabels: Record<string, string> = {
-		canvas_create_document: 'Canvas konnte nicht erstellt werden',
-		canvas_update_document: 'Canvas konnte nicht aktualisiert werden',
-		canvas_select_document: 'Canvas konnte nicht geöffnet werden',
-		canvas_list_documents: 'Canvas-Dokumente konnten nicht geprüft werden',
-		canvas_read_document: 'Canvas konnte nicht gelesen werden',
-		canvas_replace_text: 'Canvas konnte nicht aktualisiert werden'
+		canvas_create_document: 'Canvas could not be created',
+		canvas_update_document: 'Canvas could not be updated',
+		canvas_select_document: 'Canvas could not be opened',
+		canvas_list_documents: 'Canvas documents could not be checked',
+		canvas_read_document: 'Canvas could not be read',
+		canvas_replace_text: 'Canvas could not be updated'
 	};
 
 	$: label = toolLabels[name] ?? toolLabels.canvas_update_document;
@@ -78,41 +82,53 @@
 	const openCanvas = async () => {
 		if (!artifact) return;
 
-		if ($chatId && artifact.canvasId) {
+		const targetArtifact = artifact;
+		const targetChatId = $chatId;
+		const targetCanvasId = targetArtifact.canvasId;
+		const selectedId =
+			targetArtifact.canvasId || targetArtifact.noteId || targetArtifact.content;
+
+		if (targetChatId && targetCanvasId) {
 			try {
 				const document = await selectTransientCanvasDocument(
 					localStorage.token,
-					$chatId,
-					artifact.canvasId
+					targetChatId,
+					targetCanvasId
 				);
+				if ($chatId !== targetChatId) return;
+
 				workspaceArtifacts.update((items) => {
 					let found = false;
 					const updatedItems = (items ?? []).map((item) => {
-						if (item?.canvasId !== artifact?.canvasId) {
+						if (item?.canvasId !== targetCanvasId) {
 							return item;
 						}
 
 						found = true;
-						return {
-							...item,
-							title: document.title ?? item.title,
-							content: document.content ?? item.content,
-							titleEdited: Boolean(document.title_edited),
-							updatedAt: document.updated_at ?? item.updatedAt,
-							contentHash: document.contentHash ?? item.contentHash,
-							noteId: document.note_id ?? undefined
-						};
+						return mergePersistedCanvasArtifact(item as CanvasNoteArtifact, {
+							...document,
+							content_hash: document.contentHash
+						});
 					});
 
-					return found ? updatedItems : [...updatedItems, artifact as unknown as WorkspaceItem];
+					return found
+						? updatedItems
+						: [
+								...updatedItems,
+								mergePersistedCanvasArtifact(targetArtifact, {
+									...document,
+									content_hash: document.contentHash
+								})
+							];
 				});
 			} catch {
+				if ($chatId !== targetChatId) return;
 				toast.error($i18n.t('Document could not be opened'));
 				return;
 			}
 		}
 
-		const selectedId = artifact.canvasId || artifact.noteId || artifact.content;
+		if ($chatId !== targetChatId) return;
 		workspaceOpenRequestId.set(selectedId);
 		artifactCode.set(selectedId);
 		showEmbeds.set(false);
@@ -124,7 +140,7 @@
 {#if artifact && done && !error}
 	<button
 		type="button"
-		class="w-fit py-1 text-left text-[0.9375rem] text-gray-500 transition hover:text-gray-700 dark:hover:text-gray-300"
+		class="block max-w-full w-fit py-1 text-left text-[0.9375rem] text-gray-500 transition hover:text-gray-700 dark:hover:text-gray-300"
 		aria-label={`${$i18n.t(label.complete)}: ${title}`}
 		on:click={openCanvas}
 	>

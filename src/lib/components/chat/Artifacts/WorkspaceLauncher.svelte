@@ -1,15 +1,18 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import Terminal from '$lib/components/icons/Terminal.svelte';
 	import { isKeyboardActivationClick } from './workspace';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let terminalId: string | null = null;
 	export let filesAvailable = false;
+	export let unavailableReason = '';
 	export let onOpenFiles: () => void = () => {};
 	export let onOpenBrowser: () => void = () => {};
 	export let onOpenTerminal: () => void = () => {};
@@ -76,7 +79,7 @@
 
 		{#if !hasTools}
 			<div class="flex h-20 items-center justify-center px-4 text-sm text-gray-400">
-				{$i18n.t('No workspace tools available')}
+				{unavailableReason || $i18n.t('No workspace tools available')}
 			</div>
 		{/if}
 	</div>

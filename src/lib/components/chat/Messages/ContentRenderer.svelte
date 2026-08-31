@@ -60,6 +60,7 @@
 	};
 
 	export let id;
+	export let chatId = '';
 	export let content;
 	/** @type {import('./structuredOutput').OutputItem[]} */
 	export let output = [];
@@ -87,6 +88,7 @@
 	export let onSave = (e) => {};
 	export let onSourceClick = (e) => {};
 	export let onTaskClick = (e) => {};
+	export let onToolCallResolved = (e) => {};
 	export let onSetInputText = (text) => {};
 
 	let contentContainerElement;
@@ -235,6 +237,8 @@
 	{#if output?.length}
 		<StructuredOutputRenderer
 			{id}
+			{chatId}
+			{messageId}
 			{output}
 			{model}
 			{save}
@@ -250,12 +254,15 @@
 			{formatMessageContent}
 			{onSourceClick}
 			{onTaskClick}
+			{onToolCallResolved}
 			{onSave}
 		/>
 	{:else if $settings?.renderMarkdownInAssistantMessages ?? true}
 		<div class="markdown-prose">
 			<Markdown
 				{id}
+				{chatId}
+				{messageId}
 				content={formatMessageContent(content)}
 				{model}
 				{save}
@@ -267,6 +274,7 @@
 				{sourceIds}
 				{onSourceClick}
 				{onTaskClick}
+				{onToolCallResolved}
 				{onSave}
 			/>
 		</div>
@@ -276,7 +284,17 @@
 		{#if extracted.detailsContent}
 			<!-- Render structural blocks (tool calls, reasoning, etc.) through Markdown -->
 			<div class="markdown-prose">
-				<Markdown {id} content={extracted.detailsContent} preview={false} {compactPreview} {done} />
+				<Markdown
+					{id}
+					{chatId}
+					{messageId}
+					content={extracted.detailsContent}
+					{save}
+					preview={false}
+					{compactPreview}
+					{done}
+					{onToolCallResolved}
+				/>
 			</div>
 		{/if}
 		{#if extracted.plainContent}

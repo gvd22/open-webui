@@ -13,7 +13,9 @@ import {
 } from './index';
 
 describe('getListeningPorts', () => {
-	afterEach(() => vi.unstubAllGlobals());
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
 
 	it('keeps legacy callers tolerant when the Terminal service is unavailable', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
@@ -43,7 +45,9 @@ describe('getListeningPorts', () => {
 });
 
 describe('managed Terminal catalog', () => {
-	afterEach(() => vi.unstubAllGlobals());
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
 
 	it('keeps legacy callers tolerant but lets runtime selection preserve an unknown catalog', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
@@ -54,7 +58,9 @@ describe('managed Terminal catalog', () => {
 });
 
 describe('Terminal file session headers', () => {
-	afterEach(() => vi.unstubAllGlobals());
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
 
 	it('scopes create, upload, archive, delete, download, save, and move operations to the chat', async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
@@ -85,7 +91,9 @@ describe('Terminal file session headers', () => {
 });
 
 describe('downloadFileBlob', () => {
-	afterEach(() => vi.unstubAllGlobals());
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
 
 	it('rejects a response whose declared size exceeds the limit', async () => {
 		vi.stubGlobal(

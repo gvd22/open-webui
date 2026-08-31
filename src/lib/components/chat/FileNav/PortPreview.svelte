@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import { getPortProxyUrl } from '$lib/apis/terminal';
+	import { settings } from '$lib/stores';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { getPortPreviewFrameBlockReason } from './portPreviewSecurity';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let baseUrl: string;
+	export let chatId: string | null = null;
 	export let port: number;
 	export let path: string = '';
 	export let onClose: () => void = () => {};
@@ -52,7 +56,7 @@
 	};
 
 	// ── URLs ─────────────────────────────────────────────────────────────
-	$: proxyUrl = getPortProxyUrl(baseUrl, port, path);
+	$: proxyUrl = getPortProxyUrl(baseUrl, port, path, chatId);
 
 	const makeDisplayUrl = (p: string) => `localhost:${port}${p ? '/' + p : ''}`;
 	const syncUrlBar = () => {
@@ -64,7 +68,7 @@
 		previewRequest?.abort();
 		const request = new AbortController();
 		previewRequest = request;
-		const requestedUrl = proxyUrl;
+		const requestedUrl = getPortProxyUrl(baseUrl, port, path, chatId);
 		isLoading = true;
 		previewReady = false;
 		previewError = '';
@@ -124,7 +128,7 @@
 
 	const navigateUrl = () => {
 		const localhostPrefix = `localhost:${port}`;
-		const stripped = urlInput.trim();
+		const stripped = urlInput.trim().replace(/^https?:\/\//i, '');
 		let newPath = '';
 
 		if (stripped.startsWith(localhostPrefix)) {

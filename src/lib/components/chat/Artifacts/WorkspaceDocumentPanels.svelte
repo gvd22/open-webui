@@ -18,7 +18,13 @@
 			class="absolute inset-0"
 		>
 			{#if selectedContentId === getWorkspaceContentId(content, index)}
-				<DocumentFileViewer path={content.path} format={content.fileFormat} {runtime} {chatId} />
+				<DocumentFileViewer
+					path={content.path}
+					format={content.fileFormat}
+					targetPage={content.targetPage ?? null}
+					{runtime}
+					{chatId}
+				/>
 			{/if}
 		</div>
 	{/if}

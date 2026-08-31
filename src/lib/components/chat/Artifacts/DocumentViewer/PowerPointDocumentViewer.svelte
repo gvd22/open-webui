@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import DocumentPagination from '$lib/components/common/DocumentPagination.svelte';
 	import DocumentZoomControls from '$lib/components/common/DocumentZoomControls.svelte';
@@ -10,14 +12,16 @@
 		getDocumentWheelZoomDelta,
 		panDocumentViewport
 	} from '$lib/components/common/documentZoom';
+	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import { hardenDocumentLinks, PPTX_ZIP_LIMITS, validatePptxArchive } from './security';
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': { data: ArrayBuffer };
 		'preview-failed': { data: ArrayBuffer };
 	}>();
 
 	export let data: ArrayBuffer;
+	export let targetPage: number | null = null;
 
 	let host: HTMLDivElement;
 	let viewer: import('@aiden0z/pptx-renderer').PptxViewer | null = null;
@@ -36,6 +40,7 @@
 	let zoomPercent = 100;
 	let renderAbortController: AbortController | null = null;
 	let dragStart: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null;
+	let appliedTargetPage: number | null = null;
 
 	const applyVisualZoom = () => {
 		if (!viewerContainer) return;
@@ -167,7 +172,10 @@
 			}
 			hardenDocumentLinks(candidateContainer);
 			const candidateSlideCount = candidateViewer.slideCount;
-			if (retainedSlide > 0 && candidateSlideCount > 1) {
+			const requestedPage = clampDocumentTargetPage(targetPage, candidateSlideCount);
+			if (requestedPage) {
+				await candidateViewer.goToSlide(requestedPage - 1);
+			} else if (retainedSlide > 0 && candidateSlideCount > 1) {
 				await candidateViewer.goToSlide(Math.min(retainedSlide, candidateSlideCount - 1));
 			}
 			if (generation !== renderGeneration) {
@@ -194,6 +202,7 @@
 			previousContainer?.remove();
 			slideCount = candidateSlideCount;
 			currentSlide = candidateViewer.currentSlideIndex;
+			appliedTargetPage = requestedPage;
 			renderedData = candidateData;
 			dispatch('preview-rendered', { data: candidateData });
 		} catch (cause) {
@@ -302,6 +311,11 @@
 	});
 
 	$: if (mounted && data !== attemptedData) void loadPresentation();
+	$: if (!targetPage) appliedTargetPage = null;
+	$: if (mounted && viewer && targetPage && targetPage !== appliedTargetPage) {
+		appliedTargetPage = targetPage;
+		void goToSlide((clampDocumentTargetPage(targetPage, slideCount) ?? 1) - 1);
+	}
 </script>
 
 <div
