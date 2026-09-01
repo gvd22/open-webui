@@ -113,6 +113,29 @@ const sandboxScript = String.raw`
 		} catch {}
 	}
 
+	const outputExtensions = new Set(['csv', 'doc', 'docx', 'ods', 'odt', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx']);
+
+	function listWorkspaceOutputs() {
+		const outputs = new Map();
+		function visit(dir, depth) {
+			if (outputs.size >= 100 || depth > 20) return;
+			try {
+				for (const name of pyodide.FS.readdir(dir)) {
+					if (name === '.' || name === '..') continue;
+					const path = (dir + '/' + name).replace('//', '/');
+					const stat = pyodide.FS.stat(path);
+					if (pyodide.FS.isDir(stat.mode)) visit(path, depth + 1);
+					else if (outputExtensions.has((name.split('.').pop() || '').toLowerCase())) {
+						outputs.set(path, String(stat.size) + ':' + String(stat.mtime && stat.mtime.getTime ? stat.mtime.getTime() : 0));
+					}
+					if (outputs.size >= 100) return;
+				}
+			} catch {}
+		}
+		visit(workspaceRoot, 0);
+		return outputs;
+	}
+
 	function clean(value) {
 		try {
 			if (value == null) return null;
@@ -160,6 +183,7 @@ const sandboxScript = String.raw`
 		stderr = null;
 		let result = null;
 		if (files && files.length > 0) upload(files);
+		const outputsBefore = listWorkspaceOutputs();
 		try {
 			await resetPythonWorkspace();
 			if (code.includes('matplotlib')) await patchMatplotlib();
@@ -167,7 +191,12 @@ const sandboxScript = String.raw`
 		} catch (error) {
 			stderr = error && error.message ? error.message : String(error);
 		}
-		post({ id: id, result: result, stdout: stdout, stderr: stderr });
+		const outputsAfter = listWorkspaceOutputs();
+		const workspaceFiles = [];
+		for (const entry of outputsAfter) {
+			if (outputsBefore.get(entry[0]) !== entry[1]) workspaceFiles.push(entry[0]);
+		}
+		post({ id: id, result: result, stdout: stdout, stderr: stderr, workspaceFiles: workspaceFiles });
 	}
 
 	window.addEventListener('message', async function (event) {

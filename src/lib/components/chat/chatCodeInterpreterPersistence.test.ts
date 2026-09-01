@@ -2,18 +2,33 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const chat = readFileSync(new URL('./Chat.svelte', import.meta.url), 'utf8');
+const messageInput = readFileSync(new URL('./MessageInput.svelte', import.meta.url), 'utf8');
+const integrationsMenu = readFileSync(
+	new URL('./MessageInput/IntegrationsMenu.svelte', import.meta.url),
+	'utf8'
+);
+const layout = readFileSync(new URL('../../../routes/+layout.svelte', import.meta.url), 'utf8');
 
-describe('saved-chat Code Interpreter preference', () => {
-	it('persists and restores an explicit feature before model defaults', () => {
-		expect(chat).toContain('const getSavedCodeInterpreterPreference');
-		expect(chat).toContain('chatContent?.features?.code_interpreter');
-		expect(chat).toContain('lastUserMessage?.features?.code_interpreter');
-		expect(chat).toContain("typeof savedPreference === 'boolean'");
+describe('automatic Code Interpreter lifecycle', () => {
+	it('offers code execution automatically when the model and user are allowed', () => {
+		expect(chat).toContain('$: codeInterpreterEnabled =');
+		expect(chat).toContain('?.code_interpreter ?? true');
+		expect(chat).toContain('$config?.features?.enable_code_interpreter');
+		expect(chat).toContain('$user?.permissions?.features?.code_interpreter');
+		expect(chat).toContain('!$selectedTerminalId');
 		expect(chat).toContain('features: getChatFeatures()');
-		expect(chat).toContain('equal(features, loaded.features ?? {})');
 	});
 
-	it('does not inherit another chat toggle when a legacy chat has no preference', () => {
-		expect(chat).toContain('codeInterpreterEnabled = savedCodeInterpreterPreference ?? false;');
+	it('does not expose a manual Code Interpreter toggle in the composer', () => {
+		expect(messageInput).not.toContain('showCodeInterpreterButton');
+		expect(messageInput).not.toContain('bind:codeInterpreterEnabled');
+		expect(integrationsMenu).not.toContain('codeInterpreterEnabled');
+		expect(integrationsMenu).not.toContain("$i18n.t('Code Interpreter')");
+	});
+
+	it('publishes generated Pyodide documents to the active chat output catalog', () => {
+		expect(layout).toContain("new CustomEvent('pyodide:files'");
+		expect(layout).toContain('detail: { paths: workspaceFiles, chatId }');
+		expect(chat).toContain('if (detail.chatId && detail.chatId !== $chatId) return;');
 	});
 });

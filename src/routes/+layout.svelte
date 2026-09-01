@@ -302,16 +302,9 @@
 		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
 		const sourcePath = String(data?.source_path ?? '');
 		if (data?.runtime === 'terminal') {
-			const terminal = ($terminalServers ?? []).find(
-				(item) => item.id === data.terminal_id
-			);
+			const terminal = ($terminalServers ?? []).find((item) => item.id === data.terminal_id);
 			if (!terminal?.url) throw new Error('The selected Terminal is unavailable.');
-			const content = await readFile(
-				terminal.url,
-				localStorage.token,
-				sourcePath,
-				data.chat_id,
-			);
+			const content = await readFile(terminal.url, localStorage.token, sourcePath, data.chat_id);
 			if (content === null) throw new Error('The Terminal file could not be read.');
 			if (new TextEncoder().encode(content).byteLength > maxBytes) {
 				throw new Error('The runtime file is too large to import into a Web Preview.');
@@ -330,7 +323,10 @@
 		window.dispatchEvent(new CustomEvent('pyodide:files', { detail: { paths: undefined } }));
 	};
 
-	const executePythonAsWorker = async (id, code, cb, files = []) => {
+	/** @param {unknown} value */
+	const isString = (value) => typeof value === 'string';
+
+	const executePythonAsWorker = async (id, code, cb, files = [], chatId = '') => {
 		let result = null;
 		let stdout = null;
 		let stderr = null;
@@ -425,6 +421,16 @@
 			data['stdout'] && (stdout = data['stdout']);
 			data['stderr'] && (stderr = data['stderr']);
 			data['result'] && (result = data['result']);
+			const workspaceFiles = Array.isArray(data.workspaceFiles)
+				? data.workspaceFiles.filter(isString)
+				: [];
+			if (workspaceFiles.length > 0) {
+				window.dispatchEvent(
+					new CustomEvent('pyodide:files', {
+						detail: { paths: workspaceFiles, chatId }
+					})
+				);
+			}
 
 			if (cb) {
 				cb(
@@ -599,9 +605,11 @@
 		if (data?.session_id && data.session_id === socketId) {
 			if (type === 'execute:python') {
 				console.log('execute:python', data);
-				void executePythonAsWorker(data.id, data.code, cb, data.files || []).catch((error) => {
-					cb?.({ error: error instanceof Error ? error.message : String(error) });
-				});
+				void executePythonAsWorker(data.id, data.code, cb, data.files || [], event.chat_id).catch(
+					(error) => {
+						cb?.({ error: error instanceof Error ? error.message : String(error) });
+					}
+				);
 				return;
 			} else if (type === 'workspace:read_runtime_file') {
 				try {

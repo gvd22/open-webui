@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
 	createWorkspaceOutputFile,
+	createRuntimeWorkspaceOutputFile,
 	getWorkspaceOutputFilesFromHistory,
+	isKnownWorkspaceOutputPath,
 	isWorkspaceOutputPath,
-	mergeWorkspaceOutputFiles
+	mergeWorkspaceOutputFiles,
+	resolveWorkspaceOutputFile
 } from './workspaceOutputs';
 
 describe('workspace output catalog', () => {
@@ -42,6 +45,56 @@ describe('workspace output catalog', () => {
 		});
 
 		expect(mergeWorkspaceOutputFiles([], [terminal, pyodide])).toHaveLength(2);
+	});
+
+	it('links only exact paths already present in the chat output catalog', () => {
+		const output = createWorkspaceOutputFile('/mnt/uploads/report.pdf');
+
+		expect(isKnownWorkspaceOutputPath([output!], '/mnt/uploads/report.pdf')).toBe(true);
+		expect(isKnownWorkspaceOutputPath([output!], '/mnt/uploads/report')).toBe(false);
+		expect(isKnownWorkspaceOutputPath([output!], '/etc/report.pdf')).toBe(false);
+	});
+
+	it('resolves duplicate paths against the active runtime', () => {
+		const terminal = createWorkspaceOutputFile('/workspace/report.pdf', {
+			source: 'terminal',
+			terminalId: 'terminal-1',
+			updatedAt: 10
+		});
+		const pyodide = createWorkspaceOutputFile('/workspace/report.pdf', {
+			source: 'pyodide',
+			updatedAt: 20
+		});
+		const files = mergeWorkspaceOutputFiles([], [terminal, pyodide]);
+
+		expect(
+			resolveWorkspaceOutputFile(files, '/workspace/report.pdf', {
+				kind: 'terminal',
+				terminalId: 'terminal-1'
+			})?.source
+		).toBe('terminal');
+		expect(
+			resolveWorkspaceOutputFile(files, '/workspace/report.pdf', { kind: 'pyodide' })?.source
+		).toBe('pyodide');
+		expect(resolveWorkspaceOutputFile(files, '/workspace/missing.pdf', { kind: 'pyodide' })).toBe(
+			null
+		);
+	});
+
+	it('migrates legacy document references only inside the active runtime boundary', () => {
+		expect(
+			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.pptx', { kind: 'pyodide' })
+		).toEqual(expect.objectContaining({ source: 'pyodide', path: '/mnt/uploads/legacy.pptx' }));
+		expect(
+			createRuntimeWorkspaceOutputFile('/workspace/legacy.pptx', {
+				kind: 'terminal',
+				terminalId: 'terminal-1'
+			})
+		).toEqual(expect.objectContaining({ source: 'terminal', terminalId: 'terminal-1' }));
+		expect(createRuntimeWorkspaceOutputFile('/etc/legacy.pptx', { kind: 'pyodide' })).toBeNull();
+		expect(
+			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.html', { kind: 'pyodide' })
+		).toBeNull();
 	});
 
 	it('restores terminal display files from persisted message output', () => {

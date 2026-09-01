@@ -1,5 +1,7 @@
 import type { WorkspaceOutputFile } from '$lib/stores';
 
+export const WORKSPACE_OPEN_OUTPUT_EVENT = 'workspace:open-output';
+
 const OUTPUT_EXTENSIONS = new Set([
 	'csv',
 	'doc',
@@ -68,6 +70,49 @@ export const mergeWorkspaceOutputFiles = (
 	return [...byPath.values()]
 		.sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name))
 		.slice(0, 100);
+};
+
+export const isKnownWorkspaceOutputPath = (files: WorkspaceOutputFile[], path: unknown) =>
+	typeof path === 'string' && files.some((file) => file.path === path);
+
+export const resolveWorkspaceOutputFile = (
+	files: WorkspaceOutputFile[],
+	path: unknown,
+	runtime: { kind: string; terminalId?: string | null }
+): WorkspaceOutputFile | null => {
+	if (typeof path !== 'string') return null;
+	const candidates = files.filter((file) => file.path === path);
+	if (candidates.length === 0) return null;
+
+	if (runtime.kind === 'terminal') {
+		return (
+			candidates.find(
+				(file) => file.source === 'terminal' && file.terminalId === runtime.terminalId
+			) ?? candidates[0]
+		);
+	}
+	if (runtime.kind === 'pyodide') {
+		return candidates.find((file) => file.source === 'pyodide') ?? candidates[0];
+	}
+	return candidates[0];
+};
+
+export const createRuntimeWorkspaceOutputFile = (
+	path: unknown,
+	runtime: { kind: string; terminalId?: string | null }
+): WorkspaceOutputFile | null => {
+	if (!isWorkspaceOutputPath(path)) return null;
+	if (runtime.kind === 'pyodide') {
+		if (!path.startsWith('/mnt/uploads/')) return null;
+		return createWorkspaceOutputFile(path, { source: 'pyodide' });
+	}
+	if (runtime.kind === 'terminal' && runtime.terminalId) {
+		return createWorkspaceOutputFile(path, {
+			source: 'terminal',
+			terminalId: runtime.terminalId
+		});
+	}
+	return null;
 };
 
 const outputText = (item: any) => {

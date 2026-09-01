@@ -18,6 +18,7 @@
 		chatId,
 		config,
 		type Model,
+		type WorkspaceOutputFile,
 		models,
 		tags as allTags,
 		settings,
@@ -75,9 +76,13 @@
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import {
 		createWorkspaceOutputFile,
+		createRuntimeWorkspaceOutputFile,
 		getWorkspaceOutputFilesFromHistory,
+		isKnownWorkspaceOutputPath,
 		mergeWorkspaceOutputFiles,
 		readWorkspaceOutputFiles,
+		resolveWorkspaceOutputFile,
+		WORKSPACE_OPEN_OUTPUT_EVENT,
 		workspaceOutputStorageKey,
 		writeWorkspaceOutputFiles
 	} from './Artifacts/workspaceOutputs';
@@ -362,7 +367,18 @@
 
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
-	let codeInterpreterEnabled = false;
+	$: codeInterpreterEnabled =
+		!$selectedTerminalId &&
+		selectedModelIds.length > 0 &&
+		selectedModelIds.every((id) => {
+			const model = $models.find((candidate) => candidate.id === id);
+			return (
+				(model?.info?.meta?.capabilities as Record<string, boolean> | undefined)
+					?.code_interpreter ?? true
+			);
+		}) &&
+		Boolean($config?.features?.enable_code_interpreter) &&
+		($user?.role === 'admin' || Boolean($user?.permissions?.features?.code_interpreter));
 	$: workspaceRuntime = resolveWorkspaceRuntime(
 		$terminalServers,
 		$selectedTerminalId,
@@ -486,6 +502,7 @@
 
 	const handlePyodideFilesChanged = (event: Event) => {
 		const detail = (event as CustomEvent)?.detail ?? {};
+		if (detail.chatId && detail.chatId !== $chatId) return;
 		const paths = Array.isArray(detail.paths) ? detail.paths : [];
 		if (detail.kind === 'deleted') {
 			const deleted = new Set(paths);
@@ -844,7 +861,6 @@
 			selectedFilterIds = input.selectedFilterIds ?? [];
 			webSearchEnabled = input.webSearchEnabled ?? false;
 			imageGenerationEnabled = input.imageGenerationEnabled ?? false;
-			codeInterpreterEnabled = input.codeInterpreterEnabled ?? false;
 			if (input.toolApprovalMode) {
 				await handleToolApprovalModeChange(input.toolApprovalMode);
 			}
@@ -883,14 +899,7 @@
 	}
 
 	let saveControlsTimer;
-	$: if (
-		!loading &&
-		!$temporaryChatEnabled &&
-		$chatId &&
-		params &&
-		chatFiles &&
-		typeof codeInterpreterEnabled === 'boolean'
-	) {
+	$: if (!loading && !$temporaryChatEnabled && $chatId && params && chatFiles) {
 		clearTimeout(saveControlsTimer);
 		saveControlsTimer = setTimeout(saveControls, 400);
 	}
@@ -993,7 +1002,6 @@
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
-		codeInterpreterEnabled = false;
 		prompt = '';
 		messageInput?.setText('');
 		await chatId.set('');
@@ -1062,8 +1070,6 @@
 		pendingOAuthTools = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
-		codeInterpreterEnabled = false;
-
 		if (selectedModelIds.filter((id) => id).length > 0) {
 			await setDefaults();
 		}
@@ -1072,6 +1078,36 @@
 	/** Check whether a terminal ID references an available managed terminal. */
 	const isTerminalAvailable = (tid: string): boolean => {
 		return ($terminalServers ?? []).some((terminal) => terminal.id === tid);
+	};
+
+	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
+		if (file.source === 'terminal') {
+			if (!file.terminalId || !isTerminalAvailable(file.terminalId)) {
+				toast.error($i18n.t('The terminal for this output is no longer available.'));
+				return;
+			}
+			selectedTerminalId.set(file.terminalId);
+			workspaceTerminalConnectionId.set(file.terminalId);
+		} else if (workspaceRuntime.kind !== 'pyodide') {
+			toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
+			return;
+		}
+		displayFileHandler(file.path, { showControls, showFileNavPath }, { page: file.page });
+	};
+
+	const handleWorkspaceOutputOpenRequest = (event: Event) => {
+		const path = (event as CustomEvent)?.detail?.path;
+		const file =
+			resolveWorkspaceOutputFile(get(workspaceOutputFiles), path, workspaceRuntime) ??
+			createRuntimeWorkspaceOutputFile(path, workspaceRuntime);
+		if (file && !isKnownWorkspaceOutputPath(get(workspaceOutputFiles), file.path)) {
+			recordWorkspaceOutput(file.path, {
+				source: file.source,
+				terminalId: file.terminalId,
+				page: file.page
+			});
+		}
+		if (file) openWorkspaceOutputFile(file);
 	};
 
 	$: selectedModelSupportsTerminal = selectedModelIds.some((id) => {
@@ -1190,18 +1226,6 @@
 						($user?.role === 'admin' || $user?.permissions?.features?.web_search)
 					) {
 						webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
-					}
-
-					if (
-						model.info?.meta?.capabilities?.['code_interpreter'] &&
-						$config?.features?.enable_code_interpreter &&
-						($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
-					) {
-						const savedPreference = getSavedCodeInterpreterPreference();
-						codeInterpreterEnabled =
-							typeof savedPreference === 'boolean'
-								? savedPreference
-								: model.info.meta.defaultFeatureIds.includes('code_interpreter');
 					}
 				}
 
@@ -1692,6 +1716,7 @@
 		console.log('mounted');
 		window.addEventListener('message', onMessageHandler);
 		window.addEventListener('pyodide:files', handlePyodideFilesChanged);
+		window.addEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 
@@ -1754,8 +1779,6 @@
 				selectedFilterIds = [];
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
-				codeInterpreterEnabled = false;
-
 				await restoreChatInput(storageChatInput);
 			}
 
@@ -1782,6 +1805,7 @@
 
 				window.removeEventListener('message', onMessageHandler);
 				window.removeEventListener('pyodide:files', handlePyodideFilesChanged);
+				window.removeEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				dismissContextCompactionToast();
@@ -2450,10 +2474,6 @@
 			imageGenerationEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('code-interpreter') === 'true') {
-			codeInterpreterEnabled = true;
-		}
-
 		if ($page.url.searchParams.get('tools')) {
 			selectedToolIds = $page.url.searchParams
 				.get('tools')
@@ -2627,12 +2647,6 @@
 				selectedTerminalId.set(chatContent?.terminal_id ?? null);
 				delete params.note_id;
 				chatFiles = structuredClone(chatContent?.files ?? []);
-				const savedCodeInterpreterPreference = getSavedCodeInterpreterPreference(
-					chatContent,
-					history
-				);
-				codeInterpreterEnabled = savedCodeInterpreterPreference ?? false;
-
 				// Load tasks from chat-level DB field
 				chatTasks = chat?.tasks ?? [];
 				serverContextUsage = chat?.context_usage ?? null;
@@ -3733,20 +3747,6 @@
 		return features;
 	};
 
-	const getSavedCodeInterpreterPreference = (
-		chatContent = chat?.chat,
-		messageHistory = history
-	) => {
-		const chatPreference = chatContent?.features?.code_interpreter;
-		if (typeof chatPreference === 'boolean') return chatPreference;
-
-		const lastUserMessage = [...createMessagesList(messageHistory, messageHistory?.currentId)]
-			.reverse()
-			.find((message) => message?.role === 'user');
-		const messagePreference = lastUserMessage?.features?.code_interpreter;
-		return typeof messagePreference === 'boolean' ? messagePreference : undefined;
-	};
-
 	const getChatFeatures = () => ({
 		...(chat?.chat?.features ?? {}),
 		code_interpreter: codeInterpreterEnabled
@@ -4394,7 +4394,6 @@
 		selectedFilterIds,
 		imageGenerationEnabled,
 		webSearchEnabled,
-		codeInterpreterEnabled,
 		toolApprovalMode
 	});
 
@@ -4696,24 +4695,7 @@
 							}}
 							{history}
 							{workspaceDefaultContentId}
-							onOpenWorkspaceOutputFile={(file) => {
-								if (file.source === 'terminal') {
-									if (!file.terminalId || !isTerminalAvailable(file.terminalId)) {
-										toast.error($i18n.t('The terminal for this output is no longer available.'));
-										return;
-									}
-									selectedTerminalId.set(file.terminalId);
-									workspaceTerminalConnectionId.set(file.terminalId);
-								} else if (workspaceRuntime.kind !== 'pyodide') {
-									toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
-									return;
-								}
-								displayFileHandler(
-									file.path,
-									{ showControls, showFileNavPath },
-									{ page: file.page }
-								);
-							}}
+							onOpenWorkspaceOutputFile={openWorkspaceOutputFile}
 							title={$chatTitle}
 							shareEnabled={!!history.currentId}
 							{initNewChat}
@@ -4832,7 +4814,6 @@
 										bind:selectedSkillIds
 										bind:selectedFilterIds
 										bind:imageGenerationEnabled
-										bind:codeInterpreterEnabled
 										{pendingOAuthTools}
 										{oauthRedirectHandler}
 										bind:webSearchEnabled
@@ -4924,7 +4905,6 @@
 										bind:selectedSkillIds
 										bind:selectedFilterIds
 										bind:imageGenerationEnabled
-										bind:codeInterpreterEnabled
 										{pendingOAuthTools}
 										{oauthRedirectHandler}
 										bind:webSearchEnabled
@@ -4984,7 +4964,6 @@
 									bind:selectedSkillIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
-									bind:codeInterpreterEnabled
 									bind:webSearchEnabled
 									bind:atSelectedModel
 									bind:showCommands
