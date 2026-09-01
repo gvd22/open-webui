@@ -154,6 +154,37 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 
 
+APPROVAL_FREE_WORKSPACE_TOOLS = frozenset(
+    {
+        'canvas_create_document',
+        'canvas_update_document',
+        'canvas_select_document',
+        'canvas_list_documents',
+        'canvas_read_document',
+        'canvas_replace_text',
+        'web_preview_create',
+        'web_preview_update',
+        'web_preview_select',
+        'web_preview_list',
+        'web_preview_read_file',
+        'web_preview_replace_text',
+    }
+)
+
+
+def tool_requires_approval(name: str, metadata: dict) -> bool:
+    """Keep approval bypasses limited to trusted, chat-local built-ins."""
+    if name not in APPROVAL_FREE_WORKSPACE_TOOLS:
+        return True
+
+    tool = (metadata.get('tools') or {}).get(name)
+    return not (
+        isinstance(tool, dict)
+        and tool.get('type') == 'builtin'
+        and tool.get('tool_id') == f'builtin:{name}'
+    )
+
+
 def _is_tool_result_error(value: Any) -> bool:
     if isinstance(value, str):
         text = value.strip().lower()
@@ -3366,6 +3397,7 @@ async def drain_approved_tool_calls(request, form_data, user, model, metadata) -
         if metadata.get('params', {}).get('tool_approval_mode', 'full') == 'ask' and any(
             item.get('type') == 'function_call'
             and item.get('name') != 'ask_user'
+            and tool_requires_approval(item.get('name', ''), metadata)
             and (item.get('call_id') or item.get('id'))
             and item.get('status') == 'queued'
             and item.get('approved') is not True
@@ -3440,6 +3472,7 @@ async def drain_approved_tool_calls(request, form_data, user, model, metadata) -
         if metadata.get('params', {}).get('tool_approval_mode', 'full') == 'ask' and any(
             item.get('type') == 'function_call'
             and item.get('name') != 'ask_user'
+            and tool_requires_approval(item.get('name', ''), metadata)
             and (item.get('call_id') or item.get('id'))
             and item.get('status') == 'queued'
             and item.get('approved') is not True
@@ -3582,6 +3615,10 @@ async def pause_for_tool_approval(chat_id: str, message_id: str, output: list[di
             and item.get('call_id') not in result_call_ids
             and item.get('status') != 'rejected'
         ):
+            if not tool_requires_approval(item.get('name', ''), metadata):
+                item['status'] = 'queued'
+                item['approved'] = True
+                continue
             if not has_pending_approval:
                 item['status'] = 'pending'
                 has_pending_approval = True
@@ -5756,6 +5793,13 @@ async def streaming_chat_response_handler(response, ctx):
                         and tool_approval_mode == 'ask'
                         and is_saved_chat_id(metadata.get('chat_id'))
                         and metadata.get('message_id')
+                        and any(
+                            tool_requires_approval(
+                                tool_call.get('function', {}).get('name', ''),
+                                metadata,
+                            )
+                            for tool_call in response_tool_calls
+                        )
                     ):
                         await pause_for_tool_approval(
                             metadata['chat_id'],

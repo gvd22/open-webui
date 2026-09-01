@@ -568,7 +568,18 @@ Import darf insbesondere keine leere oder teilweise geschriebene Zieldatei in de
 - `web_preview_replace_text`
 - `web_preview_import_runtime_file`
 
-### 8.3 Moegliche Weiterentwicklung: gemeinsamer Workspace-Toolvertrag
+### 8.3 Freigaben
+
+- Chat-lokale Canvas- und Web-Preview-Operationen laufen ohne separate Tool-Freigabe. Dazu
+  gehoeren Erstellen, Aktualisieren, Auswaehlen, Auflisten, Lesen und partielles Ersetzen.
+- Die Ausnahme gilt nur fuer die vom Backend registrierten Built-ins mit passender
+  `builtin:<tool-name>`-Identitaet. Gleichnamige benutzerdefinierte, MCP- oder externe Tools
+  bleiben freigabepflichtig.
+- `web_preview_import_runtime_file` bleibt freigabepflichtig, da die Operation Daten aus einer
+  Terminal- oder Pyodide-Runtime liest. Terminal-, Files-, Connector- und andere externe oder
+  seiteneffektbehaftete Tools behalten die konfigurierte Human-in-the-loop-Regel.
+
+### 8.4 Moegliche Weiterentwicklung: gemeinsamer Workspace-Toolvertrag
 
 Die heute getrennten Canvas- und Web-Preview-Werkzeuge koennen spaeter durch einen gemeinsamen,
 typisierten Modellvertrag ersetzt werden:

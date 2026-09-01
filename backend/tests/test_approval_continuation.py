@@ -7,6 +7,81 @@ import open_webui.utils.middleware as middleware
 from open_webui.utils.workspace_context import remove_workspace_context_prompts
 
 
+def _tool_metadata(name, *, builtin=True):
+    return {
+        'tools': {
+            name: {
+                'type': 'builtin' if builtin else 'function',
+                'tool_id': f'builtin:{name}' if builtin else f'user:{name}',
+            }
+        }
+    }
+
+
+def test_chat_local_canvas_and_preview_builtins_do_not_require_approval():
+    for name in middleware.APPROVAL_FREE_WORKSPACE_TOOLS:
+        assert middleware.tool_requires_approval(name, _tool_metadata(name)) is False
+
+
+def test_approval_bypass_rejects_spoofed_and_runtime_tools():
+    assert middleware.tool_requires_approval(
+        'canvas_update_document',
+        _tool_metadata('canvas_update_document', builtin=False),
+    ) is True
+    assert middleware.tool_requires_approval(
+        'web_preview_import_runtime_file',
+        _tool_metadata('web_preview_import_runtime_file'),
+    ) is True
+
+
+def test_mixed_batch_auto_queues_workspace_builtin_but_prompts_for_other_tool(monkeypatch):
+    async def run():
+        saved = {}
+
+        async def upsert(_chat_id, _message_id, payload, **_kwargs):
+            saved.update(payload)
+
+        monkeypatch.setattr(
+            middleware.Chats,
+            'upsert_message_to_chat_by_id_and_message_id',
+            upsert,
+        )
+        output = [
+            {
+                'type': 'function_call',
+                'call_id': 'canvas-call',
+                'name': 'canvas_update_document',
+                'status': 'in_progress',
+            },
+            {
+                'type': 'function_call',
+                'call_id': 'terminal-call',
+                'name': 'terminal_execute',
+                'status': 'in_progress',
+            },
+        ]
+        metadata = {
+            'tools': {
+                'canvas_update_document': {
+                    'type': 'builtin',
+                    'tool_id': 'builtin:canvas_update_document',
+                },
+                'terminal_execute': {
+                    'type': 'builtin',
+                    'tool_id': 'builtin:terminal_execute',
+                },
+            }
+        }
+        await middleware.pause_for_tool_approval('chat', 'message', output, {}, metadata)
+        return saved['output']
+
+    output = asyncio.run(run())
+    assert output[0]['status'] == 'queued'
+    assert output[0]['approved'] is True
+    assert output[1]['status'] == 'pending'
+    assert output[1].get('approved') is not True
+
+
 def test_continuation_replay_can_keep_full_current_turn_workspace_output():
     output = [
         {
