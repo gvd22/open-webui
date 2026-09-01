@@ -23,6 +23,7 @@ from open_webui.routers.chats import (
 from open_webui.utils.canvas import (
     CANVAS_DOCUMENTS_KEY,
     canvas_content_hash,
+    detach_linked_canvases_from_note,
     sync_linked_canvases_from_note,
 )
 
@@ -121,6 +122,7 @@ def test_concurrent_canvas_full_saves_allow_exactly_one_version(monkeypatch, tmp
                 },
             )
             _patch_chat_sessions(monkeypatch, sessions)
+
             def form(content: str) -> CanvasDocumentForm:
                 return CanvasDocumentForm(
                     title='Plan',
@@ -373,6 +375,42 @@ def test_note_edit_updates_linked_canvas_and_clears_ai_undo(monkeypatch, tmp_pat
                 assert document['content'] == '# New content'
                 assert document['title_edited'] is True
                 assert document['last_ai_update'] is None
+                assert document['updated_at'] > 3
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_deleted_note_detaches_canvas_without_deleting_content(monkeypatch, tmp_path):
+    async def run():
+        engine, sessions = await _database(tmp_path)
+        try:
+            await _insert_chat(
+                sessions,
+                {
+                    CANVAS_DOCUMENTS_KEY: {
+                        'canvas-1': {
+                            'canvas_id': 'canvas-1',
+                            'title': 'Kept title',
+                            'content': '# Kept content',
+                            'note_id': 'note-1',
+                            'updated_at': 3,
+                        }
+                    }
+                },
+            )
+            _patch_chat_sessions(monkeypatch, sessions)
+
+            updated = await detach_linked_canvases_from_note('note-1', 'user-1')
+
+            assert len(updated) == 1
+            async with sessions() as session:
+                chat = await session.get(Chat, 'chat-1')
+                document = chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']
+                assert document['note_id'] is None
+                assert document['title'] == 'Kept title'
+                assert document['content'] == '# Kept content'
                 assert document['updated_at'] > 3
         finally:
             await engine.dispose()

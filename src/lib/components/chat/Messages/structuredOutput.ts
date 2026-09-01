@@ -6,6 +6,7 @@ import {
 } from '../Artifacts/canvas';
 import {
 	getWebPreviewErrorFromOutput,
+	getWebPreviewWarningFromOutput,
 	getWebPreviewsFromOutput,
 	type WebPreviewArtifact
 } from '../Artifacts/webPreview';
@@ -521,6 +522,15 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 					type: 'message',
 					id: item.id ?? `web-preview-error-${index}`,
 					text: webPreviewError
+				});
+			}
+			const webPreviewWarning = getWebPreviewWarningFromOutput([item]);
+			if (webPreviewWarning) {
+				flushDetails();
+				displayItems.push({
+					type: 'message',
+					id: `${item.id ?? `web-preview-${index}`}-warning`,
+					text: webPreviewWarning
 				});
 			}
 			const canvasArtifacts = getCanvasNoteArtifactsFromOutput([item]);

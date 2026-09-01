@@ -98,7 +98,26 @@ export const getWebPreviewErrorFromOutput = (output: any[] = []) => {
 		if (item?.type !== 'function_call_output') continue;
 		try {
 			const parsed = JSON.parse(getToolOutputText(item));
-			if (['web_preview.error', 'web_preview.conflict'].includes(parsed?.type)) return String(parsed.message ?? '');
+			if (['web_preview.error', 'web_preview.conflict'].includes(parsed?.type))
+				return String(parsed.message ?? '');
+		} catch {
+			// Other tool output belongs to the generic renderer.
+		}
+	}
+	return '';
+};
+
+export const getWebPreviewWarningFromOutput = (output: any[] = []) => {
+	for (const item of output) {
+		if (item?.type !== 'function_call_output') continue;
+		try {
+			const parsed = JSON.parse(getToolOutputText(item));
+			if (
+				['web_preview.document', 'web_preview.documents'].includes(parsed?.type) &&
+				typeof parsed?.warning === 'string'
+			) {
+				return parsed.warning;
+			}
 		} catch {
 			// Other tool output belongs to the generic renderer.
 		}
@@ -265,7 +284,9 @@ export const preserveNewerWebPreview = (
 	incoming: WebPreviewArtifact,
 	current?: WebPreviewArtifact
 ): WebPreviewArtifact =>
-	current && current.hasFilePayload && Number(current.updatedAt ?? 0) > 0 &&
+	current &&
+	current.hasFilePayload &&
+	Number(current.updatedAt ?? 0) > 0 &&
 	Number(current.updatedAt ?? 0) >= Number(incoming.updatedAt ?? 0)
 		? { ...incoming, ...current }
 		: incoming;
@@ -280,10 +301,17 @@ export const mergeLocalWebPreviewDraft = (
 });
 
 export const getWebPreviewExportPath = (
-	root: string, previewId: string, slug: string, previousPath = ''
+	root: string,
+	previewId: string,
+	slug: string,
+	previousPath = ''
 ) => {
 	const base = `${root.replace(/\/$/, '')}/previews/`;
-	if (previousPath.length > base.length && previousPath.startsWith(base) && !previousPath.split('/').some((part) => part === '..' || part === '.')) {
+	if (
+		previousPath.length > base.length &&
+		previousPath.startsWith(base) &&
+		!previousPath.split('/').some((part) => part === '..' || part === '.')
+	) {
 		return previousPath;
 	}
 	const id = previewId.replace(/[^a-zA-Z0-9_-]/g, '');

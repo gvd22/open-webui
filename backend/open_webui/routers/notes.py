@@ -31,7 +31,10 @@ from open_webui.utils.access_control import (
     has_public_write_access_grant,
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.canvas import sync_linked_canvases_from_note
+from open_webui.utils.canvas import (
+    detach_linked_canvases_from_note,
+    sync_linked_canvases_from_note,
+)
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -566,7 +569,7 @@ async def update_note_by_id(
 
     try:
         note = await Notes.update_note_by_id(id, form_data, db=db)
-        markdown = (((note.data or {}).get('content') or {}).get('md') or '')
+        markdown = ((note.data or {}).get('content') or {}).get('md') or ''
         await sync_linked_canvases_from_note(note.id, note.user_id, note.title, markdown, db=db)
         pinned_note_ids = await Notes.get_pinned_note_ids(user.id, db=db)
         note.is_pinned = note.id in pinned_note_ids
@@ -745,7 +748,13 @@ async def delete_note_by_id(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
 
     try:
-        note = await Notes.delete_note_by_id(id, db=db)
+        note_owner_id = note.user_id
+        if not await Notes.delete_note_by_id(id, db=db):
+            raise RuntimeError('Note could not be deleted.')
+        try:
+            await detach_linked_canvases_from_note(id, note_owner_id, db=db)
+        except Exception:
+            log.exception('Failed to detach Canvas documents from deleted Note %s', id)
         await publish_event(
             request,
             EVENTS.NOTE_DELETED,

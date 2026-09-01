@@ -42,7 +42,6 @@ Dieser Bericht unterscheidet nachgewiesenes Verhalten von noch offenen Abnahmen.
 - Native Dateiausgaben werden im vorhandenen passenden Viewer geoeffnet. Eine angegebene
   PDF-Seite oder PPTX-Folie wird beruecksichtigt; Downloads bleiben verfuegbar.
 
-
 ## 1. Zweck und Geltungsbereich
 
 Diese Spezifikation fasst die Entscheidungen fuer Canvas, Web Preview, Files, Terminal,
@@ -123,27 +122,32 @@ Nicht als Rahmen oder Modus anzuzeigen sind `Workspace`, `Artifact`, `Draft`, `R
 - Oben bleibt nur die Aktion zum Schliessen der Arbeitsflaeche.
 - Ein Plus erscheint nur, wenn mindestens eine weitere gueltige Aktion hinzugefuegt werden kann.
 
+### 3.4 Output-Verzeichnis im Chatkopf
+
+- Ein gespeicherter Chat zeigt oben rechts eine kompakte Aufgabenlisten-Aktion. Im geschlossenen
+  Zustand bleibt nur dieses Icon sichtbar; es entsteht keine zweite dauerhafte Seitenleiste.
+- Das Menue katalogisiert Canvas, Web Previews und vom Modell erzeugte, bearbeitete oder explizit
+  dargestellte PDF-, Word-, PowerPoint-, Excel- und CSV-Dateien.
+- Canvas und Preview werden ueber ihre stabilen IDs erneut geoeffnet. Runtime-Dateien werden ueber
+  ihren Pfad in der zugeordneten Runtime geoeffnet. Identische IDs oder Pfade werden nicht
+  dupliziert.
+- Das Verzeichnis ist kein Datenspeicher. Es verweist auf die autoritative Chat- oder Runtime-
+  Quelle und zeigt fehlende Runtime-Inhalte als nicht verfuegbar.
+
 ## 4. Gemeinsames Objekt- und Tabmodell
 
 Jedes Arbeitsobjekt besitzt mindestens:
 
 ```ts
 type WorkspaceItem = {
-  id: string;
-  kind:
-    | "canvas"
-    | "web-preview"
-    | "files"
-    | "file"
-    | "terminal"
-    | "browser"
-    | "connector";
-  title: string;
-  renderer: string;
-  closable: boolean;
-  source?: unknown;
-  persistence?: "chat" | "note" | "runtime" | "external";
-  dirty?: boolean;
+	id: string;
+	kind: 'canvas' | 'web-preview' | 'files' | 'file' | 'terminal' | 'browser' | 'connector';
+	title: string;
+	renderer: string;
+	closable: boolean;
+	source?: unknown;
+	persistence?: 'chat' | 'note' | 'runtime' | 'external';
+	dirty?: boolean;
 };
 ```
 
@@ -171,17 +175,17 @@ type WorkspaceItem = {
 
 ## 5. Verfuegbarkeitsmatrix
 
-| Funktion | Voraussetzung | Ohne Voraussetzung |
-|---|---|---|
-| Canvas | Gespeicherter normaler Chat, Canvas-Modellfaehigkeit | Kein Canvas-Tool |
-| Canvas zu Notes | Notes global aktiv und Benutzer berechtigt | Aktion verborgen, API lehnt ab |
-| Web Preview | Gespeicherter normaler Chat, eigene Web-Preview-Modellfaehigkeit | Kein Preview-Tool |
-| Web Preview anzeigen | Moderne Browserfunktionen | Keine Runtime notwendig |
-| Files | Konfiguriertes Terminal oder aktives Pyodide-Filesystem | Nicht angeboten |
-| Terminal | Zentral konfigurierter Terminal-Service | Nicht angeboten |
-| Browser | Terminal-Service mit lokaler App-/Port-Funktion | Nicht angeboten |
-| Dokumentanzeige | Viewer-Flag aktiv und unterstuetztes Format | Datei bleibt in Files |
-| Jira/Confluence/Bitbucket | Typisiertes Connector-/MCP-Tool-Ergebnis | Kein Tab |
+| Funktion                  | Voraussetzung                                                    | Ohne Voraussetzung             |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------ |
+| Canvas                    | Gespeicherter normaler Chat, Canvas-Modellfaehigkeit             | Kein Canvas-Tool               |
+| Canvas zu Notes           | Notes global aktiv und Benutzer berechtigt                       | Aktion verborgen, API lehnt ab |
+| Web Preview               | Gespeicherter normaler Chat, eigene Web-Preview-Modellfaehigkeit | Kein Preview-Tool              |
+| Web Preview anzeigen      | Moderne Browserfunktionen                                        | Keine Runtime notwendig        |
+| Files                     | Konfiguriertes Terminal oder aktives Pyodide-Filesystem          | Nicht angeboten                |
+| Terminal                  | Zentral konfigurierter Terminal-Service                          | Nicht angeboten                |
+| Browser                   | Terminal-Service mit lokaler App-/Port-Funktion                  | Nicht angeboten                |
+| Dokumentanzeige           | Viewer-Flag aktiv und unterstuetztes Format                      | Datei bleibt in Files          |
+| Jira/Confluence/Bitbucket | Typisiertes Connector-/MCP-Tool-Ergebnis                         | Kein Tab                       |
 
 Canvas und Web Preview sind unabhaengige Modellfaehigkeiten. Das Deaktivieren von Canvas
 darf Web Preview nicht deaktivieren.
@@ -246,8 +250,13 @@ separater Editor.
 - `Zu Notizen hinzufuegen` ist eine explizite, idempotente Aktion fuer den ausgewaehlten Canvas.
 - Nur dieser Canvas wird uebertragen; andere transiente Canvas-Dokumente bleiben chatgebunden.
 - Wiederholtes Hinzufuegen verwendet dieselbe Note und erzeugt kein Duplikat.
-- Nach der Verknuepfung ist die Note die dauerhafte Dokumentquelle. Bearbeitungen und KI-Updates
-  werden konsistent mit der verknuepften Note gespeichert.
+- Nach der Verknuepfung sind Canvas und Note zwei Ansichten desselben logischen Dokuments.
+  Direkte Aenderungen werden in beide Richtungen synchronisiert; optimistische Versionen verhindern
+  ein stilles Ueberschreiben neuerer Inhalte.
+- Eine direkte Note-Aenderung aktualisiert verknuepfte Canvas-Dokumente und verwirft deren
+  einmaliges KI-Undo. Canvas- und KI-Aenderungen aktualisieren die Note.
+- Wird die Note geloescht oder ist sie nicht mehr zugaenglich, wird die Verknuepfung entfernt. Der
+  Canvas behaelt seinen letzten Chatinhalt; eine erneute Promotion erstellt eine neue Note.
 - Das Loeschen des Chats loescht die bereits erstellte Note nicht.
 - Ist Notes deaktiviert oder nicht erlaubt, wird die Aktion nicht angezeigt und der Backend-Aufruf
   abgelehnt. Eine bestehende Verknuepfung darf dadurch nicht inkonsistent werden.
@@ -268,11 +277,11 @@ die fruehere eingebettete HTML-Artifact-Vorschau.
 
 ```ts
 type WebPreviewDocument = {
-  previewId: string;
-  title: string;
-  entrypoint: "index.html" | string;
-  files: Record<string, { content: string; mime: string }>;
-  updatedAt: number;
+	previewId: string;
+	title: string;
+	entrypoint: 'index.html' | string;
+	files: Record<string, { content: string; mime: string }>;
+	updatedAt: number;
 };
 ```
 
@@ -304,11 +313,23 @@ type WebPreviewDocument = {
 ### 7.4 Ausfuehrung und Sicherheit
 
 - HTML, lokale CSS-/JS-Verweise und kleine Assets werden im Browser sicher zu `srcdoc` zusammengesetzt.
-- Bestehende CSP- und iframe-Sandbox-Regeln bleiben verbindlich.
+- Web Preview verwendet exakt die vorhandenen Open-WebUI-`iframe_csp`- und Sandbox-Regeln der
+  bisherigen Artifact-Vorschau. `fetch`, Bilder, Fonts, WebSockets und externe Scripts erhalten
+  keine separate Preview-Whitelist. `allow-same-origin` bleibt standardmaessig aus.
 - Externe Navigation darf die KOBY-Seite nicht ungefragt ersetzen.
 - Fehlerhaftes HTML oder JavaScript darf den Chat und andere Tabs nicht beeintraechtigen.
 - Eine Preview funktioniert vollstaendig ohne Terminal und ohne Pyodide.
 - Version 1 installiert keine Pakete und fuehrt keinen Buildschritt aus.
+
+### 7.4.1 Kapazitaets- und Paketgrenzen
+
+- Pro Chat sind maximal 15 Web Previews erlaubt; ab der zehnten wird gewarnt.
+- Eine Preview enthaelt maximal 40 virtuelle Textdateien.
+- Virtuelle Pfade sind relativ, frei von Traversal und Steuerzeichen und maximal 240 Zeichen lang.
+- Eine Datei ist maximal 512.000 UTF-8-Bytes gross. Ein Paket ist maximal 2.000.000 UTF-8-Bytes
+  und 750.000 Zeichen gross.
+- Die gemeinsame Normalisierung erzwingt diese Grenzen fuer Tool-Erstellung, Komplettupdate,
+  Teilersetzung, Editor-Speicherung und Runtime-Import. Fehler mutieren den gueltigen Stand nicht.
 
 ### 7.5 Uebertragung in Files
 
@@ -384,12 +405,12 @@ Import ist jedoch nur mit einer im aktuellen Chat vorhandenen `preview_id` guelt
 
 Konfigurationsmatrix:
 
-| Terminal ausgewaehlt | Code Interpreter aktiv | Engine | Importquelle |
-|---|---|---|---|
-| Ja | beliebig | beliebig | Terminal |
-| Nein | Ja | `pyodide` | Pyodide |
-| Nein | Ja | nicht `pyodide` | Nicht verfuegbar |
-| Nein | Nein | beliebig | Nicht verfuegbar |
+| Terminal ausgewaehlt | Code Interpreter aktiv | Engine          | Importquelle     |
+| -------------------- | ---------------------- | --------------- | ---------------- |
+| Ja                   | beliebig               | beliebig        | Terminal         |
+| Nein                 | Ja                     | `pyodide`       | Pyodide          |
+| Nein                 | Ja                     | nicht `pyodide` | Nicht verfuegbar |
+| Nein                 | Nein                   | beliebig        | Nicht verfuegbar |
 
 #### 7.6.4 Modellverhalten
 
@@ -422,28 +443,28 @@ web_preview_import_runtime_file({
 
 Parameter:
 
-| Parameter | Bedeutung | Regel |
-|---|---|---|
-| `preview_id` | Ziel-Preview im aktuellen Chat | Muss existieren und dem Chat gehoeren |
-| `source_path` | Quelldatei in der aktiven Runtime | Absoluter, normalisierter Runtime-Pfad |
-| `expected_updated_at` | Vom Modell gelesene Preview-Version | Muss der aktuellen Version entsprechen |
-| `expected_content_hash` | Hash des vom Modell gelesenen Preview-Inhalts | Muss dem aktuellen Inhalt entsprechen |
-| `target_path` | Virtueller Zielpfad in der Preview | Relativ, normalisiert; Standard `data/<dateiname>` |
+| Parameter               | Bedeutung                                     | Regel                                              |
+| ----------------------- | --------------------------------------------- | -------------------------------------------------- |
+| `preview_id`            | Ziel-Preview im aktuellen Chat                | Muss existieren und dem Chat gehoeren              |
+| `source_path`           | Quelldatei in der aktiven Runtime             | Absoluter, normalisierter Runtime-Pfad             |
+| `expected_updated_at`   | Vom Modell gelesene Preview-Version           | Muss der aktuellen Version entsprechen             |
+| `expected_content_hash` | Hash des vom Modell gelesenen Preview-Inhalts | Muss dem aktuellen Inhalt entsprechen              |
+| `target_path`           | Virtueller Zielpfad in der Preview            | Relativ, normalisiert; Standard `data/<dateiname>` |
 
 Erfolgreiche Antworten verwenden denselben strukturierten Ergebnistyp wie andere Preview-Updates:
 
 ```json
 {
-  "type": "web_preview.document",
-  "previewId": "preview-123",
-  "title": "Auswertung",
-  "entrypoint": "index.html",
-  "files": {
-    "index.html": { "content": "...", "mime": "text/html" },
-    "data/results.json": { "content": "...", "mime": "application/json" }
-  },
-  "updatedAt": 1787692800000,
-  "contentHash": "..."
+	"type": "web_preview.document",
+	"previewId": "preview-123",
+	"title": "Auswertung",
+	"entrypoint": "index.html",
+	"files": {
+		"index.html": { "content": "...", "mime": "text/html" },
+		"data/results.json": { "content": "...", "mime": "application/json" }
+	},
+	"updatedAt": 1787692800000,
+	"contentHash": "..."
 }
 ```
 
@@ -520,19 +541,19 @@ Bei Erfolg:
 
 #### 7.6.9 Fehlerverhalten
 
-| Fehlerfall | Verhalten |
-|---|---|
-| Keine aktive Runtime | Werkzeug wird nicht angeboten beziehungsweise klare Runtime-Meldung |
-| Preview nicht vorhanden | Keine Mutation; Hinweis, die Preview auszuwaehlen oder neu zu erstellen |
-| Veraltete Version oder Hash | Konflikt; Modell muss Preview erneut lesen und gezielt wiederholen |
-| Quelldatei fehlt | Keine Mutation; Hinweis, den Runtime-Schritt erneut auszufuehren |
-| Quelle ist ein Ordner | Keine Mutation; Datei erforderlich |
-| Quelle ausserhalb des Runtime-Workspace | Zugriff abgelehnt |
-| Binaere oder nicht UTF-8-kodierte Datei | Keine Mutation; nur Textdateien werden unterstuetzt |
-| Datei groesser als 512.000 Bytes | Keine Mutation; Daten reduzieren oder auf mehrere Dateien aufteilen |
-| Terminal nicht erreichbar | Keine Pyodide-Umschaltung; Terminal-Fehler mit Retry-Moeglichkeit |
-| Zielpfad ungueltig | Keine Mutation; normalisierten relativen Pfad verwenden |
-| Verbindung bricht waehrend des Lesens ab | Keine Teilmutation; erneuter Versuch ist sicher |
+| Fehlerfall                               | Verhalten                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| Keine aktive Runtime                     | Werkzeug wird nicht angeboten beziehungsweise klare Runtime-Meldung     |
+| Preview nicht vorhanden                  | Keine Mutation; Hinweis, die Preview auszuwaehlen oder neu zu erstellen |
+| Veraltete Version oder Hash              | Konflikt; Modell muss Preview erneut lesen und gezielt wiederholen      |
+| Quelldatei fehlt                         | Keine Mutation; Hinweis, den Runtime-Schritt erneut auszufuehren        |
+| Quelle ist ein Ordner                    | Keine Mutation; Datei erforderlich                                      |
+| Quelle ausserhalb des Runtime-Workspace  | Zugriff abgelehnt                                                       |
+| Binaere oder nicht UTF-8-kodierte Datei  | Keine Mutation; nur Textdateien werden unterstuetzt                     |
+| Datei groesser als 512.000 Bytes         | Keine Mutation; Daten reduzieren oder auf mehrere Dateien aufteilen     |
+| Terminal nicht erreichbar                | Keine Pyodide-Umschaltung; Terminal-Fehler mit Retry-Moeglichkeit       |
+| Zielpfad ungueltig                       | Keine Mutation; normalisierten relativen Pfad verwenden                 |
+| Verbindung bricht waehrend des Lesens ab | Keine Teilmutation; erneuter Versuch ist sicher                         |
 
 Fehler duerfen den Chat, andere Previews oder die Runtime-Datei nicht veraendern. Ein fehlgeschlagener
 Import darf insbesondere keine leere oder teilweise geschriebene Zieldatei in der Preview anlegen.
@@ -599,25 +620,25 @@ Jeder Aufruf enthaelt einen diskriminierenden `kind`-Parameter, beispielsweise `
 
 ```json
 {
-  "kind": "canvas",
-  "object_id": "canvas-123",
-  "title": "Projektplan",
-  "content": "# Projektplan"
+	"kind": "canvas",
+	"object_id": "canvas-123",
+	"title": "Projektplan",
+	"content": "# Projektplan"
 }
 ```
 
 ```json
 {
-  "kind": "web_preview",
-  "object_id": "preview-456",
-  "title": "Dashboard",
-  "entrypoint": "index.html",
-  "files": {
-    "index.html": {
-      "content": "<main>...</main>",
-      "mime": "text/html"
-    }
-  }
+	"kind": "web_preview",
+	"object_id": "preview-456",
+	"title": "Dashboard",
+	"entrypoint": "index.html",
+	"files": {
+		"index.html": {
+			"content": "<main>...</main>",
+			"mime": "text/html"
+		}
+	}
 }
 ```
 
@@ -708,8 +729,14 @@ Terminal und Pyodide werden in dieser Produktumgebung nicht gleichzeitig als Fil
   Files automatisch.
 - Wenn Files die einzige hinzufuegbare Seite ist, wird kein Plus angezeigt.
 - Das Oeffnen von Files darf den Code Interpreter nicht deaktivieren und die Seite nicht neu laden.
-- Das Pyodide-Dateisystem bleibt fuer den aktuellen Chat-/Browserkontext verfuegbar, entsprechend
-  der konfigurierten Persistenz von Open WebUI.
+- Das Pyodide-Dateisystem ist benutzer- und browserprofilgebunden, nicht chat- oder servergebunden.
+  Bei aktivierter Dateipersistenz liegt es in IndexedDB und ueberlebt Reload sowie Browserneustart
+  im selben Profil; ohne Persistenz endet es mit Worker beziehungsweise Seite.
+- Chat-, Tab- und Workspace-Wechsel loeschen keine Pyodide-Dateien. Gespeicherte Chats behalten
+  nur einen lokalen Katalog ihrer Output-Pfade. Ungespeicherte Chats erhalten keinen dauerhaften
+  Output-Katalog.
+- Das Loeschen eines Chats entfernt dessen Output-Verweise, aber nicht die browserlokalen Dateien.
+  Persistierte Pyodide-Dateien werden nur durch eine ausdrueckliche Reset-Aktion geloescht.
 
 ## 10. Dateitabs und Dokumentanzeige
 
@@ -807,16 +834,16 @@ Nicht dediziert unterstuetzt sind insbesondere `.doc`, `.ppt`, `.xlsx`, `.xls`, 
 
 ## 14. Persistenz und Loeschverhalten
 
-| Objekt | Primaere Quelle | Nach Chat-Reload | Nach Tab-Schliessen | Nach Chat-Loeschung |
-|---|---|---|---|---|
-| Transienter Canvas | Chat | vorhanden, nicht ungefragt offen | vorhanden | geloescht |
-| Canvas in Notes | Note plus Verknuepfung | vorhanden | vorhanden | Note bleibt |
-| Web Preview | Chat | vorhanden, nicht ungefragt offen | vorhanden | geloescht |
-| Exportierte Preview-Dateien | Runtime | runtimeabhaengig | vorhanden | bleiben |
-| Files | Aktive Runtime | runtimeabhaengig | Runtime bleibt | runtimeabhaengig |
-| Terminal | Terminal-Service | serviceabhaengig | Sitzung nach Servicevertrag | serviceabhaengig |
-| Browser | Terminal-Port/App | serviceabhaengig | App bleibt | serviceabhaengig |
-| Connector-Objekt | Externes System | erneut referenzierbar | extern bleibt | extern bleibt |
+| Objekt                      | Primaere Quelle        | Nach Chat-Reload                 | Nach Tab-Schliessen         | Nach Chat-Loeschung |
+| --------------------------- | ---------------------- | -------------------------------- | --------------------------- | ------------------- |
+| Transienter Canvas          | Chat                   | vorhanden, nicht ungefragt offen | vorhanden                   | geloescht           |
+| Canvas in Notes             | Note plus Verknuepfung | vorhanden                        | vorhanden                   | Note bleibt         |
+| Web Preview                 | Chat                   | vorhanden, nicht ungefragt offen | vorhanden                   | geloescht           |
+| Exportierte Preview-Dateien | Runtime                | runtimeabhaengig                 | vorhanden                   | bleiben             |
+| Files                       | Aktive Runtime         | runtimeabhaengig                 | Runtime bleibt              | runtimeabhaengig    |
+| Terminal                    | Terminal-Service       | serviceabhaengig                 | Sitzung nach Servicevertrag | serviceabhaengig    |
+| Browser                     | Terminal-Port/App      | serviceabhaengig                 | App bleibt                  | serviceabhaengig    |
+| Connector-Objekt            | Externes System        | erneut referenzierbar            | extern bleibt               | extern bleibt       |
 
 Tabs sind Ansichten, keine Eigentumsgrenzen. `Schliessen` bedeutet niemals automatisch `Loeschen`.
 
@@ -912,28 +939,28 @@ Tabs sind Ansichten, keine Eigentumsgrenzen. `Schliessen` bedeutet niemals autom
 
 #### 19.3.1 Abnahmematrix fuer Runtime-Import
 
-| ID | Ausgangslage | Aktion | Erwartetes Ergebnis |
-|---|---|---|---|
-| WP-RI-01 | Gespeicherter Chat, Pyodide aktiv, Preview offen | Python erzeugt JSON; Modell importiert sie | Gleiche `previewId`, Datei unter Zielpfad, Live-Update, keine neue Karte |
-| WP-RI-02 | Gespeicherter Chat, Terminal ausgewaehlt, Preview offen | Terminal erzeugt CSV; Modell importiert sie | Terminal wird verwendet; Preview aktualisiert sich ohne Fokuswechsel |
-| WP-RI-03 | Terminal und Pyodide prinzipiell verfuegbar | Modell importiert eine Runtime-Datei | Ausschliesslich das ausgewaehlte Terminal wird verwendet |
-| WP-RI-04 | Keine Runtime aktiv | Benutzer verlangt Runtime-Import | Kein Werkzeugaufruf beziehungsweise klare Meldung; Preview bleibt unveraendert |
-| WP-RI-05 | Runtime aktiv, noch keine Preview vorhanden | Benutzer verlangt eine Darstellung | Modell erstellt zuerst eine Preview und importiert danach in deren stabile ID |
-| WP-RI-06 | Zwei Previews vorhanden, eine sichtbar fokussiert | Benutzer sagt `verwende diese Vorschau` | Nur die fokussierte Preview wird aktualisiert |
-| WP-RI-07 | Zwei Previews vorhanden, Ziel mehrdeutig | Benutzer verlangt ein unspezifisches Update | Rueckfrage; keine Preview wird veraendert |
-| WP-RI-08 | Quelldatei fehlt oder ist ein Ordner | Modell versucht Import | Fehleraktivitaet, keine Zieldatei, keine neue Preview-Version |
-| WP-RI-09 | Quelle liegt ausserhalb des Runtime-Workspace | Modell versucht Import | Zugriff abgelehnt; keine Dateiinhalte verlassen die Runtime-Grenze |
-| WP-RI-10 | Quelle ist binaer oder ungueltiges UTF-8 | Modell versucht Import | Verstaendlicher Textdatei-Fehler; keine Mutation |
-| WP-RI-11 | Quelle ist genau 512.000 Bytes | Modell importiert | Import erfolgreich, sofern UTF-8 und sonst gueltig |
-| WP-RI-12 | Quelle ist 512.001 Bytes | Modell importiert | Groessenfehler vor Mutation |
-| WP-RI-13 | Preview wurde nach Modell-Lesen manuell geaendert | Alter Hash/Stand wird importiert | Konflikt; manuelle Aenderung bleibt vollstaendig erhalten |
-| WP-RI-14 | Preview aendert sich waehrend Runtime-Lesen | Zweite Vorbedingungspruefung schlaegt fehl | Konflikt; gelesene Datei wird nicht geschrieben |
-| WP-RI-15 | Import erfolgreich, Runtime wird beendet | Chat wird neu geladen und Preview geoeffnet | Snapshot ist weiterhin vollstaendig vorhanden |
-| WP-RI-16 | Import erfolgreich, Quelldatei wird danach geaendert | Preview wird erneut betrachtet | Preview bleibt unveraendert bis zu erneutem Import |
-| WP-RI-17 | Preview-Tab wurde bewusst geschlossen | Modell aktualisiert dieselbe Preview per Import | Zustand wird aktualisiert, Tab oeffnet sich nicht automatisch |
-| WP-RI-18 | Terminal ist ausgewaehlt, aber nicht erreichbar | Import wird angefordert | Terminal-Fehler; kein stiller Pyodide-Fallback |
-| WP-RI-19 | Browser-Ereigniskanal bricht beim Lesen ab | Import laeuft | Keine Teilmutation; sicherer erneuter Versuch moeglich |
-| WP-RI-20 | Import in Notes-internem Chat | Modellwerkzeuge werden aufgeloest | Runtime-Importwerkzeug ist nicht verfuegbar |
+| ID       | Ausgangslage                                            | Aktion                                          | Erwartetes Ergebnis                                                            |
+| -------- | ------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| WP-RI-01 | Gespeicherter Chat, Pyodide aktiv, Preview offen        | Python erzeugt JSON; Modell importiert sie      | Gleiche `previewId`, Datei unter Zielpfad, Live-Update, keine neue Karte       |
+| WP-RI-02 | Gespeicherter Chat, Terminal ausgewaehlt, Preview offen | Terminal erzeugt CSV; Modell importiert sie     | Terminal wird verwendet; Preview aktualisiert sich ohne Fokuswechsel           |
+| WP-RI-03 | Terminal und Pyodide prinzipiell verfuegbar             | Modell importiert eine Runtime-Datei            | Ausschliesslich das ausgewaehlte Terminal wird verwendet                       |
+| WP-RI-04 | Keine Runtime aktiv                                     | Benutzer verlangt Runtime-Import                | Kein Werkzeugaufruf beziehungsweise klare Meldung; Preview bleibt unveraendert |
+| WP-RI-05 | Runtime aktiv, noch keine Preview vorhanden             | Benutzer verlangt eine Darstellung              | Modell erstellt zuerst eine Preview und importiert danach in deren stabile ID  |
+| WP-RI-06 | Zwei Previews vorhanden, eine sichtbar fokussiert       | Benutzer sagt `verwende diese Vorschau`         | Nur die fokussierte Preview wird aktualisiert                                  |
+| WP-RI-07 | Zwei Previews vorhanden, Ziel mehrdeutig                | Benutzer verlangt ein unspezifisches Update     | Rueckfrage; keine Preview wird veraendert                                      |
+| WP-RI-08 | Quelldatei fehlt oder ist ein Ordner                    | Modell versucht Import                          | Fehleraktivitaet, keine Zieldatei, keine neue Preview-Version                  |
+| WP-RI-09 | Quelle liegt ausserhalb des Runtime-Workspace           | Modell versucht Import                          | Zugriff abgelehnt; keine Dateiinhalte verlassen die Runtime-Grenze             |
+| WP-RI-10 | Quelle ist binaer oder ungueltiges UTF-8                | Modell versucht Import                          | Verstaendlicher Textdatei-Fehler; keine Mutation                               |
+| WP-RI-11 | Quelle ist genau 512.000 Bytes                          | Modell importiert                               | Import erfolgreich, sofern UTF-8 und sonst gueltig                             |
+| WP-RI-12 | Quelle ist 512.001 Bytes                                | Modell importiert                               | Groessenfehler vor Mutation                                                    |
+| WP-RI-13 | Preview wurde nach Modell-Lesen manuell geaendert       | Alter Hash/Stand wird importiert                | Konflikt; manuelle Aenderung bleibt vollstaendig erhalten                      |
+| WP-RI-14 | Preview aendert sich waehrend Runtime-Lesen             | Zweite Vorbedingungspruefung schlaegt fehl      | Konflikt; gelesene Datei wird nicht geschrieben                                |
+| WP-RI-15 | Import erfolgreich, Runtime wird beendet                | Chat wird neu geladen und Preview geoeffnet     | Snapshot ist weiterhin vollstaendig vorhanden                                  |
+| WP-RI-16 | Import erfolgreich, Quelldatei wird danach geaendert    | Preview wird erneut betrachtet                  | Preview bleibt unveraendert bis zu erneutem Import                             |
+| WP-RI-17 | Preview-Tab wurde bewusst geschlossen                   | Modell aktualisiert dieselbe Preview per Import | Zustand wird aktualisiert, Tab oeffnet sich nicht automatisch                  |
+| WP-RI-18 | Terminal ist ausgewaehlt, aber nicht erreichbar         | Import wird angefordert                         | Terminal-Fehler; kein stiller Pyodide-Fallback                                 |
+| WP-RI-19 | Browser-Ereigniskanal bricht beim Lesen ab              | Import laeuft                                   | Keine Teilmutation; sicherer erneuter Versuch moeglich                         |
+| WP-RI-20 | Import in Notes-internem Chat                           | Modellwerkzeuge werden aufgeloest               | Runtime-Importwerkzeug ist nicht verfuegbar                                    |
 
 Die Abnahme gilt nur dann als bestanden, wenn neben dem gespeicherten Backendzustand auch die
 sichtbare Chataktivitaet, die offene Workspace-Preview, der ausbleibende Fokuswechsel und das

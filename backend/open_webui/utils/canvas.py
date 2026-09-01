@@ -278,6 +278,55 @@ async def sync_linked_canvases_from_note(
     return updated_chats
 
 
+async def detach_linked_canvases_from_note(
+    note_id: str,
+    user_id: str,
+    db=None,
+) -> list[object]:
+    """Remove a deleted Note link while preserving each Canvas document."""
+    import open_webui.models.chats as chats_model
+    from open_webui.models.chats import Chat, Chats
+
+    async with chats_model.get_async_db_context(db) as session:
+        result = await session.execute(
+            select(Chat.id).where(
+                Chat.user_id == user_id,
+                cast(Chat.chat, Text).contains(note_id),
+            )
+        )
+        chat_ids = list(result.scalars().all())
+
+    updated_chats = []
+    for chat_id in chat_ids:
+
+        def mutate(chat_data: dict, _session):
+            documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
+            changed = False
+            for canvas_id, document in list(documents.items()):
+                if not isinstance(document, dict) or document.get('note_id') != note_id:
+                    continue
+                documents[canvas_id] = {
+                    **document,
+                    'note_id': None,
+                    'updated_at': canvas_timestamp(document.get('updated_at')),
+                }
+                changed = True
+            if changed:
+                chat_data[CANVAS_DOCUMENTS_KEY] = documents
+            return chat_data, changed
+
+        mutation = await Chats.mutate_chat_by_id(
+            chat_id,
+            mutate,
+            user_id=user_id,
+            db=db,
+            touch=False,
+        )
+        if mutation and mutation[1]:
+            updated_chats.append(mutation[0])
+    return updated_chats
+
+
 def set_active_canvas_document(chat_data: dict, canvas_id: str) -> dict:
     """Return chat data with an existing Canvas document selected."""
     documents = chat_data.get(CANVAS_DOCUMENTS_KEY) or {}

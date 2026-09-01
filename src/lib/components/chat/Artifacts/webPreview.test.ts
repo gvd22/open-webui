@@ -41,23 +41,38 @@ describe('Web Preview contract', () => {
 		const second = getWebPreviewExportPath('/workspace', 'preview-b', 'team');
 		expect(first).not.toBe(second);
 		expect(getWebPreviewExportPath('/workspace', 'preview-a', 'renamed', first)).toBe(first);
-		expect(getWebPreviewExportPath('/workspace', 'preview-a', 'team', '/workspace/previews/../../other')).toBe(first);
-		expect(getWebPreviewExportPath('/mnt/uploads', 'preview-a', 'team', first)).toBe('/mnt/uploads/previews/team-preview-a');
+		expect(
+			getWebPreviewExportPath('/workspace', 'preview-a', 'team', '/workspace/previews/../../other')
+		).toBe(first);
+		expect(getWebPreviewExportPath('/mnt/uploads', 'preview-a', 'team', first)).toBe(
+			'/mnt/uploads/previews/team-preview-a'
+		);
 	});
 	it('serves relative virtual data without network access and safely encodes markup', async () => {
-		const html = composeWebPreviewHtml({
-			'pages/index.html': { content: '<html><head></head><body></body></html>', mime: 'text/html' },
-			'data.json': { content: '["</script><script>unsafe()</script>"]', mime: 'application/json' }
-		}, 'pages/index.html');
+		const html = composeWebPreviewHtml(
+			{
+				'pages/index.html': {
+					content: '<html><head></head><body></body></html>',
+					mime: 'text/html'
+				},
+				'data.json': { content: '["</script><script>unsafe()</script>"]', mime: 'application/json' }
+			},
+			'pages/index.html'
+		);
 		const script = html.match(/<script data-preview-runtime="files">([\s\S]*?)<\/script>/)?.[1];
 		expect(script).toBeTruthy();
 		expect(script).not.toContain('</script>');
 		let networkCalls = 0;
 		const window: { fetch: (input?: unknown, init?: unknown) => Promise<Response> } = {
-			fetch: async () => { networkCalls++; return new Response('external'); }
+			fetch: async () => {
+				networkCalls++;
+				return new Response('external');
+			}
 		};
 		vm.runInNewContext(script!, { window, URL, Request, Response });
-		expect(await (await window.fetch('../data.json?version=1')).json()).toEqual(['</script><script>unsafe()</script>']);
+		expect(await (await window.fetch('../data.json?version=1')).json()).toEqual([
+			'</script><script>unsafe()</script>'
+		]);
 		expect((await window.fetch('missing.json')).status).toBe(404);
 		expect((await window.fetch('../data.json', { method: 'POST' })).status).toBe(405);
 		expect(networkCalls).toBe(0);
@@ -66,16 +81,33 @@ describe('Web Preview contract', () => {
 	});
 	it('preserves autosaved files when earlier tool results are replayed', () => {
 		const incoming = getWebPreviewsFromOutput([toolOutput('preview-1')])[0];
-		const current = { ...incoming, updatedAt: 11, contentHash: 'manual', files: { 'index.html': { content: '<h1>Manual</h1>', mime: 'text/html' } } };
+		const current = {
+			...incoming,
+			updatedAt: 11,
+			contentHash: 'manual',
+			files: { 'index.html': { content: '<h1>Manual</h1>', mime: 'text/html' } }
+		};
 		expect(preserveNewerWebPreview(incoming, current)).toEqual(current);
 		expect(preserveNewerWebPreview({ ...incoming, updatedAt: 12 }, current).updatedAt).toBe(12);
 	});
 	it('reports preview version conflicts as failed activities', () => {
 		const items = buildOutputDisplayItems([
-			{ type: 'function_call', call_id: 'conflict', name: 'web_preview_update', status: 'completed' },
-			{ type: 'function_call_output', call_id: 'conflict', output: JSON.stringify({ type: 'web_preview.conflict', message: 'Changed while waiting' }) }
+			{
+				type: 'function_call',
+				call_id: 'conflict',
+				name: 'web_preview_update',
+				status: 'completed'
+			},
+			{
+				type: 'function_call_output',
+				call_id: 'conflict',
+				output: JSON.stringify({ type: 'web_preview.conflict', message: 'Changed while waiting' })
+			}
 		]);
-		expect(items[0]).toMatchObject({ type: 'web_preview_activity', error: 'Changed while waiting' });
+		expect(items[0]).toMatchObject({
+			type: 'web_preview_activity',
+			error: 'Changed while waiting'
+		});
 	});
 	it('parses a stable multi-file tool result', () => {
 		expect(getWebPreviewsFromOutput([toolOutput('preview-1')])[0]).toMatchObject({
@@ -234,6 +266,28 @@ describe('Web Preview contract', () => {
 			'web_preview',
 			'message'
 		]);
+	});
+
+	it('shows the capacity warning after the preview card', () => {
+		const output = buildOutputDisplayItems([
+			{
+				...toolOutput('preview-10'),
+				id: 'preview-10-output',
+				output: JSON.stringify({
+					type: 'web_preview.document',
+					previewId: 'preview-10',
+					title: 'Preview 10',
+					entrypoint: 'index.html',
+					updatedAt: 10,
+					warning: 'This chat contains 10 Web Previews. You can create 5 more.'
+				})
+			}
+		]);
+
+		expect(output.map((item) => item.type)).toEqual(['web_preview', 'message']);
+		expect(output[1]).toMatchObject({
+			text: 'This chat contains 10 Web Previews. You can create 5 more.'
+		});
 	});
 
 	it('renders only the first chat card for each preview id', () => {

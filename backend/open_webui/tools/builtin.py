@@ -88,6 +88,7 @@ from open_webui.utils.web_preview import (
     WEB_PREVIEW_DOCUMENTS_KEY,
     WEB_PREVIEW_MAX_DOCUMENT_COUNT,
     WebPreviewConflictError,
+    build_web_preview_capacity_notice,
     generate_web_preview_title,
     normalize_web_preview_files,
     require_web_preview_precondition,
@@ -608,7 +609,7 @@ def _web_preview_conflict(exc: WebPreviewConflictError) -> str:
     return json.dumps(exc.payload, ensure_ascii=False)
 
 
-def _web_preview_document(document: dict) -> str:
+def _web_preview_document(document: dict, warning: str = '') -> str:
     return json.dumps(
         {
             'type': 'web_preview.document',
@@ -619,6 +620,7 @@ def _web_preview_document(document: dict) -> str:
             'contentHash': web_preview_content_hash(document),
             'exportedPath': document.get('exported_path'),
             'exportedRuntime': document.get('exported_runtime'),
+            **({'warning': warning} if warning else {}),
         },
         ensure_ascii=False,
     )
@@ -685,13 +687,13 @@ async def web_preview_create(
             )
         documents[preview_id] = document
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
-        return set_active_web_preview(chat_data, preview_id), document
+        return set_active_web_preview(chat_data, preview_id), len(documents)
 
     try:
-        await _mutate_web_preview_chat(chat, mutate)
+        document_count = await _mutate_web_preview_chat(chat, mutate)
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
-    return _web_preview_document(document)
+    return _web_preview_document(document, build_web_preview_capacity_notice(document_count))
 
 
 async def web_preview_update(
@@ -801,6 +803,13 @@ async def web_preview_list(
     return json.dumps(
         {
             'type': 'web_preview.documents',
+            'documentCount': len(documents),
+            'maxDocuments': WEB_PREVIEW_MAX_DOCUMENT_COUNT,
+            **(
+                {'warning': build_web_preview_capacity_notice(len(documents))}
+                if build_web_preview_capacity_notice(len(documents))
+                else {}
+            ),
             'documents': [
                 {
                     'previewId': document['preview_id'],
@@ -2397,7 +2406,7 @@ async def replace_note_content(
         if not updated_note:
             return JSONCodec.dumps({'error': 'Failed to update note', 'code': 'update_failed'})
 
-        markdown = (((updated_note.data or {}).get('content') or {}).get('md') or '')
+        markdown = ((updated_note.data or {}).get('content') or {}).get('md') or ''
         await sync_linked_canvases_from_note(
             updated_note.id,
             updated_note.user_id,

@@ -65,6 +65,21 @@ nicht willkuerlich den Chat.
 - Oeffnen, Wechseln und Schliessen verursachen keinen Seiten-Reload, Chat-Sprung oder Verlust
   aktivierter Chatfunktionen.
 
+### AW-06: Output-Verzeichnis
+
+- In einem gespeicherten Chat ist oben rechts eine kompakte Output-Aktion sichtbar. Im
+  geschlossenen Zustand bleibt nur das Aufgabenlisten-Icon stehen.
+- Das Menue listet jeden Canvas und jede Web Preview genau einmal sowie PDF-, Word-,
+  PowerPoint-, Excel- und CSV-Dateien, die das Modell in der aktiven Runtime erzeugt, bearbeitet
+  oder explizit angezeigt hat.
+- Ein Eintrag oeffnet beziehungsweise fokussiert das vorhandene Objekt. Er erzeugt weder eine
+  Kopie noch einen zweiten Tab fuer dieselbe stabile ID oder denselben Pfad.
+- Das Output-Verzeichnis ist nur ein Index. Canvas und Preview bleiben im Chat autoritativ;
+  Runtime-Dateien bleiben in ihrer Runtime autoritativ. Ein nicht mehr vorhandener Runtime-Pfad
+  wird als nicht verfuegbar behandelt und nicht aus einem veralteten Chat-Abbild rekonstruiert.
+- Nach dem Loeschen eines Chats werden dessen lokale Output-Verweise entfernt. Runtime-Dateien
+  werden dadurch nicht geloescht.
+
 ## 3. Darstellung im Chat
 
 ### CH-01: Canvas-Karte
@@ -136,6 +151,15 @@ unaufdringlich gewarnt. Bis 15 ist die Erstellung erlaubt; das 16. Dokument wird
 - Bei deaktivierten Notes oder fehlender Berechtigung ist die Aktion verborgen und die API lehnt
   den direkten Aufruf ab.
 - Notes-interne Chats erhalten keine Canvas-Werkzeuge.
+- Nach der Uebertragung bilden Canvas und Note zwei Ansichten desselben logischen Dokuments. Die
+  zuletzt erfolgreich versionierte Aenderung wird in beide Richtungen uebernommen.
+- Eine direkte Note-Aenderung aktualisiert verknuepfte Canvas-Dokumente und verwirft deren
+  einmaliges KI-Undo. Canvas- und KI-Aenderungen aktualisieren die verknuepfte Note.
+- Versionskonflikte werden sichtbar abgelehnt; keine Seite ueberschreibt still eine neuere
+  Aenderung.
+- Wird die Note geloescht oder verliert der Benutzer den Zugriff, wird die Verknuepfung geloest.
+  Der Canvas behaelt seinen letzten Inhalt im Chat. Eine spaetere Uebertragung erstellt eine neue
+  Note.
 
 ### CA-05: Freigaben
 
@@ -180,6 +204,23 @@ Mehrere voneinander isolierte Previews pro Chat sind erlaubt.
 - Fehlerhaftes HTML oder JavaScript blockiert weder Chat noch andere Tabs.
 - Externe Navigation ersetzt nicht ungefragt die KOBY-Seite.
 - Version 1 installiert keine Pakete und fuehrt keinen Buildschritt aus.
+- Netzwerkzugriffe verwenden exakt dieselben konfigurierten `iframe_csp`- und Sandbox-Regeln wie
+  die bisherige Open-WebUI-Artifact-Vorschau. Das gilt gemeinsam fuer `fetch`, Bilder, Fonts,
+  WebSockets und externe Scripts; Web Preview fuehrt keine zweite Netzwerk-Whitelist ein.
+- `allow-same-origin` bleibt standardmaessig aus. Abweichungen erfolgen nur ueber die vorhandenen
+  globalen Open-WebUI-Einstellungen.
+
+### WP-04a: Paketgrenzen
+
+- Pro Chat sind hoechstens 15 Web Previews erlaubt; ab der zehnten wird die verbleibende
+  Kapazitaet angezeigt.
+- Eine Preview enthaelt hoechstens 40 virtuelle Textdateien.
+- Ein relativer virtueller Pfad ist hoechstens 240 Zeichen lang und enthaelt weder Traversal noch
+  Steuerzeichen.
+- Eine einzelne Datei ist hoechstens 512.000 UTF-8-Bytes gross. Das gesamte Paket ist hoechstens
+  2.000.000 UTF-8-Bytes und 750.000 Zeichen gross.
+- Dieselben Grenzen gelten fuer Erstellen, komplettes Aktualisieren, Teilersetzung, direkte
+  Editor-Aenderungen und Runtime-Snapshot-Importe. Eine Ablehnung veraendert die Preview nicht.
 
 ### WP-05: Files und Runtime-Snapshots
 
@@ -244,6 +285,19 @@ erscheint in der seitlichen Arbeitsflaeche automatisch `Dateien` als normaler Fi
 - Schliessen der Arbeitsflaeche schaltet den Code Interpreter nicht aus. Dateipersistenz folgt der
   konfigurierten Open-WebUI-Persistenz und darf nicht durch einen UI-Tabwechsel veraendert werden.
 
+### PY-05: Persistenzvertrag
+
+- Das Pyodide-Dateisystem gehoert zum Benutzer im aktuellen Browserprofil, nicht zu einem
+  einzelnen Chat und nicht zum Open-WebUI-Server.
+- Ist Pyodide-Dateipersistenz aktiv, werden Dateien in IndexedDB gespeichert und nach Seiten-Reload
+  und Browser-Neustart im selben Browserprofil wiederhergestellt. Ist sie aus, gelten nur die
+  Lebensdauer des aktuellen Workers beziehungsweise der Seite.
+- Chatwechsel, Tab-Schliessen und Workspace-Schliessen loeschen keine Pyodide-Dateien.
+- Ein gespeicherter Chat behaelt nur seine Output-Pfadverweise. Ein ungespeicherter Chat erhaelt
+  keinen dauerhaften Output-Katalog.
+- Chat-Loeschung entfernt die chatbezogenen Verweise, nicht die browserlokalen Dateien. Das
+  Zuruecksetzen persistierter Dateien bleibt eine ausdrueckliche Benutzeraktion.
+
 ## 7. Terminal, Browser und Files-Tabs
 
 - Pro Arbeitsflaeche existiert genau ein Files-Navigator.
@@ -259,15 +313,16 @@ erscheint in der seitlichen Arbeitsflaeche automatisch `Dateien` als normaler Fi
 
 ## 8. Persistenz und Loeschen
 
-| Inhalt | Nach Tab-Schliessen | Nach Chat-Reload | Nach Chat-Loeschung |
-|---|---|---|---|
-| Transienter Canvas | bleibt im Chat | vorhanden, nicht automatisch offen | geloescht |
-| Canvas in Notes | bleibt | vorhanden | Note bleibt |
-| Web Preview | bleibt im Chat | vorhanden, nicht automatisch offen | geloescht |
-| Exportierte Preview-Dateien | bleiben in Runtime | runtimeabhaengig | bleiben |
-| Files/Runtime-Dateien | Runtime bleibt | runtimeabhaengig | nach Runtime-Vertrag |
-| Terminal-Sitzung | nach Servicevertrag | serviceabhaengig | nach Servicevertrag |
-| Browser-App | Prozess bleibt | serviceabhaengig | nach Runtime-Vertrag |
+| Inhalt                      | Nach Tab-Schliessen                   | Nach Chat-Reload                     | Nach Chat-Loeschung  |
+| --------------------------- | ------------------------------------- | ------------------------------------ | -------------------- |
+| Transienter Canvas          | bleibt im Chat                        | vorhanden, nicht automatisch offen   | geloescht            |
+| Canvas in Notes             | bleibt                                | vorhanden                            | Note bleibt          |
+| Web Preview                 | bleibt im Chat                        | vorhanden, nicht automatisch offen   | geloescht            |
+| Exportierte Preview-Dateien | bleiben in Runtime                    | nach Runtime-Vertrag                 | bleiben              |
+| Pyodide-Dateien             | bleiben im Browserprofil              | bei aktivierter Persistenz vorhanden | bleiben              |
+| Terminal-Dateien            | bleiben im Chat-Workspace der Runtime | nach Servicevertrag                  | nach Servicevertrag  |
+| Terminal-Sitzung            | nach Servicevertrag                   | serviceabhaengig                     | nach Servicevertrag  |
+| Browser-App                 | Prozess bleibt                        | serviceabhaengig                     | nach Runtime-Vertrag |
 
 `Schliessen` bedeutet fuer einen Tab oder die Arbeitsflaeche niemals automatisch `Loeschen`.
 

@@ -20,6 +20,9 @@ from open_webui.utils.web_preview import (
     WEB_PREVIEW_ACTIVE_DOCUMENT_KEY,
     WEB_PREVIEW_DOCUMENTS_KEY,
     WEB_PREVIEW_MODEL_CONTEXT_MAX_CHARS,
+    WEB_PREVIEW_MAX_FILE_BYTES,
+    WEB_PREVIEW_MAX_PATH_CHARS,
+    build_web_preview_capacity_notice,
     build_active_web_preview_prompt,
     generate_web_preview_title,
     normalize_web_preview_files,
@@ -39,6 +42,18 @@ def test_normalizes_browser_files_and_rejects_path_traversal():
         assert False, 'unsafe path accepted'
     except ValueError as exc:
         assert 'Unsafe preview file path' in str(exc)
+
+
+def test_preview_package_limits_paths_files_and_capacity_warning():
+    with pytest.raises(ValueError, match='Unsafe preview file path'):
+        normalize_web_preview_files({f'{"a" * WEB_PREVIEW_MAX_PATH_CHARS}.html': '<p>x</p>'})
+
+    with pytest.raises(ValueError, match='byte limit'):
+        normalize_web_preview_files({'index.html': 'x' * (WEB_PREVIEW_MAX_FILE_BYTES + 1)})
+
+    assert build_web_preview_capacity_notice(9) == ''
+    assert 'create 5 more' in build_web_preview_capacity_notice(10)
+    assert 'the maximum' in build_web_preview_capacity_notice(15)
 
 
 def test_title_and_active_prompt_include_complete_preview_context():

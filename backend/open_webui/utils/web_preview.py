@@ -10,7 +10,11 @@ import time
 WEB_PREVIEW_DOCUMENTS_KEY = '_web_preview_documents'
 WEB_PREVIEW_ACTIVE_DOCUMENT_KEY = '_web_preview_active_document_id'
 WEB_PREVIEW_MAX_DOCUMENT_COUNT = 15
+WEB_PREVIEW_WARNING_DOCUMENT_COUNT = 10
 WEB_PREVIEW_MAX_FILE_COUNT = 40
+WEB_PREVIEW_MAX_PATH_CHARS = 240
+WEB_PREVIEW_MAX_FILE_BYTES = 512_000
+WEB_PREVIEW_MAX_TOTAL_BYTES = 2_000_000
 WEB_PREVIEW_MAX_TOTAL_CHARS = 750_000
 WEB_PREVIEW_MODEL_CONTEXT_MAX_CHARS = 32_000
 
@@ -54,9 +58,7 @@ def require_web_preview_precondition(
     expected_content_hash: str | None,
 ) -> None:
     if expected_updated_at is None or not expected_content_hash:
-        raise WebPreviewConflictError(
-            preview_id, document, 'Web Preview version is required. Reload it before saving.'
-        )
+        raise WebPreviewConflictError(preview_id, document, 'Web Preview version is required. Reload it before saving.')
     if (
         int(document.get('updated_at') or 0) != int(expected_updated_at)
         or web_preview_content_hash(document) != expected_content_hash
@@ -103,9 +105,17 @@ def normalize_web_preview_files(files: dict | None) -> dict[str, dict[str, str]]
 
     normalized: dict[str, dict[str, str]] = {}
     total_chars = 0
+    total_bytes = 0
     for raw_path, raw_file in files.items():
         path = str(raw_path).replace('\\', '/').lstrip('/')
-        if not path or path.startswith('../') or '/..' in path or path == '..':
+        if (
+            not path
+            or len(path) > WEB_PREVIEW_MAX_PATH_CHARS
+            or any(ord(char) < 32 or ord(char) == 127 for char in path)
+            or path.startswith('../')
+            or '/..' in path
+            or path == '..'
+        ):
             raise ValueError(f'Unsafe preview file path: {raw_path}')
 
         if isinstance(raw_file, dict):
@@ -117,6 +127,12 @@ def normalize_web_preview_files(files: dict | None) -> dict[str, dict[str, str]]
         if not isinstance(content, str):
             raise ValueError(f'Preview file content must be text: {path}')
 
+        file_bytes = len(content.encode('utf-8'))
+        if file_bytes > WEB_PREVIEW_MAX_FILE_BYTES:
+            raise ValueError(f'Preview file exceeds the {WEB_PREVIEW_MAX_FILE_BYTES}-byte limit: {path}')
+        total_bytes += file_bytes
+        if total_bytes > WEB_PREVIEW_MAX_TOTAL_BYTES:
+            raise ValueError('The preview package is too large for chat storage.')
         total_chars += len(content)
         if total_chars > WEB_PREVIEW_MAX_TOTAL_CHARS:
             raise ValueError('The preview package is too large for chat storage.')
@@ -132,9 +148,26 @@ def normalize_web_preview_files(files: dict | None) -> dict[str, dict[str, str]]
             'svg': 'image/svg+xml',
             'txt': 'text/plain',
         }.get(extension, 'text/plain')
-        normalized[path] = {'content': content, 'mime': str(mime or default_mime)}
+        normalized_mime = str(mime or default_mime)
+        if len(normalized_mime) > _CONTEXT_MIME_MAX_CHARS:
+            raise ValueError(f'Preview file MIME type is too long: {path}')
+        normalized[path] = {'content': content, 'mime': normalized_mime}
 
     return normalized
+
+
+def build_web_preview_capacity_notice(document_count: int) -> str:
+    if document_count < WEB_PREVIEW_WARNING_DOCUMENT_COUNT:
+        return ''
+    remaining = max(WEB_PREVIEW_MAX_DOCUMENT_COUNT - document_count, 0)
+    if remaining == 0:
+        return (
+            f'This chat now contains {WEB_PREVIEW_MAX_DOCUMENT_COUNT} Web Previews, '
+            'the maximum. Existing previews can still be edited.'
+        )
+    return (
+        f'This chat contains {document_count} Web Previews. You can create {remaining} more before reaching the limit.'
+    )
 
 
 def set_active_web_preview(chat_data: dict, preview_id: str) -> dict:
@@ -238,7 +271,9 @@ def build_active_web_preview_prompt(
     active_id = (
         focused_preview_id
         if focused_preview_id is not None
-        else chat_data.get(WEB_PREVIEW_ACTIVE_DOCUMENT_KEY) if use_persisted_active else None
+        else chat_data.get(WEB_PREVIEW_ACTIVE_DOCUMENT_KEY)
+        if use_persisted_active
+        else None
     )
     catalog = [
         {
