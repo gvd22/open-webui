@@ -1,5 +1,8 @@
 # KOBY Unified Workspace - Gesamtspezifikation
 
+Kompakte sichtbare Abnahmekriterien:
+[KOBY Artifact Workspace - Abnahmekriterien](2026-09-01-koby-artifact-workspace-acceptance-criteria.md).
+
 **Status:** Verbindliche Produkt- und Verhaltensspezifikation  
 **Version:** 1.3
 **Datum:** 1. September 2026
@@ -635,7 +638,7 @@ Vereinheitlichung gilt nur fuer den externen Modellvertrag:
 Bis zu dieser Migration gelten die unter 8.1 und 8.2 aufgefuehrten spezialisierten Werkzeuge als
 verbindlicher implementierter Vertrag.
 
-### 8.4 Registrierung
+### 8.5 Registrierung
 
 - Die Werkzeuge sind nur in normalen gespeicherten Chats verfuegbar.
 - Sie sind pro Modellfaehigkeit opt-in und werden nicht allein durch die UI global erzwungen.
@@ -647,7 +650,7 @@ verbindlicher implementierter Vertrag.
 - Tool-Ergebnisse enthalten immer stabilen Typ, Objekt-ID und den aktuellen Zustand oder eine
   eindeutig bezeichnete Teilansicht.
 
-### 8.5 Dynamischer Modellkontext
+### 8.6 Dynamischer Modellkontext
 
 Der Assistent muss wissen, welche Objekte existieren und welches Objekt der Benutzer gerade sieht,
 ohne den gesamten Modellkontext unkontrolliert zu fuellen.
