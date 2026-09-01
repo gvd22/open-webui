@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import { dismissReleaseNotes } from './ui';
 
 const API_BASE_URL = process.env.OPEN_WEBUI_RUNTIME_API_BASE_URL ?? 'http://127.0.0.1:8081';
 const TERMINAL_ID = 'workspace-dev-v0111';
@@ -291,6 +292,32 @@ test.describe('workspace Terminal diagnostics and Browser regression', () => {
 			expect(write.ok()).toBeTruthy();
 		}
 
+		const currentPorts = await request.get(terminalPath(chatId, 'ports'), {
+			headers: authorizationHeaders(token)
+		});
+		const portIsListening =
+			currentPorts.ok() &&
+			(await currentPorts.json()).ports.some((port: { port: number }) => port.port === PORT);
+		if (!portIsListening) {
+			const server = await request.post(terminalPath(chatId, 'execute'), {
+				headers: authorizationHeaders(token),
+				data: {
+					command: `exec python3 -m http.server ${PORT} --bind 127.0.0.1`,
+					cwd: TEST_DIRECTORY
+				}
+			});
+			expect(server.ok()).toBeTruthy();
+			httpServerProcessId = (await server.json()).id;
+			await expect
+				.poll(async () => {
+					const ports = await request.get(terminalPath(chatId, 'ports'), {
+						headers: authorizationHeaders(token)
+					});
+					return ports.ok() ? (await ports.json()).ports : [];
+				})
+				.toContainEqual(expect.objectContaining({ port: PORT }));
+		}
+
 		const signIn = await page.request.post('/api/v1/auths/signin', {
 			data: { email: '', password: '' }
 		});
@@ -300,6 +327,7 @@ test.describe('workspace Terminal diagnostics and Browser regression', () => {
 			(await signIn.json()).token
 		);
 		await page.goto(`/c/${chatId}`);
+		await dismissReleaseNotes(page);
 		await page.getByRole('button', { name: 'Workspace', exact: true }).click();
 		await page.getByRole('button', { name: 'Browser', exact: true }).click();
 		await page.getByRole('button', { name: `localhost:${PORT} python3`, exact: true }).click();

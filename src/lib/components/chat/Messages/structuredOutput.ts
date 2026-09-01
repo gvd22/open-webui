@@ -102,7 +102,6 @@ export type OutputDisplayItem =
 			item: Record<string, unknown>;
 	  };
 
-
 export function dedupeCanvasDisplayItems(
 	items: OutputDisplayItem[],
 	previousCanvasIds: string[] = []
@@ -274,7 +273,6 @@ function getInlineFileFromToolOutput(callItem?: OutputItem, resultItem?: OutputI
 		typeof result !== 'object' ||
 		result.type !== 'file' ||
 		result.source !== 'open_terminal' ||
-		result.displayed !== true ||
 		result.exists === false ||
 		!result.path ||
 		!result.terminal_selector
@@ -438,11 +436,16 @@ function buildDetailToken(
 }
 
 export function hasPendingToolInteraction(output: OutputItem[] = []): boolean {
-	const completed = new Set(output.filter((item) => item.type === 'function_call_output').map((item) => item.call_id));
-	return output.some((item) => item.type === 'function_call' && !completed.has(item.call_id) && (
-		['pending', 'queued', 'requires_approval'].includes(item.status ?? '') ||
-		(item.name === 'ask_user' && item.status === 'in_progress')
-	));
+	const completed = new Set(
+		output.filter((item) => item.type === 'function_call_output').map((item) => item.call_id)
+	);
+	return output.some(
+		(item) =>
+			item.type === 'function_call' &&
+			!completed.has(item.call_id) &&
+			(['pending', 'queued', 'requires_approval'].includes(item.status ?? '') ||
+				(item.name === 'ask_user' && item.status === 'in_progress'))
+	);
 }
 
 export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDisplayItem[] {
@@ -501,6 +504,8 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	};
 
 	output.forEach((item, index) => {
+		if (!item) return;
+
 		if (item?.type === 'function_call_output') {
 			const webPreviews = getWebPreviewsFromOutput([item]);
 			if (webPreviews.length > 0) {
@@ -600,14 +605,14 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 		}
 
 		if (
-			item?.type === 'function_call' &&
+			item.type === 'function_call' &&
 			item.name === 'ask_user' &&
 			(item.status === 'pending' || item.status === 'in_progress')
 		) {
 			return;
 		}
 
-		if (item?.type && GROUPABLE_OUTPUT_TYPES.has(item.type)) {
+		if (item.type && GROUPABLE_OUTPUT_TYPES.has(item.type)) {
 			const token = buildDetailToken(item, index === output.length - 1, toolOutputByCallId);
 			if (token) {
 				currentDetailTokens.push(token);
@@ -615,7 +620,7 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			return;
 		}
 
-		if (item?.type === 'message') {
+		if (item.type === 'message') {
 			const text = getMessageText(item);
 			if (text.trim()) {
 				flushDetails();
@@ -674,9 +679,12 @@ function ensureOutputItem(
 	fallback?: OutputItem
 ): OutputItem {
 	while (output.length <= outputIndex) {
-		output.push(
-			fallback ?? { type: 'message', status: 'in_progress', role: 'assistant', content: [] }
-		);
+		// Only the addressed slot gets the event's item; filler slots must not reuse its id.
+		const item =
+			output.length === outputIndex && fallback
+				? { ...fallback }
+				: { type: 'message', status: 'in_progress', role: 'assistant', content: [] };
+		output.push(item);
 	}
 	output[outputIndex] = { ...output[outputIndex] };
 	return output[outputIndex];
@@ -688,6 +696,17 @@ function ensurePart(parts: OutputContentPart[], index: number, fallback?: Output
 	}
 	parts[index] = { ...parts[index] };
 	return parts[index];
+}
+
+function setPart(
+	parts: OutputContentPart[],
+	index: number,
+	part: OutputContentPart,
+	fallback?: OutputContentPart
+): void {
+	// Assigning past the end leaves a hole that later spreads turn into undefined parts.
+	ensurePart(parts, index, fallback);
+	parts[index] = part;
 }
 
 function findOutputItemIndex(output: OutputItem[], item: OutputItem): number {
@@ -738,7 +757,7 @@ export function applyResponseStreamEvent(
 		} else if (outputIndex < nextOutput.length) {
 			nextOutput.splice(outputIndex, 0, item);
 		} else {
-			nextOutput[outputIndex] = item;
+			nextOutput.push(item);
 		}
 		return nextOutput;
 	}
@@ -749,7 +768,13 @@ export function applyResponseStreamEvent(
 		}
 		const item = { ...event.item };
 		const existingIndex = findOutputItemIndex(nextOutput, item);
-		nextOutput[existingIndex >= 0 ? existingIndex : outputIndex] = item;
+		if (existingIndex >= 0) {
+			nextOutput[existingIndex] = item;
+		} else if (outputIndex < nextOutput.length) {
+			nextOutput[outputIndex] = item;
+		} else {
+			nextOutput.push(item);
+		}
 		return nextOutput;
 	}
 
@@ -774,7 +799,7 @@ export function applyResponseStreamEvent(
 			return nextOutput;
 		}
 		item.content = [...(item.content ?? [])];
-		item.content[event.content_index ?? item.content.length] = { ...event.part };
+		setPart(item.content, event.content_index ?? item.content.length, { ...event.part });
 		return nextOutput;
 	}
 
@@ -783,7 +808,8 @@ export function applyResponseStreamEvent(
 			return nextOutput;
 		}
 		item.summary = [...(item.summary ?? [])];
-		item.summary[event.summary_index ?? item.summary.length] = { ...event.part };
+		const summaryIndex = event.summary_index ?? item.summary.length;
+		setPart(item.summary, summaryIndex, { ...event.part }, { type: 'summary_text', text: '' });
 		return nextOutput;
 	}
 
@@ -813,7 +839,8 @@ export function applyResponseStreamEvent(
 		const typeName = eventType.split('.')[1];
 		if (typeName === 'content_part' && event.part) {
 			item.content = [...(item.content ?? [])];
-			item.content[event.content_index ?? Math.max(item.content.length - 1, 0)] = { ...event.part };
+			const contentIndex = event.content_index ?? Math.max(item.content.length - 1, 0);
+			setPart(item.content, contentIndex, { ...event.part });
 		} else if (typeName === 'function_call_arguments' && event.arguments !== undefined) {
 			item.arguments = event.arguments;
 		} else if (
@@ -845,7 +872,7 @@ export function replaceOutputMessageText(
 		}
 
 		const partIndex = item.content.findIndex(
-			(part) => typeof part.text === 'string' && part.text.includes(oldContent)
+			(part) => typeof part?.text === 'string' && part.text.includes(oldContent)
 		);
 		if (partIndex === -1) {
 			return item;

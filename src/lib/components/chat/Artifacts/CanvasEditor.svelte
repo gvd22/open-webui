@@ -58,7 +58,6 @@
 	let lastLocalContent = '';
 	let isApplyingExternalContent = false;
 	let suppressExternalSaveUntil = Date.now() + 300;
-	let initializedEditorCanvasId = '';
 	let richTextInput: any = null;
 	let unregisterSaveBarrier = () => {};
 
@@ -406,15 +405,11 @@
 				placeholder={$i18n.t('Write something...')}
 				editable={true}
 				onChange={(nextContent: any) => {
-					const isInitialEditorChange = initializedEditorCanvasId !== canvasId;
-					initializedEditorCanvasId = canvasId;
 					const isManualChange =
-						!isInitialEditorChange &&
 						canSynchronizeCanvasDocumentChange(
 							isApplyingExternalContent,
 							suppressExternalSaveUntil
-						) &&
-						nextContent.md !== md;
+						) && nextContent.md !== md;
 					html = nextContent.html;
 					md = nextContent.md;
 					json = nextContent.json;

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { dismissReleaseNotes } from './ui';
 
 const CANVAS_ALPHA = 'workspace-e2e-canvas-alpha';
 const CANVAS_BETA = 'workspace-e2e-canvas-beta';
@@ -235,6 +236,7 @@ const workspaceTabTitles = (page: Page) =>
 const openSeededWorkspace = async (page: Page, seeded: SeededWorkspace) => {
 	await page.addInitScript((token) => localStorage.setItem('token', token), seeded.token);
 	await page.goto(`/c/${seeded.chatId}`);
+	await dismissReleaseNotes(page);
 	await expect(page.getByTestId('workspace-tabs')).toBeVisible();
 	for (const title of [
 		'E2E Canvas Alpha',
@@ -338,6 +340,7 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect(page.getByRole('tab', { name: 'E2E Canvas Beta', exact: true })).toHaveCount(1);
 
 		await page.reload();
+		await dismissReleaseNotes(page);
 		await expect(page.getByTestId('workspace-tabs')).toBeVisible();
 		await expectSingleArtifactCards(page, {
 			canvasAlpha: 'E2E Canvas Alpha manual',
@@ -375,6 +378,7 @@ test.describe('seeded workspace lifecycle', () => {
 			await expect(filesTab).toHaveCount(1);
 			await filesTab.click();
 			await page.reload();
+			await dismissReleaseNotes(page);
 			await expect(filesTab).toHaveCount(1);
 		} else {
 			test.info().annotations.push({
@@ -408,6 +412,7 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect.poll(() => workspaceTabTitles(page)).toEqual(expected);
 
 		await page.reload();
+		await dismissReleaseNotes(page);
 		await expect(page.getByTestId('workspace-tabs')).toBeVisible();
 		await expect.poll(() => workspaceTabTitles(page)).toEqual(expected);
 	});
@@ -509,6 +514,7 @@ test('uploads a CSV through the visible composer chooser without a managed Termi
 		);
 		await page.addInitScript((token) => localStorage.setItem('token', token), uploadChat.token);
 		await page.goto(`/c/${uploadChat.chatId}`);
+		await dismissReleaseNotes(page);
 		const moreButton = page.locator('#input-menu-button');
 		await expect(moreButton).toBeVisible();
 		await moreButton.click();

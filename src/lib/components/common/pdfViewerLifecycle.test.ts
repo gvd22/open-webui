@@ -5,9 +5,10 @@ const source = readFileSync(new URL('./PDFViewer.svelte', import.meta.url), 'utf
 
 describe('PDF viewer load lifecycle contract', () => {
 	it('commits an input only after its first page rendered', () => {
-		expect(source.indexOf('loadedData = data;')).toBeGreaterThan(
-			source.indexOf("throw new Error('Failed to render PDF first page')")
+		expect(source.indexOf("dispatch('preview-rendered', data)")).toBeGreaterThan(
+			source.indexOf('await renderAllPages();')
 		);
+		expect(source).toContain('if (token !== loadToken)');
 		expect(source).toContain('pdfDoc = null;');
 		expect(source).toContain('await candidatePdfDoc.destroy();');
 	});

@@ -5,8 +5,7 @@ const source = readFileSync(new URL('./PDFViewer.svelte', import.meta.url), 'utf
 
 describe('PDF viewer accessibility contract', () => {
 	it('announces the current page with a reactive region label', () => {
-		expect(source).toContain(
-			'aria-label={`PDF document, page ${currentPage} of ${pdfDoc?.numPages ?? 0}`}'
-		);
+		expect(source).toContain('`PDF document, page ${currentPage} of ${pdfDoc?.numPages ?? 0}`');
+		expect(source).toContain('`${itemLabel}, ${selectedPage} of ${pageCount}`');
 	});
 });

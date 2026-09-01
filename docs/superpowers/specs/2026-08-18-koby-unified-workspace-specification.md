@@ -1,14 +1,14 @@
 # KOBY Unified Workspace - Gesamtspezifikation
 
 **Status:** Verbindliche Produkt- und Verhaltensspezifikation  
-**Version:** 1.2
-**Datum:** 31. August 2026
+**Version:** 1.3
+**Datum:** 1. September 2026
 
-### Upgrade-Vertrag fuer Open WebUI 0.11.1
+### Upgrade-Vertrag fuer Open WebUI 0.11.3
 
-Die Grundlage ist der exakte Upstream-Tag `v0.11.1`, nicht ein beweglicher `main`-Stand.
+Die Grundlage ist der exakte Upstream-Tag `v0.11.3`, nicht ein beweglicher `main`-Stand.
 Der zugehoerige Konfigurations- und Abnahmebericht ist
-[Workspace 0.11.1 Upgrade Acceptance](2026-08-31-workspace-v0111-upgrade-acceptance.md).
+[Workspace 0.11.3 Upgrade Acceptance](2026-09-01-workspace-v0113-upgrade-acceptance.md).
 Dieser Bericht unterscheidet nachgewiesenes Verhalten von noch offenen Abnahmen.
 
 - Native Tool-Freigaben und `ask_user` werden verwendet. Wenn Tool Permissions aktiv sind,

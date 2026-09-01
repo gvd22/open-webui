@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
+	import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
@@ -13,21 +13,17 @@
 		getDocumentWheelZoomDelta,
 		panDocumentViewport
 	} from './documentZoom';
-	import {
-		getOwnedPreviousPdfToDestroy,
-		getPageAnchor,
-		getScrollTopForPageAnchor,
-		type PdfPageMetric
-	} from './pdfViewerHelpers';
 
 	export let url: string | null = null;
 	export let data: ArrayBuffer | Uint8Array | null = null;
 	export let className = 'w-full h-[70vh]';
 	export let targetPage: number | null = null;
+	export let singlePage = false;
+	export let itemLabel = 'Page';
+	export let onPageChange: ((page: number) => void) | null = null;
 
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
 	type PdfTextLayer = InstanceType<typeof import('pdfjs-dist').TextLayer>;
-
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': ArrayBuffer | Uint8Array | null;
 		'preview-failed': ArrayBuffer | Uint8Array | null;
@@ -41,76 +37,86 @@
 	let pzInstance: PanZoom | null = null;
 	let zoomLevel = 1;
 	let rerenderTimer: ReturnType<typeof setTimeout> | null = null;
-	let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-	let resizeFrame: number | null = null;
 	let lastRenderedZoom = 1;
-	let mounted = false;
-	let loadedData: ArrayBuffer | Uint8Array | null = null;
-	let loadedUrl: string | null = null;
-	let loadGeneration = 0;
-	let fetchController: AbortController | null = null;
-	let pdfLoadingTask: any = null;
-	let resizeObserver: ResizeObserver | null = null;
+	let pageCount = 0;
+	let renderedPage = 0;
 	let currentPage = 1;
+	let loadToken = 0;
+	let renderToken = 0;
+	let fetchController: AbortController | null = null;
+	let pdfLoadingTask: ReturnType<typeof import('pdfjs-dist').getDocument> | null = null;
+	let scrollFrame: number | null = null;
+	let mounted = false;
+	let loadedSource: ArrayBuffer | Uint8Array | string | null = null;
+	let wheelDelta = 0;
+	let lastWheelNavigationAt = 0;
+	const wheelNavigationThreshold = 80;
+	const wheelNavigationCooldown = 450;
+	const pageShortcutKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
-	let pageObserver: IntersectionObserver | null = null;
-	const pageTextLayers = new Map<HTMLElement, any>();
-	const pageRenderTasks = new Map<HTMLElement, any>();
-	const pageRenderTokens = new WeakMap<HTMLElement, symbol>();
+	$: selectedPage = singlePage
+		? (clampDocumentTargetPage(targetPage, pageCount) ?? 1)
+		: currentPage;
 
-	const getPageMetrics = (): PdfPageMetric[] =>
-		[...(sceneElement?.querySelectorAll<HTMLElement>('.pdf-page-wrapper') ?? [])].map(
-			(wrapper) => ({
-				pageNumber: Number(wrapper.dataset.pageNumber),
-				top: wrapper.offsetTop,
-				height: wrapper.offsetHeight
-			})
-		);
-
-	const updateCurrentPage = () => {
-		const anchor = getPageAnchor(getPageMetrics(), outerContainer?.scrollTop ?? 0);
-		if (anchor) currentPage = anchor.pageNumber;
+	const cancelPendingLoad = () => {
+		fetchController?.abort();
+		fetchController = null;
+		const loadingTask = pdfLoadingTask;
+		pdfLoadingTask = null;
+		loadingTask?.destroy?.();
 	};
 
-	const releasePage = (wrapper: HTMLElement) => {
-		pageRenderTokens.delete(wrapper);
-		pageRenderTasks.get(wrapper)?.cancel?.();
-		pageRenderTasks.delete(wrapper);
-		try {
-			pageTextLayers.get(wrapper)?.cancel?.();
-		} catch (_) {}
-		pageTextLayers.delete(wrapper);
-		wrapper.replaceChildren();
-		wrapper.dataset.renderState = 'idle';
-	};
+	// Keep a reference to TextLayer instances so we can update/cancel them
+	let textLayerInstances: PdfTextLayer[] = [];
 
-	const releaseAllPages = () => {
-		pageObserver?.disconnect();
-		pageObserver = null;
-		for (const wrapper of sceneElement?.querySelectorAll<HTMLElement>('.pdf-page-wrapper') ?? []) {
-			releasePage(wrapper);
+	const copyPdfData = (pdfData: ArrayBuffer | Uint8Array) =>
+		pdfData instanceof Uint8Array ? pdfData.slice() : pdfData.slice(0);
+
+	const cancelTextLayers = () => {
+		for (const tl of textLayerInstances) {
+			try {
+				tl.cancel();
+			} catch {
+				// Text layers can already be resolved or canceled during rerenders.
+			}
 		}
+		textLayerInstances = [];
 	};
 
 	const initPanzoom = () => {
-		pzInstance?.dispose();
-		if (!sceneElement) return;
-		pzInstance = panzoom(sceneElement, {
-			bounds: true,
-			boundsPadding: 0.1,
-			minZoom: 0.5,
-			maxZoom: DOCUMENT_ZOOM_MAX / 100,
-			beforeWheel: () => true,
-			beforeMouseDown: () => Math.abs((pzInstance?.getTransform().scale ?? 1) - 1) < 0.01
-		});
-		pzInstance.on('zoom', () => {
-			zoomLevel = pzInstance?.getTransform().scale ?? 1;
-			if (rerenderTimer) clearTimeout(rerenderTimer);
-			rerenderTimer = setTimeout(() => {
-				const detailRatio = zoomLevel / lastRenderedZoom;
-				if (detailRatio >= 1.75 || detailRatio <= 0.6) rerenderVisiblePages(zoomLevel);
-			}, 400);
-		});
+		if (pzInstance) {
+			pzInstance.dispose();
+		}
+		if (sceneElement) {
+			pzInstance = panzoom(sceneElement, {
+				bounds: true,
+				boundsPadding: 0.1,
+				minZoom: 0.5,
+				maxZoom: DOCUMENT_ZOOM_MAX / 100,
+				beforeWheel: () => true,
+				beforeMouseDown: (e) => {
+					// Only allow drag-to-pan when zoomed in (not at default scale)
+					if ((e?.target as HTMLElement | null)?.closest?.('.textLayer')) {
+						return true;
+					}
+					const transform = pzInstance?.getTransform();
+					if (transform && Math.abs(transform.scale - 1) < 0.01) {
+						return true; // cancel panzoom mouse handling at 1x — allow text selection / normal interaction
+					}
+					return false;
+				}
+			});
+			pzInstance.on('zoom', () => {
+				zoomLevel = pzInstance?.getTransform()?.scale ?? 1;
+				// Debounced re-render at new resolution so text stays crisp
+				if (rerenderTimer) clearTimeout(rerenderTimer);
+				rerenderTimer = setTimeout(() => {
+					if (Math.abs(zoomLevel - lastRenderedZoom) > 0.05) {
+						rerenderPages(zoomLevel);
+					}
+				}, 300);
+			});
+		}
 	};
 
 	const setZoom = (percent: number, anchorX?: number, anchorY?: number) => {
@@ -124,389 +130,435 @@
 		zoomLevel = pzInstance.getTransform().scale;
 	};
 
-	const handleDocumentWheel = (event: WheelEvent) => {
-		if (!event.ctrlKey && !event.metaKey) {
-			if (zoomLevel <= 1) return;
-			event.preventDefault();
-			panDocumentViewport(outerContainer, event.deltaX, event.deltaY);
-			return;
-		}
-		event.preventDefault();
-		const rect = outerContainer.getBoundingClientRect();
-		setZoom(
-			zoomLevel * 100 + getDocumentWheelZoomDelta(event.deltaY),
-			event.clientX - rect.left,
-			event.clientY - rect.top
-		);
-	};
-
 	export const resetView = () => {
-		if (!pzInstance) return;
-		pzInstance.moveTo(0, 0);
-		pzInstance.zoomAbs(0, 0, 1);
-		zoomLevel = 1;
-		rerenderVisiblePages(1);
+		if (pzInstance) {
+			pzInstance.moveTo(0, 0);
+			pzInstance.zoomAbs(0, 0, 1);
+			zoomLevel = 1;
+			rerenderPages(1);
+		}
 	};
 
-	const renderPage = async (wrapper: HTMLElement): Promise<boolean> => {
-		if (!pdfDoc || wrapper.dataset.renderState !== 'idle') return false;
-		const documentToRender = pdfDoc;
-		const pageNumber = Number(wrapper.dataset.pageNumber);
-		const renderToken = Symbol(`pdf-page-${pageNumber}`);
-		pageRenderTokens.set(wrapper, renderToken);
-		wrapper.dataset.renderState = 'loading';
-		const pdfjs = await import('pdfjs-dist');
-		if (pageRenderTokens.get(wrapper) !== renderToken) return false;
-
-		let renderTask: any = null;
-		try {
-			const page = await documentToRender.getPage(pageNumber);
-			if (documentToRender !== pdfDoc || pageRenderTokens.get(wrapper) !== renderToken)
-				return false;
-			const viewport = page.getViewport({ scale: 1 });
-			wrapper.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
-			const containerWidth = Math.max(
-				320,
-				Math.min((outerContainer?.clientWidth || 800) - 24, 1024)
-			);
-			const cssScale = containerWidth / viewport.width;
-			let renderScale = cssScale * zoomLevel * (window.devicePixelRatio || 1);
-			const estimatedPixels = viewport.width * renderScale * (viewport.height * renderScale);
-			const maxCanvasPixels = 24_000_000;
-			if (estimatedPixels > maxCanvasPixels)
-				renderScale *= Math.sqrt(maxCanvasPixels / estimatedPixels);
-			const scaledViewport = page.getViewport({ scale: renderScale });
-			const cssViewport = page.getViewport({ scale: cssScale });
-			wrapper.style.setProperty('--scale-factor', String(cssViewport.scale));
-
-			const canvas = document.createElement('canvas');
-			canvas.width = scaledViewport.width;
-			canvas.height = scaledViewport.height;
-			canvas.style.cssText = 'display:block;width:100%;height:auto;';
-			const canvasContext = canvas.getContext('2d');
-			if (!canvasContext) throw new Error('PDF canvas is unavailable');
-			renderTask = page.render({ canvasContext, viewport: scaledViewport });
-			pageRenderTasks.set(wrapper, renderTask);
-			await renderTask.promise;
-			if (
-				documentToRender !== pdfDoc ||
-				!wrapper.isConnected ||
-				pageRenderTokens.get(wrapper) !== renderToken
-			)
-				return false;
-
-			const textLayerDiv = document.createElement('div');
-			textLayerDiv.className = 'textLayer';
-			const textLayer = new pdfjs.TextLayer({
-				textContentSource: await page.getTextContent(),
-				container: textLayerDiv,
-				viewport: cssViewport
-			});
-			await textLayer.render();
-			if (
-				documentToRender !== pdfDoc ||
-				!wrapper.isConnected ||
-				pageRenderTokens.get(wrapper) !== renderToken
-			) {
-				textLayer.cancel?.();
-				return false;
-			}
-			wrapper.replaceChildren(canvas, textLayerDiv);
-			pageTextLayers.set(wrapper, textLayer);
-			wrapper.dataset.renderState = 'rendered';
-			return true;
-		} catch (cause) {
-			if ((cause as { name?: string })?.name !== 'RenderingCancelledException') {
-				console.error(`PDF page ${pageNumber} render failed:`, cause);
-			}
-			if (wrapper.isConnected && pageRenderTokens.get(wrapper) === renderToken)
-				releasePage(wrapper);
-			return false;
-		} finally {
-			if (pageRenderTasks.get(wrapper) === renderTask) pageRenderTasks.delete(wrapper);
+	export const scrollToPage = async (page: number | null) => {
+		targetPage = page;
+		if (singlePage) {
+			if (targetPage) onPageChange?.(targetPage);
+		} else {
+			await scrollToTargetPage();
 		}
+	};
+
+	const selectPage = async (page: number) => {
+		if (!pdfDoc) return;
+		const nextPage = clampDocumentTargetPage(page, pdfDoc.numPages);
+		if (!nextPage || nextPage === selectedPage) return;
+
+		targetPage = nextPage;
+		currentPage = nextPage;
+		onPageChange?.(nextPage);
+		if (!singlePage) await scrollToTargetPage();
 	};
 
 	const scrollToTargetPage = async () => {
-		if (!pdfDoc) return;
+		if (!outerContainer || !sceneElement || !pdfDoc) return;
 		const page = clampDocumentTargetPage(targetPage, pdfDoc.numPages);
 		if (!page) return;
+
+		if (singlePage) return;
+
 		await tick();
-		scrollToPage(page, 'auto');
+		const pageWrapper = sceneElement.querySelectorAll('.pdf-page-wrapper')[page - 1] as
+			| HTMLElement
+			| undefined;
+		pageWrapper?.scrollIntoView({ block: 'start' });
+		currentPage = page;
+		onPageChange?.(page);
 	};
 
-	const observePages = () => {
-		pageObserver?.disconnect();
-		pageObserver = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const wrapper = entry.target as HTMLElement;
-					if (entry.isIntersecting) void renderPage(wrapper);
-					else if (wrapper.dataset.renderState !== 'idle') releasePage(wrapper);
-				}
-			},
-			{ root: outerContainer, rootMargin: '150% 0px' }
-		);
-		for (const wrapper of sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper')) {
-			pageObserver.observe(wrapper);
+	const syncVisiblePage = () => {
+		scrollFrame = null;
+		if (singlePage || !outerContainer || !sceneElement || !pdfDoc) return;
+
+		const marker = outerContainer.getBoundingClientRect().top + outerContainer.clientHeight * 0.35;
+		let bestPage = currentPage;
+		let bestDistance = Number.POSITIVE_INFINITY;
+
+		for (const wrapper of sceneElement.querySelectorAll('.pdf-page-wrapper')) {
+			const el = wrapper as HTMLElement;
+			const page = Number(el.dataset.pageNumber);
+			if (!page) continue;
+
+			const rect = el.getBoundingClientRect();
+			const distance =
+				marker < rect.top ? rect.top - marker : marker > rect.bottom ? marker - rect.bottom : 0;
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestPage = page;
+			}
+		}
+
+		if (bestPage !== currentPage) {
+			currentPage = bestPage;
+			onPageChange?.(bestPage);
 		}
 	};
 
-	const rerenderVisiblePages = (forZoom: number) => {
-		if (!pdfDoc || !sceneElement || !outerContainer) return;
-		const root = outerContainer.getBoundingClientRect();
-		for (const wrapper of sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper')) {
-			const rect = wrapper.getBoundingClientRect();
-			if (rect.bottom >= root.top - root.height && rect.top <= root.bottom + root.height) {
-				releasePage(wrapper);
-				void renderPage(wrapper);
+	const handleScroll = () => {
+		if (singlePage || scrollFrame !== null) return;
+		scrollFrame = requestAnimationFrame(syncVisiblePage);
+	};
+
+	// Re-render existing canvases at a new zoom level (preserves panzoom transform)
+	const rerenderPages = async (forZoom: number) => {
+		if (!pdfDoc || !sceneElement) return;
+		const pdfjs = await import('pdfjs-dist');
+		const dpr = window.devicePixelRatio || 1;
+
+		const pageWrappers = sceneElement.querySelectorAll('.pdf-page-wrapper');
+
+		cancelTextLayers();
+
+		for (let i = 0; i < pageWrappers.length; i++) {
+			const page = await pdfDoc.getPage(singlePage ? selectedPage : i + 1);
+			const viewport = page.getViewport({ scale: 1 });
+			const cssScale = getCssScale(viewport);
+			const renderScale = cssScale * forZoom * dpr;
+			const scaledViewport = page.getViewport({ scale: renderScale });
+			const cssViewport = page.getViewport({ scale: cssScale });
+
+			const wrapper = pageWrappers[i] as HTMLElement;
+			// Update the CSS custom property so textLayer dimensions resolve correctly
+			wrapper.style.setProperty('--scale-factor', String(cssViewport.scale));
+
+			const canvas = wrapper.querySelector('canvas')!;
+			canvas.width = scaledViewport.width;
+			canvas.height = scaledViewport.height;
+
+			const ctx = canvas.getContext('2d');
+			if (ctx) {
+				await page.render({ canvas, canvasContext: ctx, viewport: scaledViewport }).promise;
+			}
+
+			// Rebuild text layer
+			const textLayerDiv = wrapper.querySelector('.textLayer') as HTMLElement;
+			if (textLayerDiv) {
+				textLayerDiv.innerHTML = '';
+
+				const textContent = await page.getTextContent();
+				const textLayer = new pdfjs.TextLayer({
+					textContentSource: textContent,
+					container: textLayerDiv,
+					viewport: cssViewport
+				});
+				await textLayer.render();
+				textLayerInstances.push(textLayer);
 			}
 		}
 		lastRenderedZoom = forZoom;
 	};
 
-	const preparePagePlaceholders = (documentToRender: any, targetScene: HTMLDivElement) => {
-		const placeholders = document.createDocumentFragment();
-		for (let pageNumber = 1; pageNumber <= documentToRender.numPages; pageNumber++) {
+	const getCssScale = (viewport: { width: number; height: number }) => {
+		if (!singlePage) return (outerContainer?.clientWidth || 800) / viewport.width;
+
+		const availableWidth = Math.max(320, (outerContainer?.clientWidth || 800) - 64);
+		const availableHeight = Math.max(220, (outerContainer?.clientHeight || 600) - 64);
+		return Math.min(1, availableWidth / viewport.width, availableHeight / viewport.height);
+	};
+
+	const renderAllPages = async () => {
+		if (!pdfDoc || !sceneElement) return;
+		const token = ++renderToken;
+
+		// Clear previous content
+		sceneElement.innerHTML = '';
+
+		cancelTextLayers();
+
+		const pdfjs = await import('pdfjs-dist');
+		const dpr = window.devicePixelRatio || 1;
+		const wrappers: HTMLElement[] = [];
+		const firstPage = singlePage ? selectedPage : 1;
+		const lastPage = singlePage ? selectedPage : pdfDoc.numPages;
+
+		for (let i = firstPage; i <= lastPage; i++) {
+			const page = await pdfDoc.getPage(i);
+			if (token !== renderToken) return;
+			const viewport = page.getViewport({ scale: 1 });
+
+			// Scale to fit container width
+			const cssScale = getCssScale(viewport);
+			const renderScale = cssScale * dpr;
+			const scaledViewport = page.getViewport({ scale: renderScale });
+			const cssViewport = page.getViewport({ scale: cssScale });
+
+			// Create page wrapper (positioned container for canvas + text layer)
 			const wrapper = document.createElement('div');
 			wrapper.className = 'pdf-page-wrapper';
-			wrapper.dataset.pageNumber = String(pageNumber);
-			wrapper.dataset.renderState = 'idle';
-			wrapper.style.cssText = 'position:relative;width:min(100%, 1024px);aspect-ratio:1 / 1.4142;';
-			placeholders.appendChild(wrapper);
-		}
-		targetScene.appendChild(placeholders);
-	};
+			wrapper.dataset.pageNumber = String(i);
+			wrapper.style.position = 'relative';
+			wrapper.style.width = `${Math.round(cssScale * viewport.width)}px`;
+			wrapper.style.height = `${Math.round(cssScale * viewport.height)}px`;
+			wrapper.style.display = 'block';
+			// pdfjs TextLayer uses --total-scale-factor (= --scale-factor * --user-unit)
+			// to position/size text spans. We must set --scale-factor so the calc resolves.
+			wrapper.style.setProperty('--scale-factor', String(cssViewport.scale));
 
-	const scrollToPage = (pageNumber: number, behavior: ScrollBehavior = 'smooth') => {
-		const page = sceneElement?.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
-		if (!page || !outerContainer) return;
-		outerContainer.scrollTo({ top: page.offsetTop, behavior });
-		currentPage = pageNumber;
-	};
+			if (i > 1) {
+				wrapper.style.marginTop = '4px';
+			}
 
-	const movePage = (change: number) => {
-		if (!pdfDoc) return;
-		scrollToPage(Math.max(1, Math.min(pdfDoc.numPages, currentPage + change)));
-	};
+			// Create canvas
+			const canvas = document.createElement('canvas');
+			canvas.width = scaledViewport.width;
+			canvas.height = scaledViewport.height;
+			// CSS size stays at the CSS-pixel dimensions for layout
+			canvas.style.width = `${Math.round(cssScale * viewport.width)}px`;
+			canvas.style.height = `${Math.round(cssScale * viewport.height)}px`;
+			canvas.style.display = 'block';
+			wrapper.appendChild(canvas);
 
-	const handleResize = () => {
-		if (!pdfDoc || !outerContainer) return;
-		const anchor = getPageAnchor(getPageMetrics(), outerContainer.scrollTop);
-		if (resizeTimer) clearTimeout(resizeTimer);
-		resizeTimer = setTimeout(() => {
-			if (!pdfDoc || !outerContainer) return;
-			rerenderVisiblePages(zoomLevel);
-			if (resizeFrame) cancelAnimationFrame(resizeFrame);
-			resizeFrame = requestAnimationFrame(() => {
-				outerContainer.scrollTop = getScrollTopForPageAnchor(getPageMetrics(), anchor);
-				updateCurrentPage();
+			const ctx = canvas.getContext('2d');
+			if (!ctx) continue;
+
+			await page.render({
+				canvas,
+				canvasContext: ctx,
+				viewport: scaledViewport
+			}).promise;
+			if (token !== renderToken) return;
+
+			// Create text layer overlay — pdfjs setLayerDimensions handles its sizing
+			const textLayerDiv = document.createElement('div');
+			textLayerDiv.className = 'textLayer';
+			wrapper.appendChild(textLayerDiv);
+
+			const textContent = await page.getTextContent();
+			const textLayer = new pdfjs.TextLayer({
+				textContentSource: textContent,
+				container: textLayerDiv,
+				viewport: cssViewport
 			});
-		}, 120);
+			await textLayer.render();
+			if (token !== renderToken) return;
+			textLayerInstances.push(textLayer);
+
+			wrappers.push(wrapper);
+		}
+
+		sceneElement.replaceChildren(...wrappers);
+		lastRenderedZoom = 1;
+		renderedPage = singlePage ? selectedPage : 0;
+		initPanzoom();
+		await scrollToTargetPage();
+		syncVisiblePage();
 	};
 
-	const cancelPendingLoad = () => {
-		fetchController?.abort();
-		fetchController = null;
-		const loadingTask = pdfLoadingTask;
-		pdfLoadingTask = null;
-		void Promise.resolve(loadingTask?.destroy?.()).catch(() => {});
+	const handleWheel = (e: WheelEvent) => {
+		if (e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+			const rect = outerContainer.getBoundingClientRect();
+			setZoom(
+				zoomLevel * 100 + getDocumentWheelZoomDelta(e.deltaY),
+				e.clientX - rect.left,
+				e.clientY - rect.top
+			);
+			return;
+		}
+
+		const transform = pzInstance?.getTransform();
+		if (transform && Math.abs(transform.scale - 1) >= 0.01) {
+			e.preventDefault();
+			const beforeLeft = outerContainer.scrollLeft;
+			const beforeTop = outerContainer.scrollTop;
+			panDocumentViewport(outerContainer, e.deltaX, e.deltaY);
+			if (beforeLeft === outerContainer.scrollLeft && beforeTop === outerContainer.scrollTop) {
+				pzInstance?.moveBy(-e.deltaX, -e.deltaY, false);
+			}
+			zoomLevel = pzInstance?.getTransform()?.scale ?? 1;
+			return;
+		}
+
+		if (!singlePage) return;
+
+		e.preventDefault();
+		if (pageCount <= 1) return;
+
+		const multiplier = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? outerContainer.clientHeight : 1;
+		const dominantDelta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+		wheelDelta += dominantDelta * multiplier;
+
+		const now = Date.now();
+		if (Math.abs(wheelDelta) < wheelNavigationThreshold) return;
+		if (now - lastWheelNavigationAt < wheelNavigationCooldown) {
+			wheelDelta = 0;
+			return;
+		}
+
+		lastWheelNavigationAt = now;
+		void selectPage(selectedPage + (wheelDelta > 0 ? 1 : -1));
+		wheelDelta = 0;
+	};
+
+	const handleKeyDown = (e: KeyboardEvent) => {
+		if (
+			!singlePage ||
+			e.defaultPrevented ||
+			e.altKey ||
+			e.ctrlKey ||
+			e.metaKey ||
+			pageCount <= 1 ||
+			!pageShortcutKeys.includes(e.key)
+		) {
+			return;
+		}
+
+		e.preventDefault();
+		void selectPage(selectedPage + (e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 1));
+	};
+
+	const focusViewer = () => {
+		if (!outerContainer?.contains(document.activeElement)) outerContainer?.focus();
 	};
 
 	const loadPdf = async () => {
-		const generation = ++loadGeneration;
-		cancelPendingLoad();
-		if (!url && !data) {
-			loading = false;
-			return;
-		}
-		const previousAnchor = getPageAnchor(getPageMetrics(), outerContainer?.scrollTop ?? 0);
-		const previousZoom = zoomLevel;
-		const previousLoadedData = loadedData;
-		const previousLoadedUrl = loadedUrl;
-		let candidatePdfDoc: any = null;
-		let previousPdfDoc: any = null;
-		let previousScene: ChildNode[] = [];
-		const releaseOwnedPreviousPdf = () => {
-			const documentToDestroy = getOwnedPreviousPdfToDestroy(previousPdfDoc, pdfDoc);
-			previousPdfDoc = null;
-			void documentToDestroy?.destroy();
-		};
+		if (!url && !data) return;
 
+		const source = data ?? url;
+		if (source === loadedSource && pdfDoc) return;
+		const token = ++loadToken;
+		cancelPendingLoad();
+		loadedSource = source;
 		loading = true;
 		error = '';
+		renderedPage = 0;
+		pageCount = 0;
+		pzInstance?.dispose();
+		cancelTextLayers();
+		pdfDoc?.destroy();
+		pdfDoc = null;
+
 		try {
 			const pdfjs = await import('pdfjs-dist');
 			pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
 			let pdfData: ArrayBuffer | Uint8Array;
-			if (data) pdfData = data;
-			else {
+			if (data) {
+				pdfData = copyPdfData(data);
+			} else {
+				// Fetch with credentials so auth cookies are sent
 				const controller = new AbortController();
 				fetchController = controller;
 				try {
-					const response = await fetch(url!, { credentials: 'include', signal: controller.signal });
-					if (!response.ok) throw new Error(`HTTP ${response.status}`);
-					pdfData = await response.arrayBuffer();
+					const res = await fetch(url!, {
+						credentials: 'include',
+						signal: controller.signal
+					});
+					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					pdfData = await res.arrayBuffer();
 				} finally {
 					if (fetchController === controller) fetchController = null;
 				}
 			}
 			const loadingTask = pdfjs.getDocument({ data: pdfData });
 			pdfLoadingTask = loadingTask;
+			let candidatePdfDoc: PdfDocument;
 			try {
 				candidatePdfDoc = await loadingTask.promise;
 			} finally {
 				if (pdfLoadingTask === loadingTask) pdfLoadingTask = null;
 			}
-			if (candidatePdfDoc.numPages > 1000) throw new Error('PDF exceeds the viewer page limit');
-			if (generation !== loadGeneration) {
+			if (token !== loadToken) {
 				await candidatePdfDoc.destroy();
 				return;
 			}
-
-			const candidateScene = document.createElement('div');
-			preparePagePlaceholders(candidatePdfDoc, candidateScene);
-			previousPdfDoc = pdfDoc;
-			previousScene = [...sceneElement.childNodes];
-			releaseAllPages();
-			pzInstance?.dispose();
-			sceneElement.replaceChildren(...candidateScene.childNodes);
 			pdfDoc = candidatePdfDoc;
-			lastRenderedZoom = 1;
-			initPanzoom();
-			if (previousZoom !== 1 && pzInstance) {
-				pzInstance.zoomAbs(0, 0, previousZoom);
-				zoomLevel = previousZoom;
+			pageCount = pdfDoc.numPages;
+			currentPage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
+			targetPage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
+			await renderAllPages();
+			if (token === loadToken) dispatch('preview-rendered', data);
+		} catch (e) {
+			if (token === loadToken) {
+				if ((e as { name?: string })?.name === 'AbortError') return;
+				console.error('PDF render error:', e);
+				error = 'Failed to load PDF.';
+				dispatch('preview-failed', data);
 			}
-			outerContainer.scrollTop = getScrollTopForPageAnchor(getPageMetrics(), previousAnchor);
-			updateCurrentPage();
-			const firstPage = sceneElement.querySelector<HTMLElement>('.pdf-page-wrapper');
-			if (!firstPage || !(await renderPage(firstPage)))
-				throw new Error('Failed to render PDF first page');
-			if (generation !== loadGeneration) {
-				releaseOwnedPreviousPdf();
-				return;
-			}
-			loadedData = data;
-			loadedUrl = url;
-			observePages();
-			dispatch('preview-rendered', data);
-			releaseOwnedPreviousPdf();
-		} catch (cause) {
-			if (generation !== loadGeneration) {
-				releaseOwnedPreviousPdf();
-				return;
-			}
-			if (candidatePdfDoc && candidatePdfDoc === pdfDoc && previousPdfDoc) {
-				releaseAllPages();
-				pzInstance?.dispose();
-				sceneElement.replaceChildren(...previousScene);
-				pdfDoc = previousPdfDoc;
-				previousPdfDoc = null;
-				initPanzoom();
-				if (previousZoom !== 1 && pzInstance) {
-					pzInstance.zoomAbs(0, 0, previousZoom);
-					zoomLevel = previousZoom;
-				}
-				outerContainer.scrollTop = getScrollTopForPageAnchor(getPageMetrics(), previousAnchor);
-				observePages();
-				void candidatePdfDoc.destroy();
-			} else if (candidatePdfDoc && candidatePdfDoc === pdfDoc) {
-				releaseAllPages();
-				pzInstance?.dispose();
-				sceneElement.replaceChildren();
-				pdfDoc = null;
-				zoomLevel = 1;
-				lastRenderedZoom = 1;
-				currentPage = 1;
-				loadedData = previousLoadedData;
-				loadedUrl = previousLoadedUrl;
-				await candidatePdfDoc.destroy();
-			} else if (candidatePdfDoc && candidatePdfDoc !== pdfDoc) await candidatePdfDoc.destroy();
-			console.error('PDF render error:', cause);
-			error = 'Failed to load PDF.';
-			dispatch('preview-failed', data);
 		} finally {
-			if (generation === loadGeneration) loading = false;
+			if (token === loadToken) loading = false;
 		}
 	};
 
 	onMount(() => {
 		mounted = true;
-		resizeObserver = new ResizeObserver(handleResize);
-		resizeObserver.observe(outerContainer);
+		loadPdf();
 	});
 
-	$: if (!loading && pdfDoc && targetPage) {
+	$: if (mounted && (data || url)) {
+		void loadPdf();
+	}
+
+	$: if (!loading && pdfDoc && singlePage && targetPage && selectedPage !== renderedPage) {
+		void renderAllPages();
+	}
+
+	$: if (!loading && pdfDoc && !singlePage && targetPage) {
 		void scrollToTargetPage();
 	}
 
 	onDestroy(() => {
-		mounted = false;
-		loadGeneration += 1;
+		loadToken++;
+		renderToken++;
 		cancelPendingLoad();
+		if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
 		if (rerenderTimer) clearTimeout(rerenderTimer);
-		if (resizeTimer) clearTimeout(resizeTimer);
-		if (resizeFrame) cancelAnimationFrame(resizeFrame);
-		resizeObserver?.disconnect();
 		pzInstance?.dispose();
-		releaseAllPages();
+		cancelTextLayers();
 		if (pdfDoc) {
 			pdfDoc.destroy();
 			pdfDoc = null;
 		}
 	});
-
-	$: if (mounted && (data !== loadedData || url !== loadedUrl)) void loadPdf();
 </script>
 
 <div class="relative {className}">
-	{#if loading && !pdfDoc}
+	{#if loading}
 		<div class="absolute inset-0 flex items-center justify-center">
 			<Spinner className="size-5" />
 		</div>
-	{:else if loading}
-		<div
-			role="status"
-			aria-label="Updating PDF preview"
-			class="absolute right-3 top-3 z-20 rounded-full bg-white/90 p-2 shadow-sm dark:bg-gray-850/90"
-		>
-			<Spinner className="size-4" />
-		</div>
-	{:else if error && !pdfDoc}
-		<div
-			role="alert"
-			class="absolute inset-0 flex items-center justify-center text-sm text-red-500"
-		>
-			{error}
-		</div>
 	{:else if error}
-		<div
-			role="alert"
-			class="absolute bottom-12 left-1/2 z-20 -translate-x-1/2 rounded-full bg-red-50 px-3 py-1.5 text-xs text-red-700 shadow-sm dark:bg-red-950/90 dark:text-red-200"
-		>
-			The latest update could not be displayed. Showing the previous version.
+		<div class="absolute inset-0 flex items-center justify-center text-sm text-red-500">
+			{error}
 		</div>
 	{/if}
 
 	<div
-		class="h-full overflow-auto"
+		class={singlePage
+			? 'overflow-hidden h-full flex items-center justify-center overscroll-contain'
+			: 'overflow-y-auto h-full'}
 		bind:this={outerContainer}
 		role="region"
-		aria-label={`PDF document, page ${currentPage} of ${pdfDoc?.numPages ?? 0}`}
-		on:scroll={updateCurrentPage}
-		on:wheel|nonpassive={handleDocumentWheel}
+		aria-label={singlePage
+			? `${itemLabel}, ${selectedPage} of ${pageCount}`
+			: `PDF document, page ${currentPage} of ${pdfDoc?.numPages ?? 0}`}
+		tabindex="0"
+		on:scroll={handleScroll}
+		on:wheel|nonpassive={handleWheel}
+		on:pointerdown={focusViewer}
+		on:keydown={handleKeyDown}
 	>
-		<div bind:this={sceneElement} class="flex w-full flex-col items-center gap-5 px-3"></div>
+		<div bind:this={sceneElement} class={singlePage ? '' : 'w-full'}></div>
 	</div>
 
-	{#if !loading && pdfDoc}
-		<div class="absolute bottom-3 left-1/2 z-30 -translate-x-1/2">
+	{#if !error && pdfDoc}
+		<div class="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
 			<DocumentPagination
-				current={currentPage}
-				total={pdfDoc.numPages}
-				onPrevious={() => movePage(-1)}
-				onNext={() => movePage(1)}
+				current={selectedPage}
+				total={pageCount}
+				previousLabel={`Previous ${itemLabel.toLowerCase()}`}
+				nextLabel={`Next ${itemLabel.toLowerCase()}`}
+				onPrevious={() => selectPage(selectedPage - 1)}
+				onNext={() => selectPage(selectedPage + 1)}
 			>
 				<DocumentZoomControls
 					percent={Math.round(zoomLevel * 100)}
@@ -521,21 +573,28 @@
 </div>
 
 <style>
+	/*
+	 * Minimal textLayer styles extracted from pdfjs-dist/web/pdf_viewer.css.
+	 * These ensure the invisible text spans are positioned exactly over the
+	 * rendered canvas so that browser-native Ctrl+F search and text selection
+	 * work correctly.
+	 */
 	:global(.textLayer) {
 		position: absolute;
+		text-align: initial;
 		inset: 0;
 		overflow: clip;
+		opacity: 1;
 		line-height: 1;
 		-webkit-text-size-adjust: none;
+		-moz-text-size-adjust: none;
 		text-size-adjust: none;
+		forced-color-adjust: none;
 		transform-origin: 0 0;
+		caret-color: CanvasText;
 		z-index: 0;
-		--user-unit: 1;
-		--total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
-		--min-font-size: 1;
-		--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
-		--min-font-size-inv: calc(1 / var(--min-font-size));
 	}
+
 	:global(.textLayer :is(span, br)) {
 		color: transparent;
 		position: absolute;
@@ -543,6 +602,17 @@
 		cursor: text;
 		transform-origin: 0% 0%;
 	}
+
+	:global(.textLayer) {
+		/* --total-scale-factor is derived from --scale-factor (set on the wrapper)
+		   and --user-unit (defaults to 1). This mirrors the official pdf_viewer.css. */
+		--user-unit: 1;
+		--total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+		--min-font-size: 1;
+		--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+		--min-font-size-inv: calc(1 / var(--min-font-size));
+	}
+
 	:global(.textLayer > :not(.markedContent)),
 	:global(.textLayer .markedContent span:not(.markedContent)) {
 		z-index: 1;
@@ -552,33 +622,47 @@
 		--rotate: 0deg;
 		transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 	}
+
 	:global(.textLayer .markedContent) {
 		display: contents;
 	}
+
 	:global(.textLayer span[role='img']) {
+		-webkit-user-select: none;
+		-moz-user-select: none;
 		user-select: none;
 		cursor: default;
 	}
+
+	/* Selection highlight color */
+	:global(.textLayer ::-moz-selection) {
+		background: rgba(0, 0, 255, 0.25);
+	}
+
 	:global(.textLayer ::selection) {
 		background: rgba(0, 0, 255, 0.25);
 	}
+
+	:global(.textLayer br::-moz-selection) {
+		background: transparent;
+	}
+
 	:global(.textLayer br::selection) {
 		background: transparent;
 	}
+
 	:global(.textLayer .endOfContent) {
 		display: block;
 		position: absolute;
 		inset: 100% 0 0;
 		z-index: 0;
 		cursor: default;
+		-webkit-user-select: none;
+		-moz-user-select: none;
 		user-select: none;
 	}
-	:global(.pdf-page-wrapper) {
-		background: white;
-		box-shadow: 0 16px 42px rgba(25, 24, 22, 0.12);
-		overflow: hidden;
-	}
-	:global(.dark .pdf-page-wrapper) {
-		box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+
+	:global(.textLayer.selecting .endOfContent) {
+		top: 0;
 	}
 </style>

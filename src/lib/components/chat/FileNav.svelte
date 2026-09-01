@@ -31,6 +31,7 @@
 		listFiles,
 		readFile,
 		downloadFileBlob,
+		downloadFilePreview,
 		archiveFromTerminal,
 		uploadToTerminal,
 		createDirectory,
@@ -971,20 +972,32 @@
 					};
 				}
 			} else if (isPdf(filePath) || isSqlite(filePath) || isOffice(filePath)) {
-				const result = await downloadFileBlob(
-					terminal.url,
-					terminal.key,
-					filePath,
-					sessionId,
-					undefined,
-					fileAbortController.signal
-				);
+				const ext = getFileExt(filePath);
+				if (isOffice(filePath) && (ext === 'docx' || ext === 'pptx')) {
+					const preview = await downloadFilePreview(
+						terminal.url,
+						terminal.key,
+						filePath,
+						sessionId
+					);
+					if (preview) nextPdfData = await preview.blob.arrayBuffer();
+				}
+
+				const result = nextPdfData
+					? null
+					: await downloadFileBlob(
+							terminal.url,
+							terminal.key,
+							filePath,
+							sessionId,
+							undefined,
+							fileAbortController.signal
+						);
 				if (result) {
 					const arrayBuffer = await result.blob.arrayBuffer();
 					if (isPdf(filePath)) nextPdfData = arrayBuffer;
 					else if (isSqlite(filePath)) nextSqliteData = arrayBuffer;
 					else {
-						const ext = getFileExt(filePath);
 						try {
 							if (ext === 'docx') {
 								const mammoth = await import('mammoth');

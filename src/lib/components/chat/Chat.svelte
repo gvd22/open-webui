@@ -72,7 +72,11 @@
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
-	import { applyResponseStreamEvent, getOutputText, hasPendingToolInteraction } from './Messages/structuredOutput';
+	import {
+		applyResponseStreamEvent,
+		getOutputText,
+		hasPendingToolInteraction
+	} from './Messages/structuredOutput';
 	import {
 		getCanvasNoteArtifactsFromOutput,
 		hasNewCanvasArtifact,
@@ -1020,20 +1024,25 @@
 
 	$: selectedModelSupportsTerminal = selectedModelIds.some((id) => {
 		const model = $models.find((candidate) => candidate.id === id);
-		return (model?.info?.meta?.capabilities as Record<string, boolean> | undefined)?.terminal ?? false;
+		return (
+			(model?.info?.meta?.capabilities as Record<string, boolean> | undefined)?.terminal ?? false
+		);
 	});
 
 	// KOBY exposes a managed system terminal. Route to it automatically instead of
 	// asking end users to choose infrastructure in the composer.
 	$: if (!$selectedTerminalId && selectedModelSupportsTerminal && !chat?.chat?.terminal_id) {
-		const defaultTerminal = ($terminalServers ?? []).find((terminal) => terminal.id && terminal.contexts?.chat !== false);
+		const defaultTerminal = ($terminalServers ?? []).find(
+			(terminal) => terminal.id && terminal.contexts?.chat !== false
+		);
 		if (defaultTerminal?.id) selectedTerminalId.set(defaultTerminal.id);
 	}
 
 	$: if (
 		$terminalServers !== null &&
 		$selectedTerminalId &&
-		!isTerminalAvailable($selectedTerminalId) && !chat?.chat?.terminal_id
+		!isTerminalAvailable($selectedTerminalId) &&
+		!chat?.chat?.terminal_id
 	) {
 		selectedTerminalId.set(null);
 	}
@@ -1205,6 +1214,7 @@
 	const terminalEventHandler = (type: string, data: any) => {
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
+			if ($settings?.terminalFileDisplay === 'inline') return;
 			if ($workspaceOpenFilePaths.includes(data.path)) {
 				workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
 			}
@@ -1307,7 +1317,11 @@
 				} else if (type === 'chat:active') {
 					if (!data?.active) {
 						taskIds = null;
-						if ($chatId && !$temporaryChatEnabled && hasPendingAssistantLeaf()) {
+						if (
+							$chatId &&
+							!$temporaryChatEnabled &&
+							hasPendingAssistantLeaf(event?.message_id ?? null)
+						) {
 							await loadChat();
 						}
 						if ($chatId && !$temporaryChatEnabled) {
@@ -1587,9 +1601,9 @@
 		} catch {}
 	};
 
-	const hasPendingAssistantLeaf = () =>
-		Object.values(history.messages).some(
-			(message) =>
+	const hasPendingAssistantLeaf = (messageId: string | null = null) =>
+		(messageId ? [history.messages[messageId]] : Object.values(history.messages)).some(
+			(message: any) =>
 				message?.role === 'assistant' && !message.done && (message.childrenIds?.length ?? 0) === 0
 		);
 
@@ -2072,12 +2086,15 @@
 					(index >= 0 ? contents[index] : undefined) ??
 					previousWebPreviews.find((content) => content.previewId === preview.previewId);
 				const files = preview.hasFilePayload ? preview.files : (previous?.files ?? {});
-				const mergedPreview = preserveNewerWebPreview({
-					...previous,
-					...preview,
-					files,
-					content: files[preview.entrypoint]?.content ?? previous?.content ?? ''
-				} as WebPreviewArtifact, previous as WebPreviewArtifact | undefined);
+				const mergedPreview = preserveNewerWebPreview(
+					{
+						...previous,
+						...preview,
+						files,
+						content: files[preview.entrypoint]?.content ?? previous?.content ?? ''
+					} as WebPreviewArtifact,
+					previous as WebPreviewArtifact | undefined
+				);
 				if (index >= 0) {
 					contents = contents.map((content, contentIndex) =>
 						contentIndex === index ? mergedPreview : content
@@ -2105,13 +2122,16 @@
 									content.canvasId === artifact.canvasId ||
 									(artifact.noteId && content.noteId === artifact.noteId)
 							);
-				const mergedArtifact = preserveNewerCanvas({
-					...artifact,
-					noteId: artifact.noteId ?? existing?.noteId,
-					title: existing?.titleEdited ? (existing.title ?? artifact.title) : artifact.title,
-					titleEdited: existing?.titleEdited ?? false,
-					updatedAt: artifact.updatedAt ?? existing?.updatedAt ?? 0
-				}, existing as any);
+				const mergedArtifact = preserveNewerCanvas(
+					{
+						...artifact,
+						noteId: artifact.noteId ?? existing?.noteId,
+						title: existing?.titleEdited ? (existing.title ?? artifact.title) : artifact.title,
+						titleEdited: existing?.titleEdited ?? false,
+						updatedAt: artifact.updatedAt ?? existing?.updatedAt ?? 0
+					},
+					existing as any
+				);
 
 				if (currentIdx >= 0) {
 					contents = contents.map((content, idx) =>
@@ -2333,8 +2353,9 @@
 
 		autoScroll = true;
 
-		await resetInput();
+		// resetInput() must stay last: the selected model's defaults override the draft's selection.
 		await restoreChatInput(sessionStorage.getItem('chat-input'));
+		await resetInput();
 		await chatId.set('');
 		await chatTitle.set('');
 
@@ -2542,7 +2563,10 @@
 				selectedTerminalId.set(chatContent?.terminal_id ?? null);
 				delete params.note_id;
 				chatFiles = structuredClone(chatContent?.files ?? []);
-				const savedCodeInterpreterPreference = getSavedCodeInterpreterPreference(chatContent, history);
+				const savedCodeInterpreterPreference = getSavedCodeInterpreterPreference(
+					chatContent,
+					history
+				);
 				codeInterpreterEnabled = savedCodeInterpreterPreference ?? false;
 
 				// Load tasks from chat-level DB field
@@ -2570,7 +2594,8 @@
 				// If the response is already done, remaining tasks are just background
 				// work (follow-ups, title gen) that shouldn't block the input.
 				const activeTaskIds = taskIds;
-				const currentMessage: { role?: string; done?: boolean; output?: any[] } | null = history.currentId ? history.messages[history.currentId] : null;
+				const currentMessage: { role?: string; done?: boolean; output?: any[] } | null =
+					history.currentId ? history.messages[history.currentId] : null;
 				const pendingTaskIds = await getTaskIdsByChatId(localStorage.token, targetId)
 					.then((res) => res?.task_ids ?? [])
 					.catch((error) => {
@@ -2703,8 +2728,11 @@
 			const combinedPrompt = queuedMessages.map((m) => m.prompt).join('\n\n');
 			const combinedFiles = queuedMessages.flatMap((m) => m.files);
 
-			const workspaceFocus = queuedMessages.every((item) => equal(item.workspaceFocus, queuedMessages[0].workspaceFocus))
-				? queuedMessages[0].workspaceFocus : undefined;
+			const workspaceFocus = queuedMessages.every((item) =>
+				equal(item.workspaceFocus, queuedMessages[0].workspaceFocus)
+			)
+				? queuedMessages[0].workspaceFocus
+				: undefined;
 
 			chatRequestQueues.update((q) => ({
 				...q,
@@ -3641,7 +3669,10 @@
 		return features;
 	};
 
-	const getSavedCodeInterpreterPreference = (chatContent = chat?.chat, messageHistory = history) => {
+	const getSavedCodeInterpreterPreference = (
+		chatContent = chat?.chat,
+		messageHistory = history
+	) => {
 		const chatPreference = chatContent?.features?.code_interpreter;
 		if (typeof chatPreference === 'boolean') return chatPreference;
 

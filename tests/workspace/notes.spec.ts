@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import { dismissReleaseNotes } from './ui';
 
 const CANVAS_ID = `notes-e2e-${Date.now()}`;
 const NOTE_BODY =
@@ -210,6 +211,7 @@ test.describe('promoted note editor lifecycle', () => {
 
 		await page.addInitScript((token) => localStorage.setItem('token', token), fixture.token);
 		await page.goto(`/notes/${fixture.noteId}`);
+		await dismissReleaseNotes(page);
 
 		const editor = page.locator('#note-content-container [contenteditable="true"]');
 		await expect(editor).toContainText('Confirm launch assets');
@@ -223,6 +225,7 @@ test.describe('promoted note editor lifecycle', () => {
 		await page.waitForTimeout(1200);
 
 		await page.reload();
+		await dismissReleaseNotes(page);
 		await expect(editor).toContainText('Confirm launch assets');
 		await expect(editor).toContainText('Owner: Alex');
 		await expect(wordCount).not.toHaveText('0 words');

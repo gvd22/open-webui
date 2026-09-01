@@ -76,13 +76,24 @@ def test_approval_drain_preserves_output_and_rebuilds_fresh_workspace_context(mo
 
         monkeypatch.setattr(middleware, 'is_saved_chat_id', lambda value: value == 'chat-1')
         monkeypatch.setattr(middleware.Chats, 'get_message_by_id_and_message_id', get_message)
-        monkeypatch.setattr(middleware, 'claim_approved_tool_calls', AsyncMock(return_value=(state['output'], [state['output'][0]], False)))
+        monkeypatch.setattr(
+            middleware,
+            'claim_approved_tool_calls',
+            AsyncMock(return_value=(state['output'], [state['output'][0]], False)),
+        )
         monkeypatch.setattr(middleware, 'get_event_emitter_and_caller', AsyncMock(return_value=(None, None)))
         monkeypatch.setattr(middleware, 'execute_tool_call_for_output', execute)
+        monkeypatch.setattr(middleware, 'get_filter_functions', AsyncMock(return_value=[]))
         monkeypatch.setattr(middleware.Chats, 'upsert_message_to_chat_by_id_and_message_id', AsyncMock())
-        monkeypatch.setattr(middleware, 'load_messages_from_db', AsyncMock(return_value=[
-            {'id': 'user-1', 'role': 'user', 'content': 'create two documents'},
-        ]))
+        monkeypatch.setattr(
+            middleware,
+            'load_messages_from_db',
+            AsyncMock(
+                return_value=[
+                    {'id': 'user-1', 'role': 'user', 'content': 'create two documents'},
+                ]
+            ),
+        )
         monkeypatch.setattr(
             middleware.Chats,
             'get_chat_by_id_and_user_id',
@@ -99,6 +110,7 @@ def test_approval_drain_preserves_output_and_rebuilds_fresh_workspace_context(mo
         metadata = {
             'chat_id': 'chat-1',
             'message_id': 'assistant-1',
+            'assistant_message_id': 'assistant-1',
             'user_message_id': 'user-1',
             'workspace_focus': {'kind': 'canvas', 'id': 'original-target'},
             'tools': {'canvas_create_document': {'spec': {}}},
@@ -217,16 +229,22 @@ def test_concurrent_drain_does_not_recover_active_tool_call(monkeypatch):
             'get_message_by_id_and_message_id',
             AsyncMock(return_value={'output': [output[0]]}),
         )
-        results = await asyncio.gather(*[
-            middleware.drain_approved_tool_calls(
-                SimpleNamespace(),
-                {'messages': []},
-                SimpleNamespace(id='owner'),
-                {'id': 'model'},
-                {'chat_id': 'chat-1', 'message_id': 'assistant-1'},
-            )
-            for _ in range(2)
-        ])
+        results = await asyncio.gather(
+            *[
+                middleware.drain_approved_tool_calls(
+                    SimpleNamespace(),
+                    {'messages': []},
+                    SimpleNamespace(id='owner'),
+                    {'id': 'model'},
+                    {
+                        'chat_id': 'chat-1',
+                        'message_id': 'assistant-1',
+                        'assistant_message_id': 'assistant-1',
+                    },
+                )
+                for _ in range(2)
+            ]
+        )
 
         assert results == [True, True]
         assert output[0]['status'] == 'in_progress'
