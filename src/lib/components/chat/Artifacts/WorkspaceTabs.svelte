@@ -9,6 +9,7 @@
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import Plus from '$lib/components/icons/Plus.svelte';
 	import Terminal from '$lib/components/icons/Terminal.svelte';
+	import Sidebar from '$lib/components/icons/Sidebar.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 
 	import { hasWorkspaceAddActions, type WorkspaceTab } from './workspace';
@@ -19,6 +20,8 @@
 	export let selectedIndex = 0;
 	export let terminalId: string | null = null;
 	export let filesAvailable = false;
+	export let side: 'left' | 'right' = 'right';
+	export let onMove: (side: 'left' | 'right') => void = () => {};
 	export let onSelect: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onClose: () => void = () => {};
 	export let onCloseTab: (tab: WorkspaceTab) => void | Promise<void> = () => {};
@@ -279,6 +282,16 @@
 				</div>
 			{/each}
 		</div>
+
+		<button
+			type="button"
+			class="flex size-8 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:focus-visible:ring-gray-500"
+			aria-label={$i18n.t(side === 'right' ? 'Move workspace to left' : 'Move workspace to right')}
+			title={$i18n.t(side === 'right' ? 'Move workspace to left' : 'Move workspace to right')}
+			on:click={() => onMove(side === 'right' ? 'left' : 'right')}
+		>
+			<Sidebar className="size-4" side={side === 'right' ? 'left' : 'right'} />
+		</button>
 
 		{#if hasAddActions}
 			<div class="relative shrink-0">

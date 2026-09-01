@@ -21,7 +21,8 @@
 		workspaceTerminalConnectionId,
 		workspaceUtilityInstances,
 		workspaceActiveFile,
-		workspaceOpenFilePaths
+		workspaceOpenFilePaths,
+		workspacePanelSide
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 	import { injectCsp } from '$lib/utils/csp';
@@ -651,6 +652,8 @@
 				bind:selectedIndex={selectedContentIdx}
 				terminalId={workspaceTerminalId}
 				filesAvailable={workspaceFilesAvailable}
+				side={$workspacePanelSide}
+				onMove={(side) => workspacePanelSide.set(side)}
 				onSelect={(tab) => selectWorkspaceContent(tab.index)}
 				onReorder={reorderWorkspaceTabs}
 				onCloseTab={closeWorkspaceTab}

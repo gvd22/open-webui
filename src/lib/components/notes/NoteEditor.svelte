@@ -1351,20 +1351,18 @@ ${content}
 									{/if}
 								</button>
 
-								{#if editor}
-									<div class="flex items-center gap-1 px-1 min-w-fit">
-										<div>
-											{$i18n.t('{{COUNT}} words', {
-												COUNT: wordCount
-											})}
-										</div>
-										<div>
-											{$i18n.t('{{COUNT}} characters', {
-												COUNT: charCount
-											})}
-										</div>
+								<div class="flex items-center gap-1 px-1 min-w-fit">
+									<div>
+										{$i18n.t('{{COUNT}} words', {
+											COUNT: wordCount
+										})}
 									</div>
-								{/if}
+									<div>
+										{$i18n.t('{{COUNT}} characters', {
+											COUNT: charCount
+										})}
+									</div>
+								</div>
 							</div>
 						</div>
 					</div>

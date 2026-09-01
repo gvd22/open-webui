@@ -63,7 +63,7 @@ Reviews und Abnahmen muessen sich jedoch an diesem Dokument orientieren.
 KOBY hat fuer Endbenutzer keine unterschiedlichen Arbeitsmodi. Es gibt:
 
 1. einen primaeren Chat,
-2. eine optionale Arbeitsflaeche rechts daneben,
+2. eine optionale seitliche Arbeitsflaeche daneben,
 3. darin stabile, typisierte Arbeitsobjekte als Tabs.
 
 Der Chat bleibt Ausgangspunkt fuer Anweisungen und Rueckfragen. Die Arbeitsflaeche zeigt
@@ -95,13 +95,14 @@ Nicht als Rahmen oder Modus anzuzeigen sind `Workspace`, `Artifact`, `Draft`, `R
 ### 3.1 Desktop
 
 - Ohne offenes Arbeitsobjekt nutzt der Chat die verfuegbare Breite.
-- Beim Oeffnen eines Objekts erscheint rechts eine persistente, in der Breite anpassbare
-  Arbeitsflaeche.
+- Beim ersten Oeffnen eines Objekts erscheint rechts eine persistente, in der Breite anpassbare
+  Arbeitsflaeche. Der Benutzer kann sie mit einer kompakten Kopfaktion nach links oder wieder
+  nach rechts verschieben; die Wahl gilt chatuebergreifend und bleibt nach einem Reload erhalten.
 - Der Chat wird schmaler, bleibt aber lesbar und voll bedienbar.
 - Das Oeffnen, Wechseln oder Schliessen eines Objekts darf die Chatposition nicht sichtbar
   springen lassen.
 - Es gibt keinen Vollbild-Canvas und kein zusaetzliches unteres Terminal-Dock.
-- Terminal, Browser, Files und Dokumente sind gleichwertige Seiten der rechten Flaeche.
+- Terminal, Browser, Files und Dokumente sind gleichwertige Seiten der seitlichen Flaeche.
 
 ### 3.2 Mobile und schmale Ansichten
 

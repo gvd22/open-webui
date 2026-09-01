@@ -146,6 +146,7 @@ export const showControls = writable(false);
 export const showEmbeds = writable(false);
 export const showOverview = writable(false);
 export const showArtifacts = writable(false);
+export const workspacePanelSide: Writable<'left' | 'right'> = writable('right');
 export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
 export type FileNavOpenRequest = string | { path: string; page?: number | null };

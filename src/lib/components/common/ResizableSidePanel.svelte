@@ -140,6 +140,7 @@
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 		<div
 			class="relative flex items-center justify-center group border-l border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none"
+			style:order={side === 'left' ? -1 : 0}
 			id={resizerId}
 			on:pointerdown={resizeStartHandler}
 			on:keydown={resizeKeyHandler}
@@ -155,7 +156,11 @@
 		</div>
 	{/if}
 
-	<div bind:this={panelElement} class={className} style="width: {width}px; flex: 0 0 {width}px;">
+	<div
+		bind:this={panelElement}
+		class={className}
+		style="width: {width}px; flex: 0 0 {width}px; order: {side === 'left' ? -1 : 0};"
+	>
 		<slot />
 	</div>
 
@@ -163,6 +168,7 @@
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 		<div
 			class="relative flex items-center justify-center group border-r border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none"
+			style:order={side === 'left' ? -1 : 0}
 			id={resizerId}
 			on:pointerdown={resizeStartHandler}
 			on:keydown={resizeKeyHandler}

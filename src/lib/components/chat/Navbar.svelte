@@ -12,6 +12,7 @@
 		showArtifacts,
 		showControls,
 		showSidebar,
+		workspacePanelSide,
 		temporaryChatEnabled,
 		user
 	} from '$lib/stores';
@@ -23,8 +24,6 @@
 	import ShareChatModal from '../chat/ShareChatModal.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Menu from '$lib/components/layout/Navbar/Menu.svelte';
-	import FolderOpen from '../icons/FolderOpen.svelte';
-
 	import PencilSquare from '../icons/PencilSquare.svelte';
 	import Banner from '../common/Banner.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
@@ -248,7 +247,7 @@
 							aria-label={$i18n.t('Workspace')}
 							aria-pressed={$showControls && $showArtifacts}
 						>
-							<FolderOpen className="size-5" strokeWidth="1.35" />
+							<Sidebar className="size-4" strokeWidth="1.5" side={$workspacePanelSide} />
 						</button>
 					</Tooltip>
 				</div>

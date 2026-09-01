@@ -417,6 +417,34 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect.poll(() => workspaceTabTitles(page)).toEqual(expected);
 	});
 
+	test('moves the workspace across the chat and preserves its side after reload', async ({
+		page
+	}) => {
+		await openSeededWorkspace(page, seeded);
+		const workspace = page.locator('#controls-container');
+		const position = () => workspace.evaluate((element) => element.getBoundingClientRect().x);
+
+		const moveLeft = page.getByRole('button', { name: 'Move workspace to left', exact: true });
+		if ((await moveLeft.count()) === 0) {
+			await page.getByRole('button', { name: 'Move workspace to right', exact: true }).click();
+		}
+
+		const rightX = await position();
+		await page.getByRole('button', { name: 'Move workspace to left', exact: true }).click();
+		await expect(
+			page.getByRole('button', { name: 'Move workspace to right', exact: true })
+		).toBeVisible();
+		await expect.poll(position).toBeLessThan(rightX);
+
+		const leftX = await position();
+		await page.reload();
+		await dismissReleaseNotes(page);
+		await expect(
+			page.getByRole('button', { name: 'Move workspace to right', exact: true })
+		).toBeVisible();
+		await expect.poll(position).toBeLessThanOrEqual(leftX + 1);
+	});
+
 	test('retries a failed shell and creates a different shell for the next tab', async ({
 		page
 	}) => {

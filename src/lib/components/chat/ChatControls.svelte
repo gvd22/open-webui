@@ -8,7 +8,7 @@
 	import {
 		config, terminalServers, showControls, showCallOverlay, showArtifacts,
 		showEmbeds, showFileNavPath, selectedTerminalId, artifactCode,
-		workspaceUtilityInstances
+		workspaceUtilityInstances, workspacePanelSide
 	} from '$lib/stores';
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
@@ -90,11 +90,21 @@
 	};
 
 	onMount(() => {
+		const storedSide = localStorage.getItem('open-webui.workspace.side');
+		if (storedSide === 'left' || storedSide === 'right') {
+			workspacePanelSide.set(storedSide);
+		}
+		const unsubscribeSide = workspacePanelSide.subscribe((side) => {
+			localStorage.setItem('open-webui.workspace.side', side);
+		});
 		const mediaQuery = window.matchMedia('(min-width: 1024px)');
 		const update = () => { largeScreen = mediaQuery.matches; };
 		mediaQuery.addEventListener('change', update);
 		update();
-		return () => mediaQuery.removeEventListener('change', update);
+		return () => {
+			unsubscribeSide();
+			mediaQuery.removeEventListener('change', update);
+		};
 	});
 
 	$: activeWorkspaceTerminal = $workspaceUtilityInstances.find(
@@ -148,6 +158,7 @@
 {:else}
 	<ResizableSidePanel
 		open={$showControls} bind:width={controlsWidth} bind:isResizing={resizing}
+		side={$workspacePanelSide}
 		minWidth={350} minSiblingWidth={360} closeOnDragBelowMinWidth
 		onClose={closeHandler} storageKey="chatControlsSize"
 		className="h-full z-10 bg-white dark:bg-gray-900"
