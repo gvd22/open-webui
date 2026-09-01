@@ -37,6 +37,8 @@
 	import { artifactCode } from '$lib/stores';
 	import { WORKSPACE_LAUNCHER_ID } from './Artifacts/workspace';
 	import { isTemporaryChatId } from '$lib/utils/chatId';
+	import WorkspaceOutputsMenu from './WorkspaceOutputsMenu.svelte';
+	import type { WorkspaceOutputFile } from '$lib/stores';
 
 	const i18n = getContext('i18n');
 
@@ -46,6 +48,7 @@
 	export let scrollTop = 0;
 	export let scrollToTop: (() => void) | null = null;
 	export let workspaceDefaultContentId = WORKSPACE_LAUNCHER_ID;
+	export let onOpenWorkspaceOutputFile: (file: WorkspaceOutputFile) => void = () => {};
 
 	export let chat;
 	export let history;
@@ -230,6 +233,10 @@
 								<ChatPlus className="size-4.5" strokeWidth="1.5" />
 							</button>
 						</Tooltip>
+					{/if}
+
+					{#if chat?.id}
+						<WorkspaceOutputsMenu onOpenFile={onOpenWorkspaceOutputFile} />
 					{/if}
 
 					<Tooltip content={$i18n.t('Workspace')}>

@@ -185,6 +185,42 @@ function fsMkdir(path: string) {
 	self.pyodide.FS.mkdirTree(requirePyodideWorkspacePath(path));
 }
 
+const OUTPUT_FILE_EXTENSIONS = new Set([
+	'csv',
+	'doc',
+	'docx',
+	'ods',
+	'odt',
+	'pdf',
+	'ppt',
+	'pptx',
+	'xls',
+	'xlsx'
+]);
+
+function fsListWorkspaceOutputs(limit = 100): Map<string, string> {
+	const outputs = new Map<string, string>();
+	const visit = (dir: string, depth: number) => {
+		if (outputs.size >= limit || depth > 20) return;
+		try {
+			for (const name of self.pyodide.FS.readdir(dir)) {
+				if (name === '.' || name === '..') continue;
+				const path = `${dir}/${name}`.replace('//', '/');
+				const stat = self.pyodide.FS.stat(path);
+				if (self.pyodide.FS.isDir(stat.mode)) visit(path, depth + 1);
+				else if (OUTPUT_FILE_EXTENSIONS.has(name.split('.').pop()?.toLowerCase() ?? '')) {
+					outputs.set(path, `${stat.size}:${stat.mtime?.getTime?.() ?? 0}`);
+				}
+				if (outputs.size >= limit) return;
+			}
+		} catch {
+			// One unreadable entry must not prevent the execution result from returning.
+		}
+	};
+	visit(PYODIDE_WORKSPACE_ROOT, 0);
+	return outputs;
+}
+
 // ---------------------------------------------------------------------------
 // Code execution
 // ---------------------------------------------------------------------------
@@ -203,6 +239,7 @@ async function executeCode(
 		fsUploadFiles(files);
 		persistFS();
 	}
+	const workspaceOutputsBefore = fsListWorkspaceOutputs();
 
 	try {
 		await resetPythonWorkspace();
@@ -248,7 +285,16 @@ matplotlib.pyplot.show = show`);
 		self.stderr = error instanceof Error ? error.message : String(error);
 	}
 
-	self.postMessage({ id, result: self.result, stdout: self.stdout, stderr: self.stderr });
+	const workspaceOutputsAfter = fsListWorkspaceOutputs();
+	self.postMessage({
+		id,
+		result: self.result,
+		stdout: self.stdout,
+		stderr: self.stderr,
+		workspaceFiles: [...workspaceOutputsAfter].flatMap(([path, signature]) =>
+			workspaceOutputsBefore.get(path) === signature ? [] : [path]
+		)
+	});
 }
 
 // ---------------------------------------------------------------------------

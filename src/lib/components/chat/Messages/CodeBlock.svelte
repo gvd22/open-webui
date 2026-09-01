@@ -341,8 +341,15 @@
 			worker.removeEventListener('message', handler);
 			executing = false;
 
-			// Signal PyodideFileNav to auto-refresh after execution
-			window.dispatchEvent(new Event('pyodide:files'));
+			// Refresh Files and expose generated office documents in the chat output catalog.
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: {
+						paths: Array.isArray(data.workspaceFiles) ? data.workspaceFiles : [],
+						kind: 'changed'
+					}
+				})
+			);
 		};
 
 		worker.addEventListener('message', handler);

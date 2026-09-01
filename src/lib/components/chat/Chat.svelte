@@ -49,6 +49,7 @@
 		workspaceFileUpdate,
 		workspaceActiveFile,
 		workspaceOpenFilePaths,
+		workspaceOutputFiles,
 		chatRequestQueues,
 		desktopEvent
 	} from '$lib/stores';
@@ -72,6 +73,14 @@
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
+	import {
+		createWorkspaceOutputFile,
+		getWorkspaceOutputFilesFromHistory,
+		mergeWorkspaceOutputFiles,
+		readWorkspaceOutputFiles,
+		workspaceOutputStorageKey,
+		writeWorkspaceOutputFiles
+	} from './Artifacts/workspaceOutputs';
 	import {
 		applyResponseStreamEvent,
 		getOutputText,
@@ -354,14 +363,13 @@
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
-	$: workspaceDefaultContentId = getDefaultWorkspaceContentId(
-		resolveWorkspaceRuntime(
-			$terminalServers,
-			$selectedTerminalId,
-			codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter',
-			$chatId
-		)
+	$: workspaceRuntime = resolveWorkspaceRuntime(
+		$terminalServers,
+		$selectedTerminalId,
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter',
+		$chatId
 	);
+	$: workspaceDefaultContentId = getDefaultWorkspaceContentId(workspaceRuntime);
 	let webSearchActive = false;
 	let showWebSearchConfirm = false;
 	let pendingWebSearchPrompt: string | null = null;
@@ -445,6 +453,50 @@
 	let history = {
 		messages: {},
 		currentId: null
+	};
+	let workspaceOutputChatId = '';
+
+	const syncWorkspaceOutputCatalog = (id: string, nextHistory: any) => {
+		if (!id) {
+			workspaceOutputChatId = '';
+			workspaceOutputFiles.set([]);
+			return;
+		}
+		const stored =
+			workspaceOutputChatId === id ? get(workspaceOutputFiles) : readWorkspaceOutputFiles(id);
+		const merged = mergeWorkspaceOutputFiles(
+			stored,
+			getWorkspaceOutputFilesFromHistory(nextHistory)
+		);
+		workspaceOutputChatId = id;
+		workspaceOutputFiles.set(merged);
+		writeWorkspaceOutputFiles(id, merged);
+	};
+
+	const recordWorkspaceOutput = (
+		path: unknown,
+		options: { source: 'terminal' | 'pyodide'; terminalId?: string | null; page?: number | null }
+	) => {
+		const item = createWorkspaceOutputFile(path, options);
+		if (!item || !$chatId) return;
+		const merged = mergeWorkspaceOutputFiles(get(workspaceOutputFiles), [item]);
+		workspaceOutputFiles.set(merged);
+		writeWorkspaceOutputFiles($chatId, merged);
+	};
+
+	const handlePyodideFilesChanged = (event: Event) => {
+		const detail = (event as CustomEvent)?.detail ?? {};
+		const paths = Array.isArray(detail.paths) ? detail.paths : [];
+		if (detail.kind === 'deleted') {
+			const deleted = new Set(paths);
+			const remaining = get(workspaceOutputFiles).filter(
+				(item) => item.source !== 'pyodide' || !deleted.has(item.path)
+			);
+			workspaceOutputFiles.set(remaining);
+			if ($chatId) writeWorkspaceOutputFiles($chatId, remaining);
+			return;
+		}
+		for (const path of paths) recordWorkspaceOutput(path, { source: 'pyodide' });
 	};
 
 	let taskIds = null;
@@ -1214,6 +1266,11 @@
 	const terminalEventHandler = (type: string, data: any) => {
 		if (type === 'terminal:display_file') {
 			if (!data?.path) return;
+			recordWorkspaceOutput(data.path, {
+				source: 'terminal',
+				terminalId: data?.terminal_id ?? $selectedTerminalId,
+				page: data?.page
+			});
 			if ($settings?.terminalFileDisplay === 'inline') return;
 			if ($workspaceOpenFilePaths.includes(data.path)) {
 				workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
@@ -1221,6 +1278,10 @@
 			displayFileHandler(data.path, { showControls, showFileNavPath }, { page: data?.page });
 		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
 			if (!data?.path) return;
+			recordWorkspaceOutput(data.path, {
+				source: 'terminal',
+				terminalId: data?.terminal_id ?? $selectedTerminalId
+			});
 			if (isWorkspaceDocumentPath(data.path)) {
 				if ($workspaceOpenFilePaths.includes(data.path)) {
 					workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
@@ -1630,6 +1691,7 @@
 		loading = true;
 		console.log('mounted');
 		window.addEventListener('message', onMessageHandler);
+		window.addEventListener('pyodide:files', handlePyodideFilesChanged);
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 
@@ -1719,6 +1781,7 @@
 				chatTitle.set('');
 
 				window.removeEventListener('message', onMessageHandler);
+				window.removeEventListener('pyodide:files', handlePyodideFilesChanged);
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				dismissContextCompactionToast();
@@ -1957,6 +2020,7 @@
 	};
 
 	const onHistoryChange = (history) => {
+		syncWorkspaceOutputCatalog($chatId ?? '', history);
 		if (history) {
 			clearTimeout(contentsRAF);
 			contentsRAF = setTimeout(() => {
@@ -4432,6 +4496,7 @@
 		try {
 			const res = await deleteChatById(localStorage.token, id);
 			if (res) {
+				localStorage.removeItem(workspaceOutputStorageKey(id));
 				initNewChat();
 				await goto('/');
 				await refreshChatList(localStorage.token, { refreshPinned: true });
@@ -4631,6 +4696,24 @@
 							}}
 							{history}
 							{workspaceDefaultContentId}
+							onOpenWorkspaceOutputFile={(file) => {
+								if (file.source === 'terminal') {
+									if (!file.terminalId || !isTerminalAvailable(file.terminalId)) {
+										toast.error($i18n.t('The terminal for this output is no longer available.'));
+										return;
+									}
+									selectedTerminalId.set(file.terminalId);
+									workspaceTerminalConnectionId.set(file.terminalId);
+								} else if (workspaceRuntime.kind !== 'pyodide') {
+									toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
+									return;
+								}
+								displayFileHandler(
+									file.path,
+									{ showControls, showFileNavPath },
+									{ page: file.page }
+								);
+							}}
 							title={$chatTitle}
 							shareEnabled={!!history.currentId}
 							{initNewChat}

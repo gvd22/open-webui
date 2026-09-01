@@ -167,6 +167,15 @@ export const workspaceFileUpdate: Writable<WorkspaceFileUpdate | null> = writabl
 export const workspaceActiveFile: Writable<{ path: string; format: string } | null> =
 	writable(null);
 export const workspaceOpenFilePaths: Writable<string[]> = writable([]);
+export type WorkspaceOutputFile = {
+	path: string;
+	name: string;
+	source: 'terminal' | 'pyodide';
+	terminalId?: string | null;
+	page?: number | null;
+	updatedAt: number;
+};
+export const workspaceOutputFiles: Writable<WorkspaceOutputFile[]> = writable([]);
 export const selectedTerminalId: Writable<string | null> = writable(null);
 export const workspaceTerminalConnectionId: Writable<string | null> = writable(null);
 export const workspaceChatContextId: Writable<string> = writable('');
