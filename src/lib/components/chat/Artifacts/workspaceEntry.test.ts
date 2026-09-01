@@ -21,19 +21,24 @@ describe('workspace entry behavior', () => {
 		expect(tabs).not.toContain('hasWorkspaceAddActions(terminalId, filesAvailable)');
 	});
 
-	it('uses the mirrored sidebar control and persists a movable desktop workspace', () => {
+	it('keeps the desktop workspace fixed on the right without a move control', () => {
 		const navbar = readComponent('../Navbar.svelte');
 		const controls = readComponent('../ChatControls.svelte');
 		const tabs = readComponent('WorkspaceTabs.svelte');
-		const panel = readComponent('../../common/ResizableSidePanel.svelte');
 
-		expect(navbar).toContain(
-			'<Sidebar className="size-4" strokeWidth="1.5" side={$workspacePanelSide} />'
-		);
-		expect(controls).toContain("localStorage.getItem('open-webui.workspace.side')");
-		expect(controls).toContain('side={$workspacePanelSide}');
-		expect(tabs).toContain("'Move workspace to left'");
-		expect(tabs).toContain("'Move workspace to right'");
-		expect(panel).toContain("order: {side === 'left' ? -1 : 0}");
+		expect(navbar).toContain('<Sidebar className="size-4" strokeWidth="1.5" side="right" />');
+		expect(controls).toContain('side="right"');
+		expect(controls).not.toContain('open-webui.workspace.side');
+		expect(tabs).not.toContain('Move workspace to left');
+		expect(tabs).not.toContain('Move workspace to right');
+	});
+
+	it('shows outputs directly with content-specific icons', () => {
+		const outputs = readComponent('../WorkspaceOutputsMenu.svelte');
+
+		expect(outputs).not.toContain("$i18n.t('Workspace')");
+		expect(outputs).toContain('<Note className="size-4" />');
+		expect(outputs).toContain('<GlobeAlt className="size-4" />');
+		expect(outputs).toContain('<FileTypeIcon name={file.name} type="file" size={16} />');
 	});
 });

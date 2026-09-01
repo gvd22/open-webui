@@ -38,11 +38,10 @@ Tab-Leiste wird nicht angezeigt.
 ### AW-03: Position und Groesse
 
 **Wenn** ein Objekt geoeffnet wird.  
-**Dann** erscheint die Arbeitsflaeche standardmaessig rechts und der Chat wird schmaler, bleibt
-aber voll bedienbar. Die Trennkante ist in der Breite verschiebbar. Eine Kopfaktion verschiebt die
-gesamte Arbeitsflaeche nach links beziehungsweise wieder nach rechts. Die Wahl bleibt nach
-Chatwechsel und Reload erhalten. Die Flaeche ist nicht frei schwebend und ueberdeckt auf Desktop
-nicht willkuerlich den Chat.
+**Dann** erscheint die Arbeitsflaeche rechts und der Chat wird schmaler, bleibt aber voll
+bedienbar. Die Trennkante ist in der Breite verschiebbar. Es gibt keine Aktion zum Wechseln auf
+die linke Seite. Die Flaeche ist nicht frei schwebend und ueberdeckt auf Desktop nicht
+willkuerlich den Chat.
 
 ### AW-04: Tabs
 
@@ -377,7 +376,7 @@ Unit- oder API-Simulation ist zusaetzliche Diagnose, aber kein Ersatz.
 
 ### E2E-05: Layout und Robustheit
 
-1. Arbeitsflaeche rechts oeffnen, Breite veraendern, nach links verschieben und Reload ausfuehren.
+1. Arbeitsflaeche rechts oeffnen, Breite veraendern und Reload ausfuehren.
 2. Hell- und Dunkelmodus sowie breite und schmale Ansichten pruefen.
 3. Tabs per Maus und Tastatur bedienen; sichtbaren Fokus und Tooltips pruefen.
 4. Sicherstellen, dass keine Aktion Chatposition, aktivierte Funktionen oder andere Tabs verliert.

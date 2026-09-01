@@ -98,8 +98,7 @@ Nicht als Rahmen oder Modus anzuzeigen sind `Workspace`, `Artifact`, `Draft`, `R
 
 - Ohne offenes Arbeitsobjekt nutzt der Chat die verfuegbare Breite.
 - Beim ersten Oeffnen eines Objekts erscheint rechts eine persistente, in der Breite anpassbare
-  Arbeitsflaeche. Der Benutzer kann sie mit einer kompakten Kopfaktion nach links oder wieder
-  nach rechts verschieben; die Wahl gilt chatuebergreifend und bleibt nach einem Reload erhalten.
+  Arbeitsflaeche. Sie bleibt fest rechts; es gibt keinen Links-/Rechts-Umschalter.
 - Der Chat wird schmaler, bleibt aber lesbar und voll bedienbar.
 - Das Oeffnen, Wechseln oder Schliessen eines Objekts darf die Chatposition nicht sichtbar
   springen lassen.

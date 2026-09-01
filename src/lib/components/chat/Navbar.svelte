@@ -12,7 +12,6 @@
 		showArtifacts,
 		showControls,
 		showSidebar,
-		workspacePanelSide,
 		temporaryChatEnabled,
 		user
 	} from '$lib/stores';
@@ -254,7 +253,7 @@
 							aria-label={$i18n.t('Workspace')}
 							aria-pressed={$showControls && $showArtifacts}
 						>
-							<Sidebar className="size-4" strokeWidth="1.5" side={$workspacePanelSide} />
+							<Sidebar className="size-4" strokeWidth="1.5" side="right" />
 						</button>
 					</Tooltip>
 				</div>
