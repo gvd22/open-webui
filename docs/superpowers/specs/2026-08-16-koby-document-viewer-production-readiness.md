@@ -5,11 +5,9 @@ production rollout is approved by this document.
 
 ## Release scope
 
-The release scope is the read-only PDF, DOCX, and PPTX workspace viewer. The
+The release scope is the read-only PDF, DOCX, PPTX, XLS, and XLSX workspace viewer. The
 support boundary and exact implementation limits are defined in
-`2026-08-16-koby-document-viewer-support.md`. The viewer is not an Office editor
-and does not expand support to XLSX, CSV, OpenDocument, or legacy Word/PowerPoint
-files.
+`2026-08-16-koby-document-viewer-support.md`. The viewer is not an Office editor.
 
 ## Required automated gates
 
@@ -29,8 +27,7 @@ The repository-wide `npm run check` is not a new hard gate for this feature;
 the current baseline contains unrelated legacy diagnostics. The focused viewer
 tests and production build are the required frontend checks.
 
-The dependency/license gate must cover `pdfjs-dist`, `docx-preview`,
-`@aiden0z/pptx-renderer`, `jszip`, `echarts`, and `zrender`, including their
+The dependency/license gate must cover `pdfjs-dist`, `docx-preview`, `jszip`, and `xlsx`, including their
 resolved lockfile licenses and distributed license/notice files. `npm audit
 --omit=dev --audit-level=high` is blocking only when the existing baseline is
 green. If the baseline is not green, retain the redacted advisory output and

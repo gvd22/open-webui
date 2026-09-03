@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export const RENDERER_CHUNK_CEILINGS = Object.freeze({
 	'pdfjs-dist': 2_252_800,
 	'docx-preview': 204_800,
-	'@aiden0z/pptx-renderer': 1_126_400
+	xlsx: 1_536_000
 });
 
 const packageNeedle = (name) => `node_modules/${name}`;

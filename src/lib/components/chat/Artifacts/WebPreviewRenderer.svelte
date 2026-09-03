@@ -6,14 +6,8 @@
 	import JSZip from 'jszip';
 
 	import { selectTransientWebPreview, updateTransientWebPreview } from '$lib/apis/chats';
-	import { createDirectory, getCwd, uploadToTerminal } from '$lib/apis/terminal';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
-	import {
-		artifactContents,
-		pyodideWorker,
-		selectedTerminalId,
-		terminalServers
-	} from '$lib/stores';
+	import { artifactContents, pyodideWorker } from '$lib/stores';
 	import { injectCsp } from '$lib/utils/csp';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import FileCodeEditor from '../FileNav/FileCodeEditor.svelte';
@@ -69,16 +63,7 @@
 		: files[entrypoint].mime !== 'text/html'
 			? $i18n.t('The preview entrypoint must be an HTML file')
 			: '';
-	$: workspaceRuntime = resolveWorkspaceRuntime(
-		$terminalServers,
-		$selectedTerminalId,
-		codeInterpreterEnabled,
-		chatId
-	);
-	$: runtimeTerminal =
-		workspaceRuntime.kind === 'terminal'
-			? (($terminalServers ?? []).find((item) => item.id === workspaceRuntime.terminalId) ?? null)
-			: null;
+	$: workspaceRuntime = resolveWorkspaceRuntime(codeInterpreterEnabled);
 	$: filesAvailable = workspaceRuntime.writable;
 
 	$: if (artifact !== lastArtifact && (artifact.updatedAt ?? 0) >= lastUpdatedAt && !dirty) {
@@ -190,6 +175,7 @@
 			);
 			if (snapshot.notifyExport) toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
 		} catch (error: any) {
+			console.error('Unable to save Web Preview', error);
 			dirty = true;
 			saveFailed = true;
 			if (error?.status === 409) {
@@ -230,9 +216,11 @@
 						)
 					);
 					saveFailed = false;
-				} catch {
-					// Keep the conflict visible when canonical refresh also fails.
-				}
+					} catch (refreshError) {
+						console.error('Unable to reload conflicted Web Preview', refreshError);
+						toast.error($i18n.t('Preview changed elsewhere and could not be reloaded.'));
+						return;
+					}
 				toast.warning($i18n.t('Preview changed elsewhere. The latest version was loaded.'));
 				return;
 			}
@@ -241,6 +229,8 @@
 				setTimeout(() => {
 					if (snapshot.revision === localRevision) previewSaveQueue.enqueue(snapshot);
 				}, 1500);
+			} else {
+				toast.error($i18n.t('Preview could not be saved.'));
 			}
 		} finally {
 			saving = false;
@@ -294,40 +284,6 @@
 		});
 	};
 
-	const exportToTerminal = async () => {
-		if (!runtimeTerminal) throw new Error('Terminal unavailable');
-		const cwd = await getCwd(runtimeTerminal.url, localStorage.token, chatId);
-		if (!cwd) throw new Error('Terminal unavailable');
-		const root = (cwd.root?.path || cwd.cwd || '/workspace').replace(/\/$/, '');
-		const base = getWebPreviewExportPath(root, artifact.previewId, projectSlug(), exportedRuntime === 'terminal' ? exportedPath : '');
-		const directories = new Set([`${root}/previews`, base]);
-		for (const path of Object.keys(files)) {
-			const parts = path.split('/').slice(0, -1);
-			let current = base;
-			for (const part of parts) {
-				current += `/${part}`;
-				directories.add(current);
-			}
-		}
-		for (const directory of directories) {
-			await createDirectory(runtimeTerminal.url, localStorage.token, directory, chatId);
-		}
-		for (const [path, file] of Object.entries(files)) {
-			const segments = path.split('/');
-			const filename = segments.pop() ?? path;
-			const directory = segments.length ? `${base}/${segments.join('/')}` : base;
-			const result = await uploadToTerminal(
-				runtimeTerminal.url,
-				localStorage.token,
-				directory,
-				new File([file.content], filename, { type: file.mime }),
-				chatId
-			);
-			if (!result) throw new Error(`Failed to save ${path}`);
-		}
-		return base;
-	};
-
 	const exportToPyodide = async () => {
 		const base = getWebPreviewExportPath('/mnt/uploads', artifact.previewId, projectSlug(), exportedRuntime === 'pyodide' ? exportedPath : '');
 		await sendWorkerMessage({ type: 'fs:mkdir', path: '/mnt/uploads/previews' });
@@ -357,11 +313,11 @@
 		if (!filesAvailable || exporting) return;
 		exporting = true;
 		try {
-			const runtime = workspaceRuntime.kind;
-			const path = runtime === 'terminal' ? await exportToTerminal() : await exportToPyodide();
-			previewSaveQueue.enqueue(buildSaveSnapshot({ path, runtime }));
+			const path = await exportToPyodide();
+			previewSaveQueue.enqueue(buildSaveSnapshot({ path, runtime: 'pyodide' }));
 			await previewSaveQueue.flush();
-		} catch {
+		} catch (error) {
+			console.error('Web preview export failed', error);
 			toast.error($i18n.t('Files are currently unavailable'));
 		} finally {
 			exporting = false;

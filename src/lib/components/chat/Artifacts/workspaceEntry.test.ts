@@ -8,17 +8,17 @@ describe('workspace entry behavior', () => {
 		const chat = readComponent('../Chat.svelte');
 		const navbar = readComponent('../Navbar.svelte');
 
-		expect(chat).toContain('workspaceDefaultContentId = getDefaultWorkspaceContentId(');
+		expect(chat).toContain('workspaceDefaultContentId = getDefaultWorkspaceContentId()');
 		expect(chat).toContain('{workspaceDefaultContentId}');
-		expect(navbar).toContain('export let workspaceDefaultContentId = WORKSPACE_LAUNCHER_ID;');
+		expect(navbar).toContain('export let workspaceDefaultContentId = WORKSPACE_FILES_ID;');
 		expect(navbar).toContain('artifactCode.set(workspaceDefaultContentId);');
 	});
 
 	it('does not present the add menu for a Files-only Pyodide workspace', () => {
 		const tabs = readComponent('WorkspaceTabs.svelte');
 
-		expect(tabs).toContain('hasWorkspaceAddActions(terminalId)');
-		expect(tabs).not.toContain('hasWorkspaceAddActions(terminalId, filesAvailable)');
+		expect(tabs).not.toContain('Add to workspace');
+		expect(tabs).not.toContain('workspace-add-menu');
 	});
 
 	it('keeps the desktop workspace fixed on the right without a move control', () => {

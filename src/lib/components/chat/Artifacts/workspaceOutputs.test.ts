@@ -1,26 +1,83 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
 import {
+	createRuntimeWorkspaceOutputFile,
 	createWorkspaceOutputCatalog,
 	createWorkspaceOutputFile,
-	createRuntimeWorkspaceOutputFile,
-	getWorkspaceOutputFilesFromHistory,
 	isKnownWorkspaceOutputPath,
 	isWorkspaceOutputPath,
 	mergeWorkspaceOutputFiles,
+	normalizeWorkspaceOutputFiles,
 	resolveWorkspaceOutputFile
 } from './workspaceOutputs';
 
-describe('workspace output catalog', () => {
-	it('keeps runtime output state outside Chat and applies explicit delete events', () => {
-		const files = writable<WorkspaceOutputFile[]>([]);
-		const catalog = createWorkspaceOutputCatalog(files);
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(catalog.record('chat-1', '/mnt/uploads/report.pdf', { source: 'pyodide' })).toBe(true);
-		expect(get(files)).toEqual([
-			expect.objectContaining({ path: '/mnt/uploads/report.pdf', source: 'pyodide' })
+describe('chat-scoped Pyodide output catalog', () => {
+	it('accepts document outputs only inside the Pyodide uploads directory', () => {
+		expect(isWorkspaceOutputPath('/mnt/uploads/report.pdf')).toBe(true);
+		expect(isWorkspaceOutputPath('/mnt/uploads/table.xlsx')).toBe(true);
+		expect(isWorkspaceOutputPath('/workspace/report.pdf')).toBe(false);
+		expect(isWorkspaceOutputPath('/mnt/uploads/index.html')).toBe(false);
+		expect(isWorkspaceOutputPath('/mnt/uploads/bad\nreport.pdf')).toBe(false);
+		expect(isWorkspaceOutputPath('/mnt/uploads/../private.pdf')).toBe(false);
+		expect(isWorkspaceOutputPath('/mnt/uploads//report.pdf')).toBe(false);
+	});
+
+	it('deduplicates a path and keeps the newest metadata', () => {
+		const first = createWorkspaceOutputFile('/mnt/uploads/report.pdf', { updatedAt: 10 });
+		const second = createWorkspaceOutputFile('/mnt/uploads/report.pdf', {
+			page: 3,
+			updatedAt: 20
+		});
+		expect(mergeWorkspaceOutputFiles([first!], [second])).toEqual([
+			expect.objectContaining({ path: '/mnt/uploads/report.pdf', page: 3, updatedAt: 20 })
 		]);
+	});
+
+	it('normalizes persisted chat data and ignores invalid entries', () => {
+		expect(
+			normalizeWorkspaceOutputFiles([
+				{ path: '/mnt/uploads/deck.pptx', updatedAt: 10 },
+				{ path: '/etc/private.pdf', updatedAt: 20 }
+			])
+		).toEqual([
+			expect.objectContaining({
+				path: '/mnt/uploads/deck.pptx',
+				name: 'deck.pptx',
+				source: 'pyodide'
+			})
+		]);
+	});
+
+	it('resolves only catalogued paths in the active Pyodide runtime', () => {
+		const output = createWorkspaceOutputFile('/mnt/uploads/report.pdf')!;
+		expect(isKnownWorkspaceOutputPath([output], output.path)).toBe(true);
+		expect(resolveWorkspaceOutputFile([output], output.path, { kind: 'pyodide' })).toBe(output);
+		expect(resolveWorkspaceOutputFile([output], '/mnt/uploads/missing.pdf')).toBeNull();
+		expect(
+			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.pptx', { kind: 'pyodide' })
+		).toEqual(expect.objectContaining({ source: 'pyodide' }));
+		expect(createRuntimeWorkspaceOutputFile('/workspace/legacy.pptx', { kind: 'none' })).toBeNull();
+	});
+
+	it('persists records and deletes while updating the UI optimistically', async () => {
+		const files = writable<WorkspaceOutputFile[]>([]);
+		const persist = vi.fn(async (_chatId, mutation) => {
+			if (mutation.remove?.length) return [];
+			return mutation.upsert ?? [];
+		});
+		const onError = vi.fn();
+		const catalog = createWorkspaceOutputCatalog(files, persist, onError);
+		catalog.sync('chat-1', []);
+
+		expect(catalog.record('chat-1', '/mnt/uploads/report.pdf')).toBe(true);
+		expect(get(files)).toHaveLength(1);
+		await tick();
+		expect(persist).toHaveBeenCalledWith('chat-1', {
+			upsert: [expect.objectContaining({ path: '/mnt/uploads/report.pdf' })]
+		});
 
 		catalog.applyPyodideChange('chat-1', {
 			chatId: 'chat-1',
@@ -28,151 +85,38 @@ describe('workspace output catalog', () => {
 			paths: ['/mnt/uploads/report.pdf']
 		});
 		expect(get(files)).toEqual([]);
+		await tick();
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it('does not hide persistence failures', async () => {
+		const files = writable<WorkspaceOutputFile[]>([]);
+		const error = new Error('offline');
+		const onError = vi.fn();
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const catalog = createWorkspaceOutputCatalog(
+			files,
+			async () => {
+				throw error;
+			},
+			onError
+		);
+		catalog.sync('chat-1', []);
+		catalog.record('chat-1', '/mnt/uploads/report.pdf');
+		await tick();
+		expect(onError).toHaveBeenCalledWith(error);
+		expect(consoleError).toHaveBeenCalled();
+		consoleError.mockRestore();
 	});
 
 	it('ignores Pyodide events from another chat', () => {
 		const files = writable<WorkspaceOutputFile[]>([]);
-		const catalog = createWorkspaceOutputCatalog(files);
-
+		const catalog = createWorkspaceOutputCatalog(files, async () => [], vi.fn());
+		catalog.sync('chat-1', []);
 		catalog.applyPyodideChange('chat-1', {
 			chatId: 'chat-2',
 			paths: ['/mnt/uploads/other.pdf']
 		});
 		expect(get(files)).toEqual([]);
-	});
-
-	it('accepts office outputs and rejects unsafe or unrelated paths', () => {
-		expect(isWorkspaceOutputPath('/mnt/uploads/report.pdf')).toBe(true);
-		expect(isWorkspaceOutputPath('/workspace/data.xlsx')).toBe(true);
-		expect(isWorkspaceOutputPath('/workspace/index.html')).toBe(false);
-		expect(isWorkspaceOutputPath('relative/report.pdf')).toBe(false);
-		expect(isWorkspaceOutputPath('/workspace/bad\nreport.pdf')).toBe(false);
-	});
-
-	it('deduplicates one runtime path and keeps the newest metadata', () => {
-		const first = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'terminal',
-			updatedAt: 10
-		});
-		const second = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'terminal',
-			page: 3,
-			updatedAt: 20
-		});
-		expect(mergeWorkspaceOutputFiles([first!], [second])).toEqual([
-			expect.objectContaining({ path: '/workspace/report.pdf', page: 3, updatedAt: 20 })
-		]);
-	});
-
-	it('keeps identical paths from different runtimes separate', () => {
-		const terminal = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'terminal',
-			terminalId: 'terminal-1',
-			updatedAt: 10
-		});
-		const pyodide = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'pyodide',
-			updatedAt: 20
-		});
-
-		expect(mergeWorkspaceOutputFiles([], [terminal, pyodide])).toHaveLength(2);
-	});
-
-	it('links only exact paths already present in the chat output catalog', () => {
-		const output = createWorkspaceOutputFile('/mnt/uploads/report.pdf');
-
-		expect(isKnownWorkspaceOutputPath([output!], '/mnt/uploads/report.pdf')).toBe(true);
-		expect(isKnownWorkspaceOutputPath([output!], '/mnt/uploads/report')).toBe(false);
-		expect(isKnownWorkspaceOutputPath([output!], '/etc/report.pdf')).toBe(false);
-	});
-
-	it('resolves duplicate paths against the active runtime', () => {
-		const terminal = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'terminal',
-			terminalId: 'terminal-1',
-			updatedAt: 10
-		});
-		const pyodide = createWorkspaceOutputFile('/workspace/report.pdf', {
-			source: 'pyodide',
-			updatedAt: 20
-		});
-		const files = mergeWorkspaceOutputFiles([], [terminal, pyodide]);
-
-		expect(
-			resolveWorkspaceOutputFile(files, '/workspace/report.pdf', {
-				kind: 'terminal',
-				terminalId: 'terminal-1'
-			})?.source
-		).toBe('terminal');
-		expect(
-			resolveWorkspaceOutputFile(files, '/workspace/report.pdf', { kind: 'pyodide' })?.source
-		).toBe('pyodide');
-		expect(resolveWorkspaceOutputFile(files, '/workspace/missing.pdf', { kind: 'pyodide' })).toBe(
-			null
-		);
-	});
-
-	it('migrates legacy document references only inside the active runtime boundary', () => {
-		expect(
-			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.pptx', { kind: 'pyodide' })
-		).toEqual(expect.objectContaining({ source: 'pyodide', path: '/mnt/uploads/legacy.pptx' }));
-		expect(
-			createRuntimeWorkspaceOutputFile('/workspace/legacy.pptx', {
-				kind: 'terminal',
-				terminalId: 'terminal-1'
-			})
-		).toEqual(expect.objectContaining({ source: 'terminal', terminalId: 'terminal-1' }));
-		expect(createRuntimeWorkspaceOutputFile('/etc/legacy.pptx', { kind: 'pyodide' })).toBeNull();
-		expect(
-			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.html', { kind: 'pyodide' })
-		).toBeNull();
-	});
-
-	it('restores terminal display files from persisted message output', () => {
-		const history = {
-			messages: {
-				'assistant-1': {
-					timestamp: 42,
-					output: [
-						{
-							type: 'function_call_output',
-							files: [
-								{
-									type: 'file',
-									source: 'open_terminal',
-									path: '/workspace/deck.pptx',
-									name: 'deck.pptx',
-									terminal_id: 'terminal-1'
-								}
-							]
-						}
-					]
-				}
-			}
-		};
-		expect(getWorkspaceOutputFilesFromHistory(history)).toEqual([
-			expect.objectContaining({
-				path: '/workspace/deck.pptx',
-				source: 'terminal',
-				terminalId: 'terminal-1'
-			})
-		]);
-	});
-
-	it('does not treat unrelated inline files as Pyodide outputs', () => {
-		const history = {
-			messages: {
-				'assistant-1': {
-					output: [
-						{
-							type: 'function_call_output',
-							files: [{ type: 'file', path: '/api/v1/files/report.pdf', name: 'report.pdf' }]
-						}
-					]
-				}
-			}
-		};
-
-		expect(getWorkspaceOutputFilesFromHistory(history)).toEqual([]);
 	});
 });

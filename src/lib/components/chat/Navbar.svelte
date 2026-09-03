@@ -34,7 +34,7 @@
 	import ChatPlus from '../icons/ChatPlus.svelte';
 	import ChatCheck from '../icons/ChatCheck.svelte';
 	import { artifactCode } from '$lib/stores';
-	import { WORKSPACE_LAUNCHER_ID } from './Artifacts/workspace';
+	import { WORKSPACE_FILES_ID } from './Artifacts/workspace';
 	import { isTemporaryChatId } from '$lib/utils/chatId';
 	import WorkspaceOutputsMenu from './WorkspaceOutputsMenu.svelte';
 	import type { WorkspaceOutputFile } from '$lib/stores';
@@ -46,7 +46,7 @@
 	export let shareEnabled: boolean = false;
 	export let scrollTop = 0;
 	export let scrollToTop: (() => void) | null = null;
-	export let workspaceDefaultContentId = WORKSPACE_LAUNCHER_ID;
+	export let workspaceDefaultContentId = WORKSPACE_FILES_ID;
 	export let onOpenWorkspaceOutputFile: (file: WorkspaceOutputFile) => void = () => {};
 
 	export let chat;

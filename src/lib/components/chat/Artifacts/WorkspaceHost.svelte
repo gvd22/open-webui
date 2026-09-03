@@ -14,12 +14,8 @@
 		showArtifacts,
 		showControls,
 		artifactContents,
-		selectedTerminalId,
-		terminalServers,
 		workspaceChatContextId,
 		workspaceOpenRequestId,
-		workspaceTerminalConnectionId,
-		workspaceUtilityInstances,
 		workspaceActiveFile,
 		workspaceOpenFilePaths
 	} from '$lib/stores';
@@ -33,11 +29,8 @@
 	import ArrowLeft from '../../icons/ArrowLeft.svelte';
 	import Download from '../../icons/Download.svelte';
 	import NoteCanvas from './NoteCanvas.svelte';
-	import FileNav from '../FileNav.svelte';
 	import PyodideFileNav from '../PyodideFileNav.svelte';
 	import WorkspaceTabs from './WorkspaceTabs.svelte';
-	import WorkspaceBrowser from './WorkspaceBrowser.svelte';
-	import WorkspaceLauncher from './WorkspaceLauncher.svelte';
 	import WebPreviewRenderer from './WebPreviewRenderer.svelte';
 	import WorkspaceDocumentPanels from './WorkspaceDocumentPanels.svelte';
 	import { getCanvasNoteArtifactsFromHistory, mergePersistedCanvasArtifact } from './canvas';
@@ -47,13 +40,11 @@
 	import {
 		buildWorkspaceTabs,
 		buildWorkspaceFileContent,
+		buildWorkspaceFilesContent,
 		upsertWorkspaceFileContent,
 		limitWorkspaceFileContents,
-		buildWorkspaceUtilityContents,
 		getWorkspaceDocumentFormatForViewer,
 		getWorkspaceContentId,
-		getWorkspaceInstanceId,
-		getNextWorkspaceInstanceTitle,
 		getVisibleWorkspaceContents,
 		moveWorkspaceContent,
 		orderWorkspaceContents,
@@ -62,17 +53,13 @@
 		shouldResetWorkspaceForChatChange,
 		type WorkspaceContent,
 		type WorkspaceTab,
-		WORKSPACE_FILES_ID,
-		WORKSPACE_TERMINAL_ID,
-		WORKSPACE_BROWSER_ID,
-		WORKSPACE_LAUNCHER_ID
+		WORKSPACE_FILES_ID
 	} from './workspace';
 
 	export let overlay = false;
 	export let history: Record<string, any> | null = null;
 	export let showFiles = false;
 	export let codeInterpreterEnabled = false;
-	export let onAttach: ((blob: Blob, name: string, contentType: string) => void) | null = null;
 
 	let artifactSourceContents: WorkspaceContent[] = [];
 	let openedFileContents: WorkspaceContent[] = [];
@@ -93,16 +80,10 @@
 	const persistWorkspaceState = (id = $chatId) => {
 		if (!id) return;
 		const saved = writeWorkspaceState(id, {
-			order: workspaceContentOrder.filter((item) => item !== WORKSPACE_LAUNCHER_ID),
-			closed: [...closedWorkspaceContentIds].filter((item) => item !== WORKSPACE_LAUNCHER_ID),
+			order: workspaceContentOrder,
+			closed: [...closedWorkspaceContentIds],
 			filesOpened,
-			openedFiles: openedFileContents.map((content) => content.path).filter(Boolean) as string[],
-			utilities: $workspaceUtilityInstances.map(({ id, kind, title, terminalId }) => ({
-				id,
-				kind,
-				title,
-				terminalId
-			}))
+			openedFiles: openedFileContents.map((content) => content.path).filter(Boolean) as string[]
 		});
 		if (!saved && !workspacePersistenceWarningShown) {
 			workspacePersistenceWarningShown = true;
@@ -119,7 +100,6 @@
 		openedFileRecency = openedFileContents.map((content, index) =>
 			getWorkspaceContentId(content, index)
 		);
-		workspaceUtilityInstances.set(state?.utilities ?? []);
 	};
 	$: selectedContent = contents[selectedContentIdx];
 	$: selectedContentId = selectedContent
@@ -134,18 +114,10 @@
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
 	const MAX_OPEN_DOCUMENTS = 4;
-	$: workspaceRuntime = resolveWorkspaceRuntime(
-		$terminalServers,
-		$selectedTerminalId,
-		showFiles && codeInterpreterEnabled,
-		$chatId
-	);
-	$: workspaceTerminalId = workspaceRuntime.shell ? workspaceRuntime.terminalId : null;
-	$: workspaceFilesAvailable = showFiles && workspaceRuntime.files;
+	$: workspaceRuntime = resolveWorkspaceRuntime(showFiles && codeInterpreterEnabled);
 	$: if (
 		workspaceRuntime.kind === 'pyodide' &&
 		workspaceRuntime.files &&
-		!workspaceRuntime.shell &&
 		!filesOpened &&
 		!closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)
 	) {
@@ -153,7 +125,7 @@
 	}
 	$: documentViewerEnabled = $config?.features?.enable_document_viewer === true;
 	$: {
-		const nextRuntimeKey = `${workspaceRuntime.kind}:${workspaceRuntime.terminalId ?? ''}`;
+		const nextRuntimeKey = workspaceRuntime.kind;
 		if (nextRuntimeKey !== openedFileRuntimeKey) {
 			const previousRuntimeKey = openedFileRuntimeKey;
 			openedFileRuntimeKey = nextRuntimeKey;
@@ -215,7 +187,8 @@
 							: item
 					)
 				);
-			} catch {
+			} catch (error) {
+				console.error('Canvas focus could not be saved', error);
 				toast.error($i18n.t('Canvas focus could not be saved'));
 			}
 		}
@@ -259,26 +232,10 @@
 	}
 
 	function rebuildWorkspaceContents() {
-		const utilityContents = buildWorkspaceUtilityContents({
-			showFiles: showFiles && filesOpened,
-			showTerminal: false,
-			showBrowser: false
-		});
-		const utilityInstanceContents: WorkspaceContent[] = $workspaceUtilityInstances.map(
-			(instance) => ({
-				type: `workspace-${instance.kind}`,
-				workspaceId: instance.id,
-				title: instance.title,
-				terminalId: instance.terminalId,
-				content: ''
-			})
-		);
 		const nextSourceContents = [
-			...utilityContents.filter((content) => content.workspaceId === WORKSPACE_FILES_ID),
+			...(showFiles && filesOpened ? [buildWorkspaceFilesContent()] : []),
 			...artifactSourceContents,
-			...(workspaceRuntime.files ? openedFileContents : []),
-			...utilityInstanceContents,
-			...utilityContents.filter((content) => content.workspaceId !== WORKSPACE_FILES_ID)
+			...(workspaceRuntime.files ? openedFileContents : [])
 		];
 		sourceContents = orderWorkspaceContents(nextSourceContents, workspaceContentOrder);
 		const sourceIds = sourceContents.map((content, index) => getWorkspaceContentId(content, index));
@@ -307,30 +264,6 @@
 		ensureWorkspaceFilesOpen();
 		artifactCode.set(WORKSPACE_FILES_ID);
 		selectWorkspaceFiles();
-	}
-
-	function openWorkspaceUtility(kind: 'terminal' | 'browser') {
-		const terminalId = workspaceTerminalId;
-		if (!terminalId) return;
-
-		const instances = $workspaceUtilityInstances;
-		const id = getWorkspaceInstanceId(kind, crypto.randomUUID());
-		const title = getNextWorkspaceInstanceTitle(
-			kind,
-			instances.filter((instance) => instance.kind === kind).map((instance) => instance.title)
-		);
-		workspaceUtilityInstances.set([...instances, { id, kind, title, terminalId }]);
-		selectedTerminalId.set(terminalId);
-		workspaceTerminalConnectionId.set(terminalId);
-		rebuildWorkspaceContents();
-		persistWorkspaceState();
-		artifactCode.set(id);
-	}
-
-	function focusOrOpenWorkspaceUtility(kind: 'terminal' | 'browser') {
-		const existing = [...$workspaceUtilityInstances].reverse().find((item) => item.kind === kind);
-		if (existing) artifactCode.set(existing.id);
-		else openWorkspaceUtility(kind);
 	}
 
 	function openWorkspaceFile(path: string, options: { page?: number | null } = {}): boolean {
@@ -401,13 +334,6 @@
 		if (tab.id === WORKSPACE_FILES_ID) {
 			filesOpened = false;
 		}
-		if ($workspaceUtilityInstances.some((instance) => instance.id === tab.id)) {
-			workspaceUtilityInstances.update((instances) =>
-				instances.filter((instance) => instance.id !== tab.id)
-			);
-			rebuildWorkspaceContents();
-		}
-
 		const selectedId = selectedContent
 			? getWorkspaceContentId(selectedContent, selectedContentIdx)
 			: '';
@@ -416,7 +342,7 @@
 		syncVisibleWorkspaceContents();
 
 		if (contents.length === 0) {
-			artifactCode.set(WORKSPACE_LAUNCHER_ID);
+			artifactCode.set('');
 			persistWorkspaceState();
 			return;
 		}
@@ -505,14 +431,6 @@
 				selectWorkspaceFiles();
 				return;
 			}
-			if (value === WORKSPACE_BROWSER_ID) {
-				focusOrOpenWorkspaceUtility('browser');
-				return;
-			}
-			if (value === WORKSPACE_TERMINAL_ID) {
-				focusOrOpenWorkspaceUtility('terminal');
-				return;
-			}
 			if (contents.length > 0) {
 				const codeIdx = contents.findIndex(
 					(content, index) =>
@@ -564,7 +482,6 @@
 		const nextWorkspaceChatId = $chatId ?? '';
 		if (shouldResetWorkspaceForChatChange($workspaceChatContextId, nextWorkspaceChatId)) {
 			restoreWorkspaceState(nextWorkspaceChatId);
-			workspaceTerminalConnectionId.set(null);
 			rebuildWorkspaceContents();
 		}
 		workspaceChatContextId.set(nextWorkspaceChatId);
@@ -576,12 +493,7 @@
 	}
 
 	$: {
-		(showFiles,
-			codeInterpreterEnabled,
-			$terminalServers,
-			$selectedTerminalId,
-			$workspaceTerminalConnectionId,
-			$workspaceUtilityInstances);
+		(showFiles, codeInterpreterEnabled);
 		rebuildWorkspaceContents();
 	}
 </script>
@@ -595,14 +507,9 @@
 			<WorkspaceTabs
 				tabs={workspaceTabs}
 				bind:selectedIndex={selectedContentIdx}
-				terminalId={workspaceTerminalId}
-				filesAvailable={workspaceFilesAvailable}
 				onSelect={(tab) => selectWorkspaceContent(tab.index)}
 				onReorder={reorderWorkspaceTabs}
 				onCloseTab={closeWorkspaceTab}
-				onOpenFiles={openWorkspaceFiles}
-				onOpenTerminal={() => openWorkspaceUtility('terminal')}
-				onOpenBrowser={() => openWorkspaceUtility('browser')}
 				onClose={closeWorkspace}
 			/>
 		{:else}
@@ -742,29 +649,9 @@
 						<WorkspaceDocumentPanels
 							{contents}
 							{selectedContentId}
-							runtime={workspaceRuntime}
-							chatId={$chatId}
 						/>
 						{#each contents as content, index (getWorkspaceContentId(content, index))}
-							{#if content.type === 'workspace-browser'}
-								<div
-									id={`workspace-panel-${index}`}
-									role="tabpanel"
-									aria-labelledby={`workspace-tab-${index}`}
-									hidden={selectedContentId !== getWorkspaceContentId(content, index)}
-									class="absolute inset-0"
-								>
-									<WorkspaceBrowser
-										chatId={$chatId}
-										{overlay}
-										terminalId={content.terminalId ?? null}
-										active={selectedContentId === getWorkspaceContentId(content, index)}
-									/>
-								</div>
-							{/if}
-						{/each}
-						{#each contents as content, index (getWorkspaceContentId(content, index))}
-							{#if content.type !== 'workspace-file' && content.type !== 'workspace-browser' && index !== selectedContentIdx}
+							{#if content.type !== 'workspace-file' && index !== selectedContentIdx}
 								<div
 									id={`workspace-panel-${index}`}
 									role="tabpanel"
@@ -773,18 +660,14 @@
 								></div>
 							{/if}
 						{/each}
-						{#if !['workspace-file', 'workspace-browser'].includes(contents[selectedContentIdx].type)}
+						{#if contents[selectedContentIdx].type !== 'workspace-file'}
 							<div
 								id={workspacePanelId}
 								role="tabpanel"
 								aria-labelledby={`workspace-tab-${selectedContentIdx}`}
-								class:pointer-events-none={contents[selectedContentIdx].type ===
-									'workspace-terminal'}
 								class="absolute inset-0"
 							>
-								{#if contents[selectedContentIdx].type === 'workspace-terminal'}
-									<!-- The persistent terminal renderer is owned by ChatControls. -->
-								{:else if contents[selectedContentIdx].type === 'iframe'}
+								{#if contents[selectedContentIdx].type === 'iframe'}
 									<iframe
 										bind:this={iframeElement}
 										title="Content"
@@ -835,35 +718,14 @@
 										/>
 									{/key}
 								{:else if contents[selectedContentIdx].type === 'workspace-files'}
-									{#if workspaceRuntime.kind === 'terminal'}
-										<FileNav
-											{onAttach}
-											{overlay}
-											chatId={$chatId}
-											initialFilePath={contents[selectedContentIdx].path ?? null}
-											onOpenFile={openWorkspaceFile}
-										/>
-									{:else if workspaceRuntime.kind === 'pyodide'}
+									{#if workspaceRuntime.kind === 'pyodide'}
 										<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
 									{/if}
 								{/if}
 							</div>
 						{/if}
 					</div>
-				{:else}
-					<WorkspaceLauncher
-						unavailableReason={workspaceRuntime.kind === 'terminal' && !workspaceRuntime.files
-							? $i18n.t('Send a message to start a chat before opening Terminal files.')
-							: workspaceRuntime.kind === 'unavailable'
-								? $i18n.t('Workspace connections could not be loaded. Reload to retry.')
-								: ''}
-						terminalId={workspaceTerminalId}
-						filesAvailable={workspaceFilesAvailable}
-						onOpenFiles={openWorkspaceFiles}
-						onOpenTerminal={() => openWorkspaceUtility('terminal')}
-						onOpenBrowser={() => openWorkspaceUtility('browser')}
-					/>
-				{/if}
+			{/if}
 			</div>
 		</div>
 	</div>

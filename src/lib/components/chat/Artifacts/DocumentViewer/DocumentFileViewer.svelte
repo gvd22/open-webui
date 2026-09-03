@@ -3,13 +3,7 @@
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
-	import {
-		pyodideWorker,
-		terminalServers,
-		workspaceActiveFile,
-		workspaceFileUpdate
-	} from '$lib/stores';
-	import { downloadFileBlobDetailed } from '$lib/apis/terminal';
+	import { pyodideWorker, workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
 	import OfficeDocumentPreview from '$lib/components/common/OfficeDocumentPreview.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -24,15 +18,12 @@
 	import {
 		getWorkspaceFileRefreshAction,
 		getWorkspaceFileUpdateAction,
-		type WorkspaceDocumentFormat,
-		type WorkspaceRuntime
+		type WorkspaceDocumentFormat
 	} from '../workspace';
 	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let path: string;
 	export let format: WorkspaceDocumentFormat;
-	export let runtime: WorkspaceRuntime;
-	export let chatId: string | null = null;
 	export let targetPage: number | null = null;
 
 	let root: HTMLDivElement;
@@ -51,6 +42,7 @@
 	let copiedPdfSource: ArrayBuffer | null = null;
 	let pdfData: ArrayBuffer | null = null;
 	let pendingPyodideRefresh = false;
+	let restoringAfterRenderFailure = false;
 	$: if (format === 'pdf' && candidateData !== copiedPdfSource) {
 		copiedPdfSource = candidateData;
 		pdfData = candidateData?.slice(0) ?? null;
@@ -80,21 +72,6 @@
 		return readPyodideWorkerFile(worker, path, maxDocumentBytes[format], signal);
 	};
 
-	const readTerminalFile = async (signal: AbortSignal) => {
-		const terminal = ($terminalServers ?? []).find((item) => item.id === runtime.terminalId);
-		if (!terminal?.url) throw new Error('unavailable');
-		const result = await downloadFileBlobDetailed(
-			terminal.url,
-			localStorage.token,
-			path,
-			chatId ?? undefined,
-			maxDocumentBytes[format],
-			signal
-		);
-		if (!result.ok) throw new Error(result.reason);
-		return result.blob.arrayBuffer();
-	};
-
 	const getLoadError = (cause: unknown) => {
 		if (cause instanceof Error && cause.message === 'missing') {
 			return $i18n.t('This file is no longer available.');
@@ -120,11 +97,7 @@
 		else loading = true;
 
 		try {
-			if (!runtime.files) throw new Error('unavailable');
-			const nextData =
-				runtime.kind === 'terminal'
-					? await readTerminalFile(abortController.signal)
-					: await readPyodideFile(abortController.signal);
+			const nextData = await readPyodideFile(abortController.signal);
 			if (generation !== loadGeneration) return;
 			assertDocumentSize(nextData, maxDocumentBytes[format]);
 			candidateData = nextData;
@@ -176,13 +149,15 @@
 		if (!renderedCandidate) return;
 		displayedData = renderedCandidate;
 		displayedGeneration = candidateGeneration;
-		error = '';
+		if (restoringAfterRenderFailure) restoringAfterRenderFailure = false;
+		else error = '';
 		loading = false;
 		refreshing = false;
 	};
 
 	const handlePreviewFailed = (event: CustomEvent<unknown>) => {
 		if (!getRenderedCandidate(event.detail)) return;
+		restoringAfterRenderFailure = Boolean(displayedData);
 		candidateData = displayedData;
 		error = displayedData
 			? $i18n.t('The latest update could not be displayed. Showing the previous version.')
@@ -211,7 +186,6 @@
 	};
 
 	const refreshPyodideFile = (event: Event) => {
-		if (runtime.kind !== 'pyodide') return;
 		const detail = (
 			event as CustomEvent<{
 				paths?: string[];
@@ -246,15 +220,9 @@
 			path?: string;
 			previousPath?: string;
 			kind?: 'changed' | 'deleted' | 'renamed' | 'unknown';
-			terminalId?: string | null;
 		} | null
 	) => {
 		if (!update) return;
-		if (
-			update.terminalId &&
-			(runtime.kind !== 'terminal' || update.terminalId !== runtime.terminalId)
-		)
-			return;
 		const action = getWorkspaceFileUpdateAction(update, path, $workspaceActiveFile?.path === path);
 		if (action === 'deleted') {
 			loadGeneration += 1;

@@ -39,17 +39,11 @@
 		tools,
 		skills,
 		toolServers,
-		terminalServers,
 		functions,
 		selectedFolder,
 		showEmbeds,
-		selectedTerminalId,
-		workspaceTerminalConnectionId,
 		showFileNavPath,
-		showFileNavDir,
-		workspaceFileUpdate,
 		workspaceActiveFile,
-		workspaceOpenFilePaths,
 		workspaceOutputFiles,
 		chatRequestQueues,
 		desktopEvent
@@ -79,8 +73,7 @@
 		createRuntimeWorkspaceOutputFile,
 		isKnownWorkspaceOutputPath,
 		resolveWorkspaceOutputFile,
-		WORKSPACE_OPEN_OUTPUT_EVENT,
-		workspaceOutputStorageKey
+		WORKSPACE_OPEN_OUTPUT_EVENT
 	} from './Artifacts/workspaceOutputs';
 	import {
 		applyResponseStreamEvent,
@@ -124,6 +117,7 @@
 	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
+	import { updateWorkspaceOutputs } from '$lib/apis/artifacts';
 	import { getFunctions } from '$lib/apis/functions';
 	import { initiateOAuthRedirect } from '$lib/apis/configs';
 	import { updateFolderById } from '$lib/apis/folders';
@@ -136,9 +130,7 @@
 	import {
 		getDefaultWorkspaceContentId,
 		getWorkspaceModelFocus,
-		isWorkspaceDocumentPath,
 		resolveWorkspaceRuntime,
-		WORKSPACE_TERMINAL_ID,
 		type WorkspaceModelFocus
 	} from './Artifacts/workspace';
 	import { flushWorkspaceSaveBarrier } from './Artifacts/serializedSaveQueue';
@@ -352,7 +344,6 @@
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	$: codeInterpreterEnabled =
-		!$selectedTerminalId &&
 		selectedModelIds.length > 0 &&
 		selectedModelIds.every((id) => {
 			const model = $models.find((candidate) => candidate.id === id);
@@ -364,12 +355,9 @@
 		Boolean($config?.features?.enable_code_interpreter) &&
 		($user?.role === 'admin' || Boolean($user?.permissions?.features?.code_interpreter));
 	$: workspaceRuntime = resolveWorkspaceRuntime(
-		$terminalServers,
-		$selectedTerminalId,
-		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter',
-		$chatId
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
 	);
-	$: workspaceDefaultContentId = getDefaultWorkspaceContentId(workspaceRuntime);
+	$: workspaceDefaultContentId = getDefaultWorkspaceContentId();
 	let webSearchActive = false;
 	let showWebSearchConfirm = false;
 	let pendingWebSearchPrompt: string | null = null;
@@ -419,6 +407,7 @@
 	let generating = false;
 	let knownWebPreviewIds = new Set<string>();
 	let workspaceHydrationKey = '';
+	let workspaceHydrationWarningShown = false;
 	let dragged = false;
 	let generationController = null;
 	let contextCompactionToastId = null;
@@ -454,14 +443,22 @@
 		messages: {},
 		currentId: null
 	};
-	const workspaceOutputCatalog = createWorkspaceOutputCatalog(workspaceOutputFiles);
+	const workspaceOutputCatalog = createWorkspaceOutputCatalog(
+		workspaceOutputFiles,
+		async (id, mutation) => {
+			const result = await updateWorkspaceOutputs(localStorage.token, id, mutation);
+			if (chat?.id === id && chat.chat) chat.chat._workspace_outputs = result.files;
+			return result.files;
+		},
+		() => toast.error($i18n.t('Output list could not be saved'))
+	);
 
-	const syncWorkspaceOutputCatalog = (id: string, nextHistory: any) =>
-		workspaceOutputCatalog.sync(id, nextHistory);
+	const syncWorkspaceOutputCatalog = (id: string) =>
+		workspaceOutputCatalog.sync(id, chat?.chat?._workspace_outputs);
 
 	const recordWorkspaceOutput = (
 		path: unknown,
-		options: { source: 'terminal' | 'pyodide'; terminalId?: string | null; page?: number | null }
+		options: { page?: number | null } = {}
 	) => {
 		workspaceOutputCatalog.record($chatId ?? '', path, options);
 	};
@@ -1030,20 +1027,8 @@
 		}
 	};
 
-	/** Check whether a terminal ID references an available managed terminal. */
-	const isTerminalAvailable = (tid: string): boolean => {
-		return ($terminalServers ?? []).some((terminal) => terminal.id === tid);
-	};
-
 	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
-		if (file.source === 'terminal') {
-			if (!file.terminalId || !isTerminalAvailable(file.terminalId)) {
-				toast.error($i18n.t('The terminal for this output is no longer available.'));
-				return;
-			}
-			selectedTerminalId.set(file.terminalId);
-			workspaceTerminalConnectionId.set(file.terminalId);
-		} else if (workspaceRuntime.kind !== 'pyodide') {
+		if (workspaceRuntime.kind !== 'pyodide') {
 			toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
 			return;
 		}
@@ -1056,39 +1041,10 @@
 			resolveWorkspaceOutputFile(get(workspaceOutputFiles), path, workspaceRuntime) ??
 			createRuntimeWorkspaceOutputFile(path, workspaceRuntime);
 		if (file && !isKnownWorkspaceOutputPath(get(workspaceOutputFiles), file.path)) {
-			recordWorkspaceOutput(file.path, {
-				source: file.source,
-				terminalId: file.terminalId,
-				page: file.page
-			});
+			recordWorkspaceOutput(file.path, { page: file.page });
 		}
 		if (file) openWorkspaceOutputFile(file);
 	};
-
-	$: selectedModelSupportsTerminal = selectedModelIds.some((id) => {
-		const model = $models.find((candidate) => candidate.id === id);
-		return (
-			(model?.info?.meta?.capabilities as Record<string, boolean> | undefined)?.terminal ?? false
-		);
-	});
-
-	// KOBY exposes a managed system terminal. Route to it automatically instead of
-	// asking end users to choose infrastructure in the composer.
-	$: if (!$selectedTerminalId && selectedModelSupportsTerminal && !chat?.chat?.terminal_id) {
-		const defaultTerminal = ($terminalServers ?? []).find(
-			(terminal) => terminal.id && terminal.contexts?.chat !== false
-		);
-		if (defaultTerminal?.id) selectedTerminalId.set(defaultTerminal.id);
-	}
-
-	$: if (
-		$terminalServers !== null &&
-		$selectedTerminalId &&
-		!isTerminalAvailable($selectedTerminalId) &&
-		!chat?.chat?.terminal_id
-	) {
-		selectedTerminalId.set(null);
-	}
 
 	let settingDefaults = false;
 	const setDefaults = async () => {
@@ -1184,13 +1140,6 @@
 					}
 				}
 
-				// Set Default Terminal — only if the referenced terminal actually exists
-				if (model?.info?.meta?.terminalId && !chat?.chat?.terminal_id) {
-					const tid = model.info.meta.terminalId;
-					if (isTerminalAvailable(tid)) {
-						selectedTerminalId.set(tid);
-					}
-				}
 			}
 		} finally {
 			settingDefaults = false;
@@ -1240,55 +1189,6 @@
 			chat_id: id,
 			data: { type: 'last_read_at' }
 		});
-	};
-
-	const terminalEventHandler = (type: string, data: any) => {
-		if (type === 'terminal:display_file') {
-			if (!data?.path) return;
-			recordWorkspaceOutput(data.path, {
-				source: 'terminal',
-				terminalId: data?.terminal_id ?? $selectedTerminalId,
-				page: data?.page
-			});
-			if ($settings?.terminalFileDisplay === 'inline') return;
-			if ($workspaceOpenFilePaths.includes(data.path)) {
-				workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
-			}
-			displayFileHandler(data.path, { showControls, showFileNavPath }, { page: data?.page });
-		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
-			if (!data?.path) return;
-			recordWorkspaceOutput(data.path, {
-				source: 'terminal',
-				terminalId: data?.terminal_id ?? $selectedTerminalId
-			});
-			if (isWorkspaceDocumentPath(data.path)) {
-				if ($workspaceOpenFilePaths.includes(data.path)) {
-					workspaceFileUpdate.set({ path: data.path, kind: 'changed', revision: Date.now() });
-				} else {
-					displayFileHandler(data.path, { showControls, showFileNavPath });
-				}
-			}
-			showFileNavDir.set(data.path);
-		} else if (type === 'terminal:run_command') {
-			// A shell command can change any path (including rename/delete). Mark open
-			// viewers for a cheap verify on activation instead of guessing changed paths.
-			const terminalId =
-				data?.terminal_id ?? $selectedTerminalId ?? ($terminalServers ?? []).find((t) => t.id)?.id;
-			workspaceFileUpdate.set({
-				kind: 'unknown',
-				terminalId: terminalId ?? null,
-				revision: Date.now()
-			});
-			showFileNavDir.set('/');
-			// Historical terminal events are replayed while a chat is restored. Only a live
-			// model run should reveal the right-side terminal workspace.
-			if (generating && terminalId) {
-				workspaceTerminalConnectionId.set(terminalId);
-				artifactCode.set(WORKSPACE_TERMINAL_ID);
-				showArtifacts.set(true);
-				showControls.set(true);
-			}
-		}
 	};
 
 	const dismissContextCompactionToast = () => {
@@ -1521,8 +1421,6 @@
 					askUserTimeoutMs =
 						typeof data?.timeout_ms === 'number' && data.timeout_ms > 0 ? data.timeout_ms : null;
 					showAskUserDialog = true;
-				} else if (type.startsWith('terminal:')) {
-					terminalEventHandler(type, data);
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -1999,7 +1897,7 @@
 	};
 
 	const onHistoryChange = (history) => {
-		syncWorkspaceOutputCatalog($chatId ?? '', history);
+		syncWorkspaceOutputCatalog($chatId ?? '');
 		if (history) {
 			clearTimeout(contentsRAF);
 			contentsRAF = setTimeout(() => {
@@ -2052,7 +1950,13 @@
 					return item;
 				})
 			);
-		} catch {
+			workspaceHydrationWarningShown = false;
+		} catch (error) {
+			console.error('Workspace references could not be loaded', error);
+			if (!workspaceHydrationWarningShown) {
+				workspaceHydrationWarningShown = true;
+				toast.error($i18n.t('Workspace content could not be loaded'));
+			}
 			if (workspaceHydrationKey === key) workspaceHydrationKey = '';
 		}
 	};
@@ -2141,6 +2045,7 @@
 		resetWebSearchConfirmation();
 		knownWebPreviewIds = new Set();
 		workspaceHydrationKey = '';
+		workspaceHydrationWarningShown = false;
 
 		// Mark the outgoing chat as read before resetting; in-place created chats
 		// keep chatIdProp undefined, so navigateHandler never marks them read.
@@ -2148,7 +2053,6 @@
 			updateLastReadAt($chatId);
 		}
 		chat = null;
-		selectedTerminalId.set(null);
 
 		if ($user?.role !== 'admin' && $user?.permissions?.chat?.temporary_enforced) {
 			await temporaryChatEnabled.set(true);
@@ -2471,7 +2375,6 @@
 				chatTitle.set(chatContent.title);
 
 				params = structuredClone(chatContent?.params ?? {});
-				selectedTerminalId.set(chatContent?.terminal_id ?? null);
 				delete params.note_id;
 				chatFiles = structuredClone(chatContent?.files ?? []);
 				// Load tasks from chat-level DB field
@@ -3734,8 +3637,6 @@
 		// in the message so the backend can inject their full content.
 		const skillIds = [...selectedSkillIds];
 
-		// Only send terminal_id if the model has terminal capability enabled
-		const terminalEnabled = model.info?.meta?.capabilities?.terminal ?? true;
 		const useChatVariablesFallback =
 			!_chatId || $temporaryChatEnabled || isTemporaryChatId(_chatId);
 
@@ -3756,11 +3657,6 @@
 				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				terminal_id:
-					terminalEnabled &&
-					($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId)
-						? $selectedTerminalId
-						: undefined,
 				workspace_focus: workspaceFocus,
 				workspace_file: $workspaceActiveFile ?? undefined,
 				tool_servers: [
@@ -4322,7 +4218,6 @@
 		try {
 			const res = await deleteChatById(localStorage.token, id);
 			if (res) {
-				localStorage.removeItem(workspaceOutputStorageKey(id));
 				initNewChat();
 				await goto('/');
 				await refreshChatList(localStorage.token, { refreshPinned: true });

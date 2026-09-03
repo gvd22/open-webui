@@ -44,7 +44,6 @@
 	} from '$lib/stores';
 	import { refreshChatList } from '$lib/stores/chatList';
 	import { getFileContentById } from '$lib/apis/files';
-	import { readFile } from '$lib/apis/terminal';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -301,16 +300,6 @@
 	const readRuntimeFileForPreview = async (data) => {
 		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
 		const sourcePath = String(data?.source_path ?? '');
-		if (data?.runtime === 'terminal') {
-			const terminal = ($terminalServers ?? []).find((item) => item.id === data.terminal_id);
-			if (!terminal?.url) throw new Error('The selected Terminal is unavailable.');
-			const content = await readFile(terminal.url, localStorage.token, sourcePath, data.chat_id);
-			if (content === null) throw new Error('The Terminal file could not be read.');
-			if (new TextEncoder().encode(content).byteLength > maxBytes) {
-				throw new Error('The runtime file is too large to import into a Web Preview.');
-			}
-			return content;
-		}
 		if (data?.runtime === 'pyodide') {
 			return await readWorkspaceText(getOrCreateWorker(), data.id, sourcePath, maxBytes);
 		}

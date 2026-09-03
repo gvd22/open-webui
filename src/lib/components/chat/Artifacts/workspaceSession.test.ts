@@ -21,7 +21,7 @@ const storage = (initial: Record<string, string> = {}): Storage => {
 };
 
 describe('workspace session persistence', () => {
-	it('round-trips bounded per-chat state without persisting the launcher', () => {
+	it('round-trips bounded per-chat state', () => {
 		const target = storage();
 		expect(
 			writeWorkspaceState(
@@ -30,8 +30,7 @@ describe('workspace session persistence', () => {
 					order: ['workspace:files'],
 					closed: [],
 					filesOpened: true,
-					openedFiles: ['/report.pdf'],
-					utilities: [{ id: 'terminal:1', kind: 'terminal', title: 'Terminal' }]
+					openedFiles: ['/report.pdf']
 				},
 				target
 			)
@@ -39,8 +38,7 @@ describe('workspace session persistence', () => {
 
 		expect(readWorkspaceState('chat-1', target)).toMatchObject({
 			filesOpened: true,
-			openedFiles: ['/report.pdf'],
-			utilities: [{ id: 'terminal:1', kind: 'terminal' }]
+			openedFiles: ['/report.pdf']
 		});
 	});
 

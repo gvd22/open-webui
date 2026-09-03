@@ -250,6 +250,8 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			bind:this={outerContainer}
+			role="region"
+			aria-label="Word document"
 			class="h-full overflow-auto overscroll-contain {zoomPercent > 100
 				? 'cursor-grab select-none active:cursor-grabbing'
 				: ''}"

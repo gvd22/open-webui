@@ -14,6 +14,7 @@ from open_webui.utils.canvas import (
     CANVAS_DOCUMENTS_KEY,
     CanvasConflictError,
     build_canvas_note_content,
+    build_canvas_document_update,
     canvas_content_hash,
     canvas_timestamp,
     generate_canvas_title,
@@ -25,14 +26,15 @@ from open_webui.utils.canvas import (
 from open_webui.utils.web_preview import (
     WEB_PREVIEW_DOCUMENTS_KEY,
     WebPreviewConflictError,
-    generate_web_preview_title,
-    normalize_web_preview_files,
-    require_web_preview_precondition,
+    build_web_preview_document_update,
     set_active_web_preview,
     web_preview_content_hash,
-    web_preview_timestamp,
 )
-from pydantic import BaseModel
+from open_webui.utils.workspace_outputs import (
+    WORKSPACE_OUTPUTS_KEY,
+    merge_workspace_outputs,
+)
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
@@ -68,6 +70,41 @@ class WebPreviewDocumentForm(BaseModel):
     expected_content_hash: str | None = None
 
 
+class WorkspaceOutputMutationForm(BaseModel):
+    upsert: list[dict] = Field(default_factory=list, max_length=100)
+    remove: list[str] = Field(default_factory=list, max_length=100)
+
+
+@router.post('/{id}/workspace-outputs')
+async def update_workspace_outputs(
+    id: str,
+    form_data: WorkspaceOutputMutationForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Atomically update the output catalog stored with one chat."""
+
+    def mutate(chat_data: dict, _session: AsyncSession):
+        files = merge_workspace_outputs(
+            chat_data.get(WORKSPACE_OUTPUTS_KEY),
+            form_data.upsert,
+            form_data.remove,
+        )
+        if files:
+            chat_data[WORKSPACE_OUTPUTS_KEY] = files
+        else:
+            chat_data.pop(WORKSPACE_OUTPUTS_KEY, None)
+        return chat_data, files
+
+    try:
+        mutation = await Chats.mutate_chat_by_id(id, mutate, user_id=user.id, db=db, touch=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if mutation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    return {'files': mutation[1]}
+
+
 @router.post('/{id}/web-preview/{preview_id}')
 async def update_transient_web_preview(
     id: str,
@@ -77,13 +114,6 @@ async def update_transient_web_preview(
     db: AsyncSession = Depends(get_async_session),
 ):
     """Persist direct edits to a chat-scoped Web Preview."""
-    try:
-        files = normalize_web_preview_files(form_data.files)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    if form_data.entrypoint not in files or files[form_data.entrypoint]['mime'] != 'text/html':
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid HTML entrypoint.')
-
     def mutate(chat_data: dict, _session: AsyncSession):
         documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
         current = documents.get(preview_id)
@@ -92,21 +122,18 @@ async def update_transient_web_preview(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='Web Preview not found in this chat.',
             )
-        require_web_preview_precondition(
+        updated = build_web_preview_document_update(
             preview_id,
             current,
-            form_data.expected_updated_at,
-            form_data.expected_content_hash,
+            files=form_data.files,
+            title=form_data.title,
+            entrypoint=form_data.entrypoint,
+            exported_path=form_data.exported_path,
+            exported_runtime=form_data.exported_runtime,
+            update_export=True,
+            expected_updated_at=form_data.expected_updated_at,
+            expected_content_hash=form_data.expected_content_hash,
         )
-        updated = {
-            **current,
-            'title': form_data.title.strip() or generate_web_preview_title(files, form_data.entrypoint),
-            'entrypoint': form_data.entrypoint,
-            'files': files,
-            'exported_path': form_data.exported_path,
-            'exported_runtime': form_data.exported_runtime,
-            'updated_at': web_preview_timestamp(current.get('updated_at')),
-        }
         documents[preview_id] = updated
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
         return set_active_web_preview(chat_data, preview_id), updated
@@ -115,6 +142,8 @@ async def update_transient_web_preview(
         mutation = await Chats.mutate_chat_by_id(id, mutate, user_id=user.id, db=db, touch=False)
     except WebPreviewConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.payload) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if mutation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
     _, updated = mutation
@@ -237,26 +266,16 @@ async def update_transient_canvas_document(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='Canvas document not found in this chat.',
             )
-        require_canvas_precondition(
+        updated_document = build_canvas_document_update(
             canvas_id,
             document,
-            form_data.expected_updated_at,
-            form_data.expected_content_hash,
+            content=form_data.content,
+            title=form_data.title,
+            title_edited=form_data.title_edited,
+            expected_updated_at=form_data.expected_updated_at,
+            expected_content_hash=form_data.expected_content_hash,
+            source='manual',
         )
-        next_title = form_data.title.strip() or generate_canvas_title(form_data.content)
-        has_manual_change = (
-            next_title != document.get('title', '')
-            or form_data.content != document.get('content', '')
-            or form_data.title_edited != bool(document.get('title_edited', False))
-        )
-        updated_document = {
-            **document,
-            'title': next_title,
-            'content': form_data.content,
-            'title_edited': form_data.title_edited,
-            'last_ai_update': None if has_manual_change else document.get('last_ai_update'),
-            'updated_at': canvas_timestamp(document.get('updated_at')),
-        }
         sync = await sync_linked_canvas_note_content(
             updated_document.get('note_id'),
             user.id,

@@ -8,9 +8,9 @@ const harnessRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(harnessRoot, '../../..');
 const fixturesRoot = path.join(repositoryRoot, 'tests/fixtures/document-viewer');
 const fixtureByPath: Record<string, string> = {
-	'/workspace/basic.pdf': 'pdf/basic.pdf',
-	'/workspace/basic.docx': 'docx/basic.docx',
-	'/workspace/basic.pptx': 'pptx/basic.pptx'
+	'/mnt/uploads/basic.pdf': 'pdf/basic.pdf',
+	'/mnt/uploads/basic.docx': 'docx/basic.docx',
+	'/mnt/uploads/basic.pptx': 'pptx/basic.pptx'
 };
 type RuntimeMode = 'valid' | 'corrupt' | 'missing' | 'unavailable' | 'oversized';
 type RuntimeState = { mode: RuntimeMode; revision?: 'a' | 'b'; delayMs?: number };
@@ -28,7 +28,7 @@ const nextRequestCount = (sessionId: string, filePath: string) => {
 
 const getFixture = (filePath: string) =>
 	fixtureByPath[filePath] ??
-	(/^\/workspace\/sequence-\d+\.pdf$/.test(filePath) ? 'pdf/basic.pdf' : undefined);
+		(/^\/mnt\/uploads\/sequence-\d+\.pdf$/.test(filePath) ? 'pdf/basic.pdf' : undefined);
 
 const withRevision = (bytes: Buffer, revision?: RuntimeState['revision']) => {
 	if (!revision) return bytes;
@@ -120,6 +120,10 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
+			'$lib/pyodide/createPyodideWorker': path.join(
+				harnessRoot,
+				'src/pyodide-worker.ts'
+			),
 			$lib: path.join(repositoryRoot, 'src/lib'),
 			'$app/environment': path.join(harnessRoot, 'src/app-environment.ts')
 		}

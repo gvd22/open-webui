@@ -13,8 +13,10 @@ from open_webui.models.notes import Note, NoteModel, Notes
 from open_webui.routers.chat_artifacts import (
     CanvasDocumentForm,
     CanvasPromotionForm,
+    WorkspaceOutputMutationForm,
     promote_transient_canvas_document,
     update_transient_canvas_document,
+    update_workspace_outputs,
 )
 from open_webui.utils.canvas import (
     CANVAS_DOCUMENTS_KEY,
@@ -95,6 +97,32 @@ def test_concurrent_chat_mutations_preserve_both_changes(monkeypatch, tmp_path):
                 persisted = await session.get(Chat, 'chat-1')
                 assert persisted.chat['canvas'] is True
                 assert persisted.chat['web_preview'] is True
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_workspace_outputs_are_persisted_with_the_chat(monkeypatch, tmp_path):
+    async def run():
+        engine, sessions = await _database(tmp_path)
+        try:
+            await _insert_chat(sessions, {'title': 'Workspace'})
+            _patch_chat_sessions(monkeypatch, sessions)
+
+            result = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(
+                    upsert=[{'path': '/mnt/uploads/report.pdf', 'updatedAt': 10}]
+                ),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+            assert result['files'][0]['path'] == '/mnt/uploads/report.pdf'
+
+            async with sessions() as session:
+                persisted = await session.get(Chat, 'chat-1')
+                assert persisted.chat['_workspace_outputs'] == result['files']
         finally:
             await engine.dispose()
 

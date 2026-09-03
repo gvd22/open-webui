@@ -7,7 +7,10 @@ import pytest
 from fastapi import HTTPException
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
-from open_webui.routers.chats import WebPreviewDocumentForm, update_transient_web_preview
+from open_webui.routers.chat_artifacts import (
+    WebPreviewDocumentForm,
+    update_transient_web_preview,
+)
 from open_webui.tools.builtin import (
     web_preview_create,
     web_preview_import_runtime_file,
@@ -315,7 +318,7 @@ def test_canvas_and_web_preview_are_independent_model_tools(monkeypatch):
     }
 
 
-def test_runtime_import_tool_is_exposed_only_with_an_active_runtime(monkeypatch):
+def test_terminal_metadata_does_not_enable_runtime_import_on_pyodide_branch(monkeypatch):
     chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
     chat = SimpleNamespace(id=chat_id, meta={})
     monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
@@ -348,7 +351,7 @@ def test_runtime_import_tool_is_exposed_only_with_an_active_runtime(monkeypatch)
     )
 
     assert 'web_preview_import_runtime_file' not in without_runtime
-    assert 'web_preview_import_runtime_file' in with_terminal
+    assert 'web_preview_import_runtime_file' not in with_terminal
 
 
 def test_runtime_import_tool_is_exposed_with_active_pyodide(monkeypatch):
@@ -415,12 +418,12 @@ def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(monkeypatc
         asyncio.run(
             web_preview_import_runtime_file(
                 preview_id,
-                '/workspace/results.json',
+                '/mnt/uploads/results.json',
                 expected_updated_at=10,
                 expected_content_hash=web_preview_content_hash(document),
                 target_path='data/results.json',
                 __event_call__=event_call,
-                __metadata__={'terminal_id': 'terminal-1', 'session_id': 'socket-1'},
+                __metadata__={'session_id': 'socket-1'},
                 __chat_id__=chat.id,
                 __user__={'id': 'user-1'},
             )
@@ -433,9 +436,9 @@ def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(monkeypatc
     assert imported == {'content': '{"values":[1,2,3]}', 'mime': 'application/json'}
     assert calls[0]['type'] == 'workspace:read_runtime_file'
     assert isinstance(calls[0]['data']['id'], str)
-    assert calls[0]['data']['runtime'] == 'terminal'
-    assert calls[0]['data']['terminal_id'] == 'terminal-1'
-    assert calls[0]['data']['source_path'] == '/workspace/results.json'
+    assert calls[0]['data']['runtime'] == 'pyodide'
+    assert 'terminal_id' not in calls[0]['data']
+    assert calls[0]['data']['source_path'] == '/mnt/uploads/results.json'
     assert calls[0]['data']['max_bytes'] == 512_000
 
 
@@ -472,6 +475,30 @@ def test_runtime_file_import_rejects_stale_preview_before_reading_runtime(monkey
     )
 
     assert result['type'] == 'web_preview.conflict'
+    event_call.assert_not_awaited()
+
+
+def test_runtime_file_import_rejects_paths_outside_pyodide_uploads(monkeypatch):
+    chat = SimpleNamespace(id='chat-1', user_id='user-1', chat={})
+    event_call = AsyncMock(return_value={'content': 'private'})
+    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
+
+    result = json.loads(
+        asyncio.run(
+            web_preview_import_runtime_file(
+                'preview-1',
+                '/mnt/uploads/../private.json',
+                expected_updated_at=10,
+                expected_content_hash='hash',
+                __event_call__=event_call,
+                __chat_id__=chat.id,
+                __user__={'id': 'user-1'},
+            )
+        )
+    )
+
+    assert result['type'] == 'web_preview.error'
+    assert 'canonical Pyodide uploads path' in result['message']
     event_call.assert_not_awaited()
 
 

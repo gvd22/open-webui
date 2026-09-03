@@ -140,25 +140,35 @@ export const validatePptxArchive = async (candidateData: ArrayBuffer, limits = P
 	}
 };
 
-export const validateDocxArchive = async (candidateData: ArrayBuffer, limits = DOCX_ZIP_LIMITS) => {
+const validateBoundedOfficeArchive = async (
+	candidateData: ArrayBuffer,
+	limits = DOCX_ZIP_LIMITS,
+	label = 'DOCX'
+) => {
 	const zip = await JSZip.loadAsync(candidateData, { createFolders: false, checkCRC32: false });
 	const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-	if (entries.length > limits.maxEntries) throw new Error('DOCX has too many archive entries');
+	if (entries.length > limits.maxEntries) throw new Error(`${label} has too many archive entries`);
 
 	let totalBytes = 0;
 	let mediaBytes = 0;
 	for (const entry of entries) {
 		const size = getZipEntrySize(entry);
 		if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
-			throw new Error('DOCX entry size is invalid');
+			throw new Error(`${label} entry size is invalid`);
 		}
-		if (size > limits.maxEntryBytes) throw new Error('DOCX archive entry is too large');
+		if (size > limits.maxEntryBytes) throw new Error(`${label} archive entry is too large`);
 		totalBytes += size;
 		if (entry.name.startsWith('word/media/')) mediaBytes += size;
 	}
-	if (totalBytes > limits.maxTotalBytes) throw new Error('DOCX expands beyond the viewer limit');
-	if (mediaBytes > limits.maxMediaBytes) throw new Error('DOCX media exceeds the viewer limit');
+	if (totalBytes > limits.maxTotalBytes) throw new Error(`${label} expands beyond the viewer limit`);
+	if (mediaBytes > limits.maxMediaBytes) throw new Error(`${label} media exceeds the viewer limit`);
 	if (totalBytes > candidateData.byteLength * limits.maxCompressionRatio) {
-		throw new Error('DOCX compression ratio exceeds the viewer limit');
+		throw new Error(`${label} compression ratio exceeds the viewer limit`);
 	}
 };
+
+export const validateDocxArchive = (candidateData: ArrayBuffer, limits = DOCX_ZIP_LIMITS) =>
+	validateBoundedOfficeArchive(candidateData, limits, 'DOCX');
+
+export const validateSpreadsheetArchive = (candidateData: ArrayBuffer) =>
+	validateBoundedOfficeArchive(candidateData, DOCX_ZIP_LIMITS, 'Spreadsheet');

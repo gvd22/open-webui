@@ -83,3 +83,12 @@ export const updateTransientWebPreview = async (
 
 export const selectTransientWebPreview = async (token: string, chatId: string, previewId: string) =>
 	artifactRequest(`${artifactPath(chatId, 'web-preview', previewId)}/select`, token);
+
+export const updateWorkspaceOutputs = async (
+	token: string,
+	chatId: string,
+	mutation: { upsert?: Record<string, unknown>[]; remove?: string[] }
+) =>
+	artifactRequest(`${encodeURIComponent(chatId)}/workspace-outputs`, token, {
+		body: { upsert: mutation.upsert ?? [], remove: mutation.remove ?? [] }
+	});

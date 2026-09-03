@@ -12,6 +12,7 @@ import json
 import logging
 import time
 import uuid
+from pathlib import PurePosixPath
 from typing import Literal, Optional
 
 from fastapi import HTTPException, Request
@@ -73,6 +74,7 @@ from open_webui.utils.canvas import (
     CANVAS_DOCUMENTS_KEY,
     CANVAS_MAX_DOCUMENT_COUNT,
     CanvasConflictError,
+    build_canvas_document_update,
     build_canvas_capacity_notice,
     canvas_document_limit_reached,
     canvas_timestamp,
@@ -88,6 +90,7 @@ from open_webui.utils.web_preview import (
     WEB_PREVIEW_DOCUMENTS_KEY,
     WEB_PREVIEW_MAX_DOCUMENT_COUNT,
     WebPreviewConflictError,
+    build_web_preview_document_update,
     build_web_preview_capacity_notice,
     generate_web_preview_title,
     normalize_web_preview_files,
@@ -328,41 +331,20 @@ async def canvas_update_document(
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
-    title_was_supplied = title is not None and bool(title.strip())
-
     async def mutate(chat_data: dict, session):
         documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
         current = documents.get(canvas_id)
         if not current:
             raise ValueError('Canvas document not found in this chat.')
-        require_canvas_precondition(
+        updated = build_canvas_document_update(
             canvas_id,
             current,
-            expected_updated_at,
-            expected_content_hash,
+            content=content,
+            title=title,
+            expected_updated_at=expected_updated_at,
+            expected_content_hash=expected_content_hash,
+            source='ai',
         )
-        updated = {
-            **current,
-            'content': content,
-            'updated_at': canvas_timestamp(current.get('updated_at')),
-            'last_ai_update': {
-                'title': current.get('title', ''),
-                'content': current.get('content', ''),
-                'title_edited': bool(current.get('title_edited', False)),
-            },
-            **(
-                {
-                    'title': generate_canvas_title(content, title or ''),
-                    'title_edited': title_was_supplied,
-                }
-                if title_was_supplied
-                else (
-                    {'title': generate_canvas_title(content), 'title_edited': False}
-                    if not current.get('title_edited', False)
-                    else {}
-                )
-            ),
-        }
         sync = await sync_linked_canvas_note_content(
             updated.get('note_id'),
             (__user__ or {}).get('id', ''),
@@ -552,21 +534,14 @@ async def canvas_replace_text(
         if occurrences != 1:
             raise ValueError(f'Expected one exact passage match, found {occurrences}. Read a more specific range.')
         updated_content = content.replace(old_text, new_text, 1)
-        updated = {
-            **current,
-            'content': updated_content,
-            'updated_at': canvas_timestamp(current.get('updated_at')),
-            'last_ai_update': {
-                'title': current.get('title', ''),
-                'content': content,
-                'title_edited': bool(current.get('title_edited', False)),
-            },
-            **(
-                {}
-                if current.get('title_edited', False)
-                else {'title': generate_canvas_title(updated_content), 'title_edited': False}
-            ),
-        }
+        updated = build_canvas_document_update(
+            canvas_id,
+            current,
+            content=updated_content,
+            expected_updated_at=int(current.get('updated_at') or 0),
+            expected_content_hash=expected_content_hash,
+            source='ai',
+        )
         sync = await sync_linked_canvas_note_content(
             updated.get('note_id'),
             (__user__ or {}).get('id', ''),
@@ -708,36 +683,20 @@ async def web_preview_update(
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
-    try:
-        normalized_files = normalize_web_preview_files(files)
-    except ValueError as exc:
-        return _web_preview_error(str(exc))
-
     def mutate(chat_data: dict, _session):
         documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
         current = documents.get(preview_id)
         if not current:
             raise ValueError('Web Preview not found in this chat.')
-        require_web_preview_precondition(
+        updated = build_web_preview_document_update(
             preview_id,
             current,
-            expected_updated_at,
-            expected_content_hash,
+            files=files,
+            title=title,
+            entrypoint=entrypoint,
+            expected_updated_at=expected_updated_at,
+            expected_content_hash=expected_content_hash,
         )
-        next_entrypoint = entrypoint or current.get('entrypoint', 'index.html')
-        if next_entrypoint not in normalized_files or normalized_files[next_entrypoint]['mime'] != 'text/html':
-            raise ValueError('The entrypoint must reference an HTML file in the preview package.')
-        updated = {
-            **current,
-            'title': (
-                generate_web_preview_title(normalized_files, next_entrypoint, title)
-                if title is not None
-                else current.get('title') or generate_web_preview_title(normalized_files, next_entrypoint)
-            ),
-            'entrypoint': next_entrypoint,
-            'files': normalized_files,
-            'updated_at': web_preview_timestamp(current.get('updated_at')),
-        }
         documents[preview_id] = updated
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
         return chat_data, updated
@@ -909,12 +868,13 @@ async def web_preview_replace_text(
         if occurrences != 1:
             raise ValueError(f'Expected one exact passage match, found {occurrences}. Read a more specific range.')
         files[path] = {**file, 'content': content.replace(old_text, new_text, 1)}
-        normalized_files = normalize_web_preview_files(files)
-        updated = {
-            **current,
-            'files': normalized_files,
-            'updated_at': web_preview_timestamp(current.get('updated_at')),
-        }
+        updated = build_web_preview_document_update(
+            preview_id,
+            current,
+            files=files,
+            expected_updated_at=int(current.get('updated_at') or 0),
+            expected_content_hash=web_preview_content_hash(current),
+        )
         documents[preview_id] = updated
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
         return chat_data, updated
@@ -939,12 +899,12 @@ async def web_preview_import_runtime_file(
 ) -> str:
     """Copy one text file from the active runtime into an existing Web Preview.
 
-    Use this after code execution or a Terminal command creates or transforms data that the
+    Use this after code execution creates or transforms data that the
     Web Preview should display. The imported file is a snapshot: the preview remains usable if
     the runtime later stops or the source file changes.
 
     :param preview_id: Stable Web Preview ID receiving the file.
-    :param source_path: Absolute path to a text file in the active Pyodide or Terminal workspace.
+    :param source_path: Absolute path to a text file in the active Pyodide workspace.
     :param expected_updated_at: Required updatedAt from the current Web Preview reference.
     :param expected_content_hash: Required whole-preview previewContentHash from web_preview_read_file or contentHash from a preview reference.
     :param target_path: Optional relative path inside the preview, for example data/results.json.
@@ -957,9 +917,16 @@ async def web_preview_import_runtime_file(
         return _web_preview_error('The active runtime is not connected to this chat.')
 
     source_path = str(source_path or '').strip()
-    if not source_path.startswith('/') or '\x00' in source_path or len(source_path) > 1_024:
-        return _web_preview_error('source_path must be an absolute runtime workspace path.')
-    source_name = source_path.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]
+    parsed_source_path = PurePosixPath(source_path)
+    if (
+        not source_path.startswith('/mnt/uploads/')
+        or '\x00' in source_path
+        or len(source_path) > 1_024
+        or '..' in parsed_source_path.parts
+        or str(parsed_source_path) != source_path
+    ):
+        return _web_preview_error('source_path must be a canonical Pyodide uploads path.')
+    source_name = parsed_source_path.name
     if not source_name:
         return _web_preview_error('source_path must reference a file.')
     target_path = str(target_path or f'data/{source_name}')
@@ -982,15 +949,12 @@ async def web_preview_import_runtime_file(
         return _web_preview_conflict(exc)
 
     metadata = __metadata__ or {}
-    terminal_id = str(metadata.get('terminal_id') or '')
-    runtime = 'terminal' if terminal_id else 'pyodide'
     response = await __event_call__(
         {
             'type': 'workspace:read_runtime_file',
             'data': {
                 'id': str(uuid.uuid4()),
-                'runtime': runtime,
-                'terminal_id': terminal_id or None,
+                'runtime': 'pyodide',
                 'chat_id': __chat_id__,
                 'source_path': source_path,
                 'max_bytes': WEB_PREVIEW_RUNTIME_IMPORT_MAX_BYTES,
@@ -1012,20 +976,15 @@ async def web_preview_import_runtime_file(
         current = documents.get(preview_id)
         if not current:
             raise ValueError('Web Preview not found in this chat.')
-        require_web_preview_precondition(
-            preview_id,
-            current,
-            expected_updated_at,
-            expected_content_hash,
-        )
         files = dict(current.get('files') or {})
         files[target_path] = {'content': content}
-        normalized_files = normalize_web_preview_files(files)
-        updated = {
-            **current,
-            'files': normalized_files,
-            'updated_at': web_preview_timestamp(current.get('updated_at')),
-        }
+        updated = build_web_preview_document_update(
+            preview_id,
+            current,
+            files=files,
+            expected_updated_at=expected_updated_at,
+            expected_content_hash=expected_content_hash,
+        )
         documents[preview_id] = updated
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
         return chat_data, updated

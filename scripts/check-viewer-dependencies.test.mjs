@@ -7,10 +7,8 @@ const root = new URL('../', import.meta.url);
 const required = {
 	'pdfjs-dist': 'Apache-2.0',
 	'docx-preview': 'Apache-2.0',
-	'@aiden0z/pptx-renderer': 'Apache-2.0',
 	jszip: '(MIT OR GPL-3.0-or-later)',
-	echarts: 'Apache-2.0',
-	zrender: 'BSD-3-Clause'
+	xlsx: 'Apache-2.0'
 };
 
 test('checks exact lockfile licenses and distributed notice files', async () => {
@@ -25,11 +23,8 @@ test('checks exact lockfile licenses and distributed notice files', async () => 
 	for (const file of [
 		'pdfjs-dist/LICENSE',
 		'docx-preview/LICENSE',
-		'@aiden0z/pptx-renderer/LICENSE',
 		'jszip/LICENSE.markdown',
-		'echarts/LICENSE',
-		'echarts/NOTICE',
-		'zrender/LICENSE'
+		'xlsx/LICENSE'
 	]) {
 		assert.match(notices, new RegExp(file.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')));
 	}

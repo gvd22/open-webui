@@ -7,6 +7,12 @@ Dieses Dokument ist die kompakte, testbare Fassung der relevanten Regeln aus der
 [KOBY Unified Workspace Gesamtspezifikation](2026-08-18-koby-unified-workspace-specification.md).
 Bei technischen Details oder Sicherheitsgrenzen bleibt die Gesamtspezifikation massgeblich.
 
+**Aktuelles Implementierungsprofil:** Der Branch `codex/koby-canvas-workspace` liefert den
+Pyodide-only-Start mit Canvas, Web Preview, Files und Dokumentausgaben. Terminal- und
+Browser-Workspace-Kriterien in diesem Dokument beschreiben die spaetere Erweiterung und sind fuer
+diesen Branch nicht abnahmeverbindlich. Der letzte vollstaendige Terminal-Stand ist separat auf
+`codex/koby-terminal-workspace` gesichert.
+
 ## 1. Produktvertrag
 
 1. Der Chat ist immer die primaere Interaktion.

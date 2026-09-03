@@ -7,20 +7,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const VIEWER_LICENSES = Object.freeze({
 	'pdfjs-dist': 'Apache-2.0',
 	'docx-preview': 'Apache-2.0',
-	'@aiden0z/pptx-renderer': 'Apache-2.0',
 	jszip: '(MIT OR GPL-3.0-or-later)',
-	echarts: 'Apache-2.0',
-	zrender: 'BSD-3-Clause'
+	xlsx: 'Apache-2.0'
 });
 
 export const VIEWER_NOTICE_FILES = Object.freeze([
 	'pdfjs-dist/LICENSE',
 	'docx-preview/LICENSE',
-	'@aiden0z/pptx-renderer/LICENSE',
 	'jszip/LICENSE.markdown',
-	'echarts/LICENSE',
-	'echarts/NOTICE',
-	'zrender/LICENSE'
+	'xlsx/LICENSE'
 ]);
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));

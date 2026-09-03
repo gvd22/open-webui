@@ -1,36 +1,25 @@
 <script lang="ts">
 	import { onDestroy, getContext, createEventDispatcher } from 'svelte';
-	import type { Writable } from 'svelte/store';
-	import type { i18n as i18nType } from 'i18next';
 	import type { ListeningPort } from '$lib/apis/terminal';
 	import { getListeningPorts, getPortProxyUrl } from '$lib/apis/terminal';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Icon from './Icon.svelte';
 
-	const i18n: Writable<i18nType> = getContext('i18n');
+	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher<{ previewPort: number }>();
 
 	export let baseUrl: string;
-	export let chatId: string | null = null;
 	export let apiKey: string;
 
 	let ports: ListeningPort[] = [];
 	let expanded = false;
 	let loading = false;
-	let loadError = false;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	const loadPorts = async () => {
 		loading = true;
-		try {
-			ports = await getListeningPorts(baseUrl, apiKey, { throwOnError: true, chatId });
-			loadError = false;
-		} catch {
-			ports = [];
-			loadError = true;
-		} finally {
-			loading = false;
-		}
+		ports = await getListeningPorts(baseUrl, apiKey);
+		loading = false;
 	};
 
 	const startPolling = () => {
@@ -51,7 +40,7 @@
 	};
 
 	const openPortExternal = (port: number) => {
-		const url = getPortProxyUrl(baseUrl, port, '', chatId);
+		const url = getPortProxyUrl(baseUrl, port);
 		window.open(url, '_blank', 'noopener,noreferrer');
 	};
 
@@ -65,94 +54,70 @@
 	});
 </script>
 
-{#if ports.length > 0 || loadError}
-	<div class="border-t border-gray-100 px-2 py-1 dark:border-gray-800">
-		<div class="flex items-center gap-1">
-			<button
-				type="button"
-				class="flex min-w-0 flex-1 items-center gap-1 text-xs font-normal text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
-				on:click={() => (expanded = !expanded)}
-				aria-expanded={expanded}
-				aria-controls="terminal-port-list"
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3 transition-transform {expanded ? '' : '-rotate-90'}"
+<div class="px-2 py-1">
+	<button
+		class="flex items-center gap-1 w-full text-xs font-normal text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100"
+		on:click={() => (expanded = !expanded)}
+	>
+		<Icon
+			name="chevron-down"
+			size={12}
+			strokeWidth={1.4}
+			class="transition-transform {expanded ? '' : '-rotate-90'}"
+		/>
+		{$i18n.t('Ports')}
+		<span class="ml-auto flex items-center gap-1">
+			{#if ports.length > 0}
+				<span
+					class="text-[0.625rem] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
 				>
-					<path
-						fill-rule="evenodd"
-						d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-				<span class="truncate">{$i18n.t('Ports')}</span>
-				{#if ports.length > 0}
-					<span
-						class="ml-auto rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-					>
-						{ports.length}
-					</span>
-				{/if}
-			</button>
+					{ports.length}
+				</span>
+			{/if}
 			<Tooltip content={$i18n.t('Refresh')}>
 				<button
-					type="button"
-					class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-400"
-					on:click={loadPorts}
+					class="flex h-5 w-5 items-center justify-center rounded transition-colors duration-100 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+					on:click|stopPropagation={loadPorts}
 					aria-label={$i18n.t('Refresh')}
 				>
 					<Icon name="refresh" size={11} strokeWidth={1.4} class={loading ? 'animate-spin' : ''} />
 				</button>
 			</Tooltip>
-		</div>
+		</span>
+	</button>
 
-		{#if expanded}
-			<div id="terminal-port-list" class="mt-1 max-h-[150px] space-y-0.5 overflow-y-auto">
-				{#if loadError}
-					<div class="px-1.5 py-1 text-xs text-gray-400 dark:text-gray-500">
-						{$i18n.t('Terminal is currently unavailable')}
-					</div>
-				{/if}
+	{#if expanded}
+		<div class="mt-1 space-y-0.5 max-h-[9.375rem] overflow-y-auto">
+			{#if ports.length === 0}
+				<div class="text-xs text-gray-400 dark:text-gray-500 px-1 py-1">
+					{$i18n.t('No servers detected')}
+				</div>
+			{:else}
 				{#each ports as port}
-					<div class="group flex items-center rounded hover:bg-gray-100 dark:hover:bg-gray-800">
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-xs"
-							on:click={() => previewPort(port.port)}
-						>
-							<span class="font-mono text-blue-500 dark:text-blue-400 shrink-0">
-								:{port.port}
-							</span>
-							<span class="text-gray-500 dark:text-gray-400 truncate flex-1 text-left">
-								{port.process ?? ''}
-							</span>
-						</button>
+					<button
+						class="flex h-7 items-center w-full gap-2 px-1.5 text-xs rounded-lg hover:bg-gray-50/40 dark:hover:bg-white/4 transition-colors duration-75 group"
+						on:click={() => previewPort(port.port)}
+					>
+						<span class="font-mono text-blue-500 dark:text-blue-400 shrink-0">
+							:{port.port}
+						</span>
+						<span class="text-gray-500 dark:text-gray-400 truncate flex-1 text-left">
+							{port.process ?? ''}
+						</span>
 						<Tooltip content={$i18n.t('Open in new tab')}>
-							<button
-								type="button"
-								class="mr-1 shrink-0 rounded p-0.5 text-gray-400 opacity-70 transition hover:bg-gray-200 hover:text-gray-600 focus-visible:opacity-100 group-hover:opacity-100 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-								on:click={() => openPortExternal(port.port)}
-								aria-label={`${$i18n.t('Open in new tab')}: ${port.port}`}
+							<!-- svelte-ignore a11y-click-events-have-key-events -->
+							<span
+								role="button"
+								tabindex="-1"
+								class="text-gray-400 dark:text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition shrink-0 flex h-5 w-5 items-center justify-center rounded hover:text-gray-600 dark:hover:text-gray-300"
+								on:click|stopPropagation={() => openPortExternal(port.port)}
 							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 20 20"
-									fill="currentColor"
-									class="size-3"
-								>
-									<path
-										fill-rule="evenodd"
-										d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.5-3.5a.75.75 0 0 0 0 1.5h2.69l-4.72 4.72a.75.75 0 0 0 1.06 1.06l4.72-4.72v2.69a.75.75 0 0 0 1.5 0v-5.25a.75.75 0 0 0-.75-.75h-5.25Z"
-										clip-rule="evenodd"
-									/>
-								</svg>
-							</button>
+								<Icon name="external-link" size={11} strokeWidth={1.4} />
+							</span>
 						</Tooltip>
-					</div>
+					</button>
 				{/each}
-			</div>
-		{/if}
-	</div>
-{/if}
+			{/if}
+		</div>
+	{/if}
+</div>

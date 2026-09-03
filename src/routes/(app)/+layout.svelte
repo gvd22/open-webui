@@ -128,14 +128,46 @@
 			return true;
 		});
 		toolServers.set(toolServersData);
-	};
 
-	const setManagedTerminalServers = async () => {
-		// A failed catalog request is not equivalent to having no configured Terminal.
-		// Keep the store unresolved so runtime selection cannot silently fall back to Pyodide.
-		const systemTerminals = await getTerminalServers(localStorage.token, { throwOnError: true });
-		terminalServers.set(
-			systemTerminals.map((t) => ({
+		// Inject enabled terminal servers as always-on tool servers
+		const enabledTerminals = (($settings as any)?.terminalServers ?? []).filter(
+			(s: any) => s.enabled || s.url === $selectedTerminalId
+		);
+
+		// Fetch terminal servers the user has access to (for FileNav + terminal_id)
+		const systemTerminals = await getTerminalServers(localStorage.token);
+		terminalServers.set([
+			...(enabledTerminals.length > 0
+				? (
+						await getToolServersData(
+							enabledTerminals.map((t: any) => ({
+								url: t.url,
+								auth_type: t.auth_type ?? 'bearer',
+								key: t.key ?? '',
+								path: t.path ?? '/openapi.json',
+								config: { enable: true }
+							}))
+						)
+					)
+						.filter((data) => {
+							if (!data || data.error) {
+								toast.error(
+									$i18n.t(`Failed to connect to {{URL}} terminal server`, {
+										URL: data?.url
+									})
+								);
+								return false;
+							}
+							return true;
+						})
+						.map((data, i) => ({
+							...data,
+							key: enabledTerminals[i]?.key ?? '',
+							config: enabledTerminals[i]?.config ?? data?.config ?? {}
+						}))
+				: []),
+			// Store with proxy URL and session key for FileNav file browsing
+			...systemTerminals.map((t) => ({
 				id: t.id,
 				url: `${WEBUI_API_BASE_URL}/terminals/${t.id}`,
 				name: t.name,
@@ -143,7 +175,7 @@
 				contexts: t.contexts ?? {},
 				config: t.config ?? {}
 			}))
-		);
+		]);
 	};
 
 	const setBanners = async () => {
@@ -230,17 +262,15 @@
 
 		selectedTerminalId.set(localStorage.selectedTerminalId ?? null);
 
-		const loadWorkspaceConnections = Promise.all([
-			setToolServers().catch((e) => console.error('Failed to load tool servers:', e)),
-			setManagedTerminalServers().catch((e) =>
-				console.error('Failed to load managed Terminal servers:', e)
-			)
-		]);
+		const loadToolServers = setToolServers().catch((e) => {
+			console.error('Failed to load tool servers:', e);
+			terminalServers.set([]);
+		});
 		if (
 			$page.url.searchParams.get('q') &&
 			($page.url.searchParams.get('submit') ?? 'true') === 'true'
 		) {
-			await loadWorkspaceConnections;
+			await loadToolServers;
 		}
 
 		const setupKeyboardShortcuts = () => {

@@ -128,8 +128,6 @@ from open_webui.utils.misc import is_string_allowed
 from open_webui.utils.plugin import get_tool_contents_cache, get_tools_cache, load_tool_module_by_id
 from open_webui.utils.terminals import (
     TERMINAL_CONTEXT_HEADER,
-    TerminalChatBindingError,
-    ensure_terminal_chat_binding,
     get_terminal_server_url,
     terminal_context_available,
     terminal_context_config,
@@ -785,7 +783,7 @@ async def get_builtin_tools(
             execute_code in builtin_functions
             and await Config.get('code_interpreter.engine', 'pyodide') == 'pyodide'
         )
-        if metadata.get('terminal_id') or pyodide_runtime_active:
+        if pyodide_runtime_active:
             web_preview_functions.append(web_preview_import_runtime_file)
         builtin_functions.extend(web_preview_functions)
 
@@ -1455,10 +1453,6 @@ async def get_terminal_tools(
         raise RuntimeError(f"Terminal server '{terminal_id}' is not available for {terminal_context}")
 
     session_id = metadata.get('chat_id')
-    try:
-        await ensure_terminal_chat_binding(session_id, user.id, terminal_id)
-    except TerminalChatBindingError as error:
-        raise RuntimeError(str(error)) from error
 
     # Find the cached spec data for this terminal
     terminal_servers = await get_terminal_servers(request)
@@ -1487,8 +1481,9 @@ async def get_terminal_tools(
             headers.update(bearer_auth_header(oauth_token.get('access_token', '')))
     # auth_type == "none": no Authorization header
 
-    # Use the saved chat as the per-session key for cwd tracking.
-    headers['X-Session-Id'] = session_id
+    # Use chat_id as the per-session key for cwd tracking
+    if session_id:
+        headers['X-Session-Id'] = session_id
 
     context_id = terminal_context_id(connection, metadata, terminal_context)
     config = terminal_context_config(connection, terminal_context)

@@ -4,7 +4,8 @@ import JSZip from 'jszip';
 import {
 	isSafeDocumentLink,
 	validateDocxArchive,
-	validatePptxArchive
+	validatePptxArchive,
+	validateSpreadsheetArchive
 } from '$lib/components/common/documentSecurity';
 
 describe('document viewer security', () => {
@@ -70,6 +71,12 @@ describe('document viewer security', () => {
 	it('rejects malformed ZIP input', async () => {
 		await expect(
 			validateDocxArchive(new TextEncoder().encode('not a zip').buffer)
+		).rejects.toThrow();
+	});
+
+	it('applies bounded archive validation before rendering XLSX files', async () => {
+		await expect(
+			validateSpreadsheetArchive(new TextEncoder().encode('not a zip').buffer)
 		).rejects.toThrow();
 	});
 

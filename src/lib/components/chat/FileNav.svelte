@@ -1,16 +1,22 @@
+<script context="module">
+	// Persists across mount/unmount cycles (module-level, not per-instance)
+	let savedPath = '/';
+	let savedFileRoot = null;
+	/** @type {Map<string, string[]>} */
+	const treeExpandedCache = new Map();
+	/** @type {Map<string, [string, any[]][]>} */
+	const treeContentsCache = new Map();
+</script>
+
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
-	import type { Writable } from 'svelte/store';
-	import type { i18n as i18nType } from 'i18next';
 	import {
 		terminalServers,
+		settings,
 		showFileNavPath,
 		showFileNavDir,
-		selectedTerminalId,
-		artifactCode,
-		workspaceFileUpdate,
-		workspaceTerminalConnectionId
+		selectedTerminalId
 	} from '$lib/stores';
 	import {
 		getCwd,
@@ -33,12 +39,7 @@
 		type TerminalCwd
 	} from '$lib/apis/terminal';
 	import { isCodeFile } from '$lib/utils/codeHighlight';
-	import Folder from '../icons/Folder.svelte';
-	import Document from '../icons/Document.svelte';
-	import DocumentArrowUp from '../icons/DocumentArrowUp.svelte';
-	import TerminalIcon from '../icons/Terminal.svelte';
-	import PenAlt from '../icons/PenAlt.svelte';
-	import ZoomReset from '../icons/ZoomReset.svelte';
+	import { isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { copyToClipboard } from '$lib/utils';
 	import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
 
@@ -55,45 +56,51 @@
 	import BulkActionBar from './FileNav/BulkActionBar.svelte';
 	import PortList from './FileNav/PortList.svelte';
 	import PortPreview from './FileNav/PortPreview.svelte';
-	import {
-		getFileNavWorkspaceKey,
-		readFileNavSessionState,
-		saveFileNavSessionState
-	} from './FileNav/session';
-	import {
-		getWorkspaceFileOpenTarget,
-		isKeyboardActivationClick,
-		WORKSPACE_TERMINAL_ID
-	} from './Artifacts/workspace';
+	import XTerminal from './XTerminal.svelte';
 
-	const i18n: Writable<i18nType> = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	export let overlay = false;
 	export let chatId: string | null = null;
-	export let initialFilePath: string | null = null;
-	export let onOpenFile: (path: string, options?: { page?: number | null }) => boolean = () =>
-		false;
-	export let onAttach: ((blob: Blob, name: string, contentType: string) => void) | null = null;
 
-	const openWorkspaceTerminal = () => {
-		const terminalId =
-			$selectedTerminalId ?? ($terminalServers ?? []).find((terminal) => terminal.id)?.id ?? null;
-		if (!terminalId) {
-			toast.error($i18n.t('No terminal is available'));
-			return;
-		}
-		selectedTerminalId.set(terminalId);
-		workspaceTerminalConnectionId.set(terminalId);
-		artifactCode.set(WORKSPACE_TERMINAL_ID);
+	// ── Terminal panel state ────────────────────────────────────────────
+	let terminalExpanded = false;
+	let terminalHeight = 200; // px, default when expanded
+	let isDraggingHandle = false;
+	let containerEl: HTMLElement;
+	let terminalConnected = false;
+	let terminalConnecting = false;
+	let terminalEnabled = true;
+
+	const toggleTerminal = () => {
+		terminalExpanded = !terminalExpanded;
 	};
 
-	let containerEl: HTMLElement;
+	const onHandleMouseDown = (e: MouseEvent) => {
+		e.preventDefault();
+		isDraggingHandle = true;
+		const startY = e.clientY;
+		const startHeight = terminalHeight;
+
+		const onMouseMove = (ev: MouseEvent) => {
+			const delta = startY - ev.clientY;
+			const maxH = containerEl ? containerEl.clientHeight - 100 : 500;
+			terminalHeight = Math.max(80, Math.min(maxH, startHeight + delta));
+		};
+
+		const onMouseUp = () => {
+			isDraggingHandle = false;
+			window.removeEventListener('mousemove', onMouseMove);
+			window.removeEventListener('mouseup', onMouseUp);
+		};
+
+		window.addEventListener('mousemove', onMouseMove);
+		window.addEventListener('mouseup', onMouseUp);
+	};
 
 	// ── Directory state ──────────────────────────────────────────────────
-	let currentPath = '/';
-	let savedPath = '/';
-	let fileRoot: TerminalFileRoot | null = null;
-	let activeWorkspaceKey: string | null = null;
+	let currentPath = savedPath;
+	let fileRoot: TerminalFileRoot | null = savedFileRoot;
 	let entries: FileEntry[] = [];
 	let currentWritable = true;
 	let loading = false;
@@ -263,33 +270,27 @@
 	const goBack = async () => {
 		if (!canGoBack) return;
 		navigatingHistory = true;
-		try {
-			navIndex -= 1;
-			const entry = navHistory[navIndex];
-			if (!(await loadDir(entry.path))) return;
-			if (entry.file) {
-				const fileName = entry.file.split('/').pop() ?? '';
-				await openEntry({ name: fileName, type: 'file', size: 0 });
-			}
-		} finally {
-			navigatingHistory = false;
+		navIndex -= 1;
+		const entry = navHistory[navIndex];
+		await loadDir(entry.path);
+		if (entry.file) {
+			const fileName = entry.file.split('/').pop() ?? '';
+			await openEntry({ name: fileName, type: 'file', size: 0 });
 		}
+		navigatingHistory = false;
 	};
 
 	const goForward = async () => {
 		if (!canGoForward) return;
 		navigatingHistory = true;
-		try {
-			navIndex += 1;
-			const entry = navHistory[navIndex];
-			if (!(await loadDir(entry.path))) return;
-			if (entry.file) {
-				const fileName = entry.file.split('/').pop() ?? '';
-				await openEntry({ name: fileName, type: 'file', size: 0 });
-			}
-		} finally {
-			navigatingHistory = false;
+		navIndex += 1;
+		const entry = navHistory[navIndex];
+		await loadDir(entry.path);
+		if (entry.file) {
+			const fileName = entry.file.split('/').pop() ?? '';
+			await openEntry({ name: fileName, type: 'file', size: 0 });
 		}
+		navigatingHistory = false;
 	};
 
 	// ── File preview state ───────────────────────────────────────────────
@@ -302,23 +303,19 @@
 	let fileAudioUrl: string | null = null;
 	let filePdfData: ArrayBuffer | null = null;
 	let fileSqliteData: ArrayBuffer | null = null;
-	let fileOfficeData: {
-		data: ArrayBuffer;
-		format: 'docx' | 'pptx' | 'xls' | 'xlsx';
-	} | null = null;
+	let fileDocxData: ArrayBuffer | null = null;
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
-	let directoryRequestSequence = 0;
-	let fileRequestSequence = 0;
-	let contextRequestSequence = 0;
-	let directoryAbortController: AbortController | null = null;
-	let fileAbortController: AbortController | null = null;
-	let filePreviewOpening = false;
-	let destroyed = false;
 	let fileSearchTarget: FileSearchTarget | null = null;
 	let documentTargetPage: number | null = null;
 
+	// ── Office preview state ────────────────────────────────────────────
+	let fileOfficeHtml: string | null = null;
+	let fileOfficeSlides: string[] | null = null;
 	let currentSlide = 0;
+	let excelSheetNames: string[] = [];
+	let selectedExcelSheet = '';
+	let excelWorkbook: import('xlsx').WorkBook | null = null;
 
 	// ── File preview toolbar state (bound from FilePreview) ─────────────
 	let editing = false;
@@ -328,7 +325,7 @@
 	const MD_EXTS = new Set(['md', 'markdown', 'mdx']);
 	const CSV_EXTS = new Set(['csv', 'tsv']);
 	const HTML_EXTS = new Set(['html', 'htm']);
-	const OFFICE_EXTS = new Set(['docx', 'pptx', 'xls', 'xlsx']);
+	const OFFICE_EXTS = new Set(['docx', 'xlsx', 'pptx']);
 	const getFileExt = (path: string | null) => path?.split('.').pop()?.toLowerCase() ?? '';
 
 	$: isMarkdown = MD_EXTS.has(getFileExt(selectedFile));
@@ -351,12 +348,6 @@
 	let creatingFile = false;
 	let newFileName = '';
 	let newFileInput: HTMLInputElement;
-	let emptyUploadInput: HTMLInputElement;
-
-	const openEmptyUploadPicker = () => {
-		if (uploading || !selectedTerminal || !currentWritable) return;
-		emptyUploadInput?.click();
-	};
 	let directoryUploadInput: HTMLInputElement;
 
 	// ── Delete confirmation ──────────────────────────────────────────────
@@ -365,51 +356,33 @@
 	let shiftKey = false;
 
 	// ── Terminal resolution ──────────────────────────────────────────────
-	let selectedTerminal: { id: string | null; url: string; key: string } | null = null;
-	let terminalEnabled = false;
+	let selectedTerminal: { url: string; key: string } | null = null;
 	let terminalChatContextPending = false;
 	let terminalChatContextHidden = false;
 
 	const chatContext = (terminal: any) => terminal?.contexts?.chat ?? {};
 
-	const saveWorkspaceState = () => {
-		if (!activeWorkspaceKey) return;
-		saveFileNavSessionState(activeWorkspaceKey, {
-			savedPath,
-			fileRoot: fileRoot ? { ...fileRoot } : null,
-			expandedDirs: [...expandedDirs],
-			treeContents: [...treeCache.entries()]
-		});
-	};
-
-	const restoreWorkspaceState = (
-		terminal: { id: string | null; url: string },
-		id: string | null
-	) => {
-		activeWorkspaceKey = getFileNavWorkspaceKey(terminal, id);
-		const state = readFileNavSessionState(activeWorkspaceKey);
-		savedPath = state?.savedPath ?? '/';
-		currentPath = savedPath;
-		fileRoot = state?.fileRoot ?? null;
-		expandedDirs = new Set(state?.expandedDirs ?? []);
-		treeCache = new Map(state?.treeContents ?? []);
-		loadingDirs = new Set();
-	};
-
-	const getTerminal = (): { id: string | null; url: string; key: string } | null => {
+	const getTerminal = (): { url: string; key: string } | null => {
 		const systemTerminal = $selectedTerminalId
 			? (($terminalServers ?? []).find((t) => t.id === $selectedTerminalId) ?? null)
 			: ($terminalServers?.[0] ?? null);
 		const chatConfig = chatContext(systemTerminal);
-		terminalChatContextHidden = !!systemTerminal && chatConfig === false;
-		// The native proxy has no shared unsaved workspace. Do not issue unscoped requests.
-		terminalChatContextPending =
-			!!systemTerminal && !terminalChatContextHidden && !isSavedChatId(chatId);
+		const chatScoped = !!systemTerminal && chatConfig?.context_id === 'chat_id';
+		terminalChatContextHidden =
+			!!systemTerminal && (chatConfig === false || (chatScoped && isTemporaryChatId(chatId)));
+		terminalChatContextPending = chatScoped && !terminalChatContextHidden && !isSavedChatId(chatId);
 		if (terminalChatContextHidden || terminalChatContextPending) return null;
 
-		return systemTerminal?.url
-			? { id: systemTerminal.id ?? null, url: systemTerminal.url, key: localStorage.token }
-			: null;
+		const settingsValue: any = $settings;
+		const userTerminal = (settingsValue?.terminalServers ?? []).find(
+			(s: any) => s.url === $selectedTerminalId
+		);
+
+		const isSystem = !!systemTerminal;
+		const url = systemTerminal?.url ?? userTerminal?.url ?? '';
+		const key = isSystem ? localStorage.token : (userTerminal?.key ?? '');
+
+		return url ? { url, key } : null;
 	};
 
 	// Detect terminal or chat changes — the explicit store references ensure
@@ -419,47 +392,37 @@
 	let prevChatId = chatId;
 	let mounted = false;
 	$: {
-		($selectedTerminalId, $terminalServers);
+		($selectedTerminalId, $terminalServers, $settings);
 		const terminal = getTerminal();
 		selectedTerminal = terminal;
 
 		const chatChanged = chatId !== prevChatId;
+		const oldChatId = prevChatId;
 		if (chatChanged) prevChatId = chatId;
 
 		const terminalChanged = terminal && terminal.url !== prevTerminalUrl;
 		if (terminalChanged) prevTerminalUrl = terminal.url;
 
-		if (mounted && terminal && (terminalChanged || chatChanged)) {
-			saveWorkspaceState();
-			restoreWorkspaceState(terminal, chatId);
-			if (terminalChanged || chatChanged) {
+		if (mounted && terminal) {
+			if (chatChanged && chatId && !oldChatId) {
+				// Chat just got created (null → real ID): persist the current
+				// browsed path as the new session's cwd — don't re-fetch.
+				setCwd(terminal.url, terminal.key, savedPath, chatId);
+			} else if (terminalChanged || chatChanged) {
 				// Terminal switched, new chat started, or switched between
 				// existing chats — re-fetch the session cwd.
 				loading = true;
 				error = null;
 				entries = [];
-				const contextRequestId = ++contextRequestSequence;
-				const requestedTerminalUrl = terminal.url;
-				const requestedChatId = chatId;
+				resetTreeState();
 				(async () => {
-					const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
-					if (
-						destroyed ||
-						contextRequestId !== contextRequestSequence ||
-						selectedTerminal?.url !== requestedTerminalUrl ||
-						chatId !== requestedChatId
-					)
-						return;
-					const serverPath = applyCwd(cwd);
-					// A newly saved chat gets its own server workspace. Never copy the old chat's cwd.
-					savedPath = serverPath;
-					currentPath = serverPath;
-					if (initialFilePath && initialFilePath !== appliedInitialFilePath) {
-						appliedInitialFilePath = initialFilePath;
-						await openRequestedFile(initialFilePath);
-					} else {
-						await loadDir(savedPath);
+					if (terminalChanged) {
+						const config = await getTerminalConfig(terminal.url, terminal.key);
+						terminalEnabled = config?.features?.terminal !== false;
 					}
+
+					savedPath = applyCwd(await getCwd(terminal.url, terminal.key, chatId ?? undefined));
+					loadDir(savedPath);
 				})();
 			}
 		}
@@ -484,18 +447,14 @@
 	};
 
 	const saveTreeState = () => {
-		saveWorkspaceState();
+		treeExpandedCache.set(currentPath, [...expandedDirs]);
+		treeContentsCache.set(currentPath, [...treeCache.entries()]);
 	};
 
 	const restoreTreeState = (path: string) => {
-		const state = activeWorkspaceKey ? sessionStateByWorkspace.get(activeWorkspaceKey) : null;
-		if (state?.savedPath === path) {
-			expandedDirs = new Set(state.expandedDirs);
-			treeCache = new Map(state.treeContents);
-			loadingDirs = new Set();
-		} else {
-			resetTreeState();
-		}
+		expandedDirs = new Set(treeExpandedCache.get(path) ?? []);
+		treeCache = new Map(treeContentsCache.get(path) ?? []);
+		loadingDirs = new Set();
 	};
 
 	const invalidateTreeCache = (...paths: string[]) => {
@@ -666,6 +625,7 @@
 					label: root.label || labelFromPath(root.path)
 				}
 			: null;
+		savedFileRoot = fileRoot;
 		if ((fileRoot?.path ?? null) !== previousRoot) resetTreeState();
 	};
 
@@ -739,94 +699,64 @@
 		}
 		filePdfData = null;
 		fileSqliteData = null;
-		fileOfficeData = null;
+		fileDocxData = null;
+		fileOfficeHtml = null;
+		fileOfficeSlides = null;
 		currentSlide = 0;
+		excelSheetNames = [];
+		selectedExcelSheet = '';
+		excelWorkbook = null;
 	};
 
 	// ── Directory operations ─────────────────────────────────────────────
 	const loadDir = async (
 		path: string,
-		options: { preserveTree?: boolean; restoreTree?: boolean; preservePreview?: boolean } = {}
-	): Promise<boolean> => {
+		options: { preserveTree?: boolean; restoreTree?: boolean } = {}
+	) => {
 		const terminal = selectedTerminal;
-		if (!terminal) return false;
+		if (!terminal) return;
 		const directory = clampToFileRoot(path);
-		const sessionId = chatId ?? undefined;
-		const requestId = ++directoryRequestSequence;
-		directoryAbortController?.abort();
-		directoryAbortController = new AbortController();
-		// A late directory refresh must not cancel the file request it races with.
-		const preservePreview =
-			options.preservePreview || filePreviewOpening || (selectedFile !== null && fileLoading);
-		if (!preservePreview) {
-			fileAbortController?.abort();
-			fileRequestSequence += 1;
-			fileLoading = false;
-		}
-		loading = true;
-		error = null;
-
-		const result = await listFiles(
-			terminal.url,
-			terminal.key,
-			directory,
-			sessionId,
-			directoryAbortController.signal
-		);
-		if (
-			destroyed ||
-			requestId !== directoryRequestSequence ||
-			selectedTerminal?.url !== terminal.url ||
-			(chatId ?? undefined) !== sessionId
-		)
-			return false;
-		if (result === null) {
-			loading = false;
-			error =
-				'Failed to load directory. Check your Terminal connection in Settings → Integrations.';
-			return false;
-		}
-
 		if (options.restoreTree) {
 			restoreTreeState(directory);
 		} else if (!options.preserveTree && directory !== currentPath) {
 			resetTreeState();
 		}
-		if (!preservePreview) {
-			selectedFile = null;
-			selectedFileWritable = true;
-			previewPort = null;
-			clearFilePreview();
-			clearSelection();
-		}
+
+		loading = true;
+		error = null;
+		selectedFile = null;
+		selectedFileWritable = true;
+		previewPort = null;
+		clearFilePreview();
+		clearSelection();
 		currentPath = directory;
 		savedPath = directory;
-		currentWritable = result.writable !== false;
-		entries = normalizeEntries(result.entries);
-		treeCache = new Map(treeCache).set(directory, entries);
 		pushNavHistory(directory);
-		loading = false;
-		saveTreeState();
 
-		// Only persist a cwd after the matching directory request succeeded.
-		void setCwd(terminal.url, terminal.key, directory, sessionId);
-		return true;
+		const result = await listFiles(terminal.url, terminal.key, directory, chatId ?? undefined);
+		loading = false;
+
+		// Set working directory on the terminal server (fire-and-forget)
+		setCwd(terminal.url, terminal.key, directory, chatId ?? undefined);
+
+		if (result === null) {
+			error =
+				'Failed to load directory. Check your Terminal connection in Settings → Integrations.';
+			entries = [];
+		} else {
+			currentWritable = result.writable !== false;
+			entries = normalizeEntries(result.entries);
+			treeCache = new Map(treeCache).set(directory, entries);
+			saveTreeState();
+		}
 	};
 
 	const fetchExpandedDir = async (path: string) => {
 		const terminal = selectedTerminal;
 		if (!terminal) return null;
 		const directory = asDirectoryPath(path);
-		const sessionId = chatId ?? undefined;
-		const requestedTerminalUrl = terminal.url;
 		loadingDirs = new Set(loadingDirs).add(directory);
-		const result = await listFiles(terminal.url, terminal.key, directory, sessionId);
-		if (
-			destroyed ||
-			selectedTerminal?.url !== requestedTerminalUrl ||
-			(chatId ?? undefined) !== sessionId
-		)
-			return null;
+		const result = await listFiles(terminal.url, terminal.key, directory, chatId ?? undefined);
 		const nextLoading = new Set(loadingDirs);
 		nextLoading.delete(directory);
 		loadingDirs = nextLoading;
@@ -844,8 +774,7 @@
 	};
 
 	const refreshBrowser = async () => {
-		const preservePreview = selectedFile !== null || previewPort !== null;
-		if (!(await loadDir(currentPath, { preserveTree: true, preservePreview }))) return;
+		await loadDir(currentPath, { preserveTree: true });
 		await refreshExpandedDirs();
 	};
 
@@ -874,10 +803,7 @@
 		}
 	};
 
-	const openEntry = async (
-		entry: FileEntry | BrowserRow,
-		options: { page?: unknown; notifyWorkspace?: boolean } = {}
-	) => {
+	const openEntry = async (entry: FileEntry, options: { page?: unknown } = {}) => {
 		const fullPath =
 			'fullPath' in entry ? (entry as BrowserRow).fullPath : entryPath(currentPath, entry);
 		const parentPath = 'parentPath' in entry ? (entry as BrowserRow).parentPath : currentPath;
@@ -887,150 +813,138 @@
 		}
 
 		const filePath = fullPath;
-		const fileOpenTarget = getWorkspaceFileOpenTarget(filePath);
-		if (options.notifyWorkspace !== false) {
-			if (
-				fileOpenTarget === 'document-viewer' &&
-				onOpenFile(filePath, { page: normalizeDocumentTargetPage(options.page) })
-			)
-				return;
-		}
-		filePreviewOpening = true;
 		if (parentPath !== currentPath) {
-			// Tree rows carry a canonical path. A stale directory refresh must not swallow
-			// the first file click when the native preview can read that path directly.
 			await loadDir(parentPath);
 		}
 		selectedFileWritable = entry.writable !== false;
 		pushNavHistory(parentPath, filePath);
 
 		const terminal = selectedTerminal;
-		if (!terminal) {
-			filePreviewOpening = false;
-			return;
-		}
-		const sessionId = chatId ?? undefined;
-		const requestId = ++fileRequestSequence;
-		fileAbortController?.abort();
-		fileAbortController = new AbortController();
-		const isCurrentRequest = () =>
-			!destroyed &&
-			requestId === fileRequestSequence &&
-			selectedFile === filePath &&
-			selectedTerminal?.url === terminal.url &&
-			(chatId ?? undefined) === sessionId;
+		if (!terminal) return;
 
 		selectedFile = filePath;
 		fileLoading = true;
 		clearFilePreview();
 		documentTargetPage = normalizeDocumentTargetPage(options.page);
 
-		let objectUrl: { kind: 'image' | 'video' | 'audio'; url: string } | null = null;
-		let objectUrlCommitted = false;
-		let nextContent: string | null = null;
-		let nextPdfData: ArrayBuffer | null = null;
-		let nextSqliteData: ArrayBuffer | null = null;
-		let nextOfficeData: typeof fileOfficeData = null;
-
-		try {
-			if (isImage(filePath) || isVideo(filePath) || isAudio(filePath)) {
-				const result = await downloadFileBlob(
-					terminal.url,
-					terminal.key,
-					filePath,
-					sessionId,
-					undefined,
-					fileAbortController.signal
-				);
-				if (result) {
-					objectUrl = {
-						kind: isImage(filePath) ? 'image' : isVideo(filePath) ? 'video' : 'audio',
-						url: URL.createObjectURL(result.blob)
-					};
-				}
-			} else if (isPdf(filePath) || isSqlite(filePath) || isOffice(filePath)) {
-				const ext = getFileExt(filePath);
-				if (isOffice(filePath) && (ext === 'docx' || ext === 'pptx')) {
+		if (isImage(filePath)) {
+			const result = await downloadFileBlob(
+				terminal.url,
+				terminal.key,
+				filePath,
+				chatId ?? undefined
+			);
+			if (result) fileImageUrl = URL.createObjectURL(result.blob);
+		} else if (isVideo(filePath)) {
+			const result = await downloadFileBlob(
+				terminal.url,
+				terminal.key,
+				filePath,
+				chatId ?? undefined
+			);
+			if (result) fileVideoUrl = URL.createObjectURL(result.blob);
+		} else if (isAudio(filePath)) {
+			const result = await downloadFileBlob(
+				terminal.url,
+				terminal.key,
+				filePath,
+				chatId ?? undefined
+			);
+			if (result) fileAudioUrl = URL.createObjectURL(result.blob);
+		} else if (isPdf(filePath)) {
+			const result = await downloadFileBlob(
+				terminal.url,
+				terminal.key,
+				filePath,
+				chatId ?? undefined
+			);
+			if (result) filePdfData = await result.blob.arrayBuffer();
+		} else if (isSqlite(filePath)) {
+			const result = await downloadFileBlob(
+				terminal.url,
+				terminal.key,
+				filePath,
+				chatId ?? undefined
+			);
+			if (result) fileSqliteData = await result.blob.arrayBuffer();
+		} else if (isOffice(filePath)) {
+			const ext = getFileExt(filePath);
+			try {
+				if (ext === 'docx') {
 					const preview = await downloadFilePreview(
 						terminal.url,
 						terminal.key,
 						filePath,
-						sessionId
+						chatId ?? undefined
 					);
-					if (preview) nextPdfData = await preview.blob.arrayBuffer();
-				}
-
-				const result = nextPdfData
-					? null
-					: await downloadFileBlob(
+					if (preview) {
+						filePdfData = await preview.blob.arrayBuffer();
+					} else {
+						const result = await downloadFileBlob(
 							terminal.url,
 							terminal.key,
 							filePath,
-							sessionId,
-							undefined,
-							fileAbortController.signal
+							chatId ?? undefined
 						);
-				if (result) {
-					const arrayBuffer = await result.blob.arrayBuffer();
-					if (isPdf(filePath)) nextPdfData = arrayBuffer;
-					else if (isSqlite(filePath)) nextSqliteData = arrayBuffer;
-					else
-						nextOfficeData = {
-							data: arrayBuffer,
-							format: ext as NonNullable<typeof nextOfficeData>['format']
-						};
+						if (!result) throw new Error('Preview failed');
+						const arrayBuffer = await result.blob.arrayBuffer();
+						fileDocxData = arrayBuffer;
+					}
+				} else if (ext === 'xlsx') {
+					const result = await downloadFileBlob(
+						terminal.url,
+						terminal.key,
+						filePath,
+						chatId ?? undefined
+					);
+					if (result) {
+						const arrayBuffer = await result.blob.arrayBuffer();
+						const XLSX = await import('xlsx');
+						const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+						excelWorkbook = wb;
+						excelSheetNames = wb.SheetNames;
+						if (excelSheetNames.length > 0) {
+							selectedExcelSheet = excelSheetNames[0];
+							const { excelToTable } = await import('$lib/utils/excelToTable');
+							const result = await excelToTable(wb.Sheets[selectedExcelSheet]);
+							const DOMPurify = (await import('dompurify')).default;
+							fileOfficeHtml = DOMPurify.sanitize(result.html);
+						}
+					}
+				} else if (ext === 'pptx') {
+					const preview = await downloadFilePreview(
+						terminal.url,
+						terminal.key,
+						filePath,
+						chatId ?? undefined
+					);
+					if (preview) {
+						filePdfData = await preview.blob.arrayBuffer();
+					} else {
+						const result = await downloadFileBlob(
+							terminal.url,
+							terminal.key,
+							filePath,
+							chatId ?? undefined
+						);
+						if (!result) throw new Error('Preview failed');
+						const arrayBuffer = await result.blob.arrayBuffer();
+						const { pptxToImages } = await import('$lib/utils/pptxToHtml');
+						const fallback = await pptxToImages(arrayBuffer);
+						fileOfficeSlides = fallback.images;
+						currentSlide = 0;
+					}
 				}
-			} else {
-				nextContent = await readFile(
-					terminal.url,
-					terminal.key,
-					filePath,
-					sessionId,
-					fileAbortController.signal
-				);
+			} catch (e) {
+				console.error('Failed to render Office file:', e);
+				fileContent = `Error previewing file: ${e instanceof Error ? e.message : 'Unknown error'}`;
 			}
-
-			if (!isCurrentRequest()) {
-				return;
-			}
-
-			if (objectUrl?.kind === 'image') fileImageUrl = objectUrl.url;
-			if (objectUrl?.kind === 'video') fileVideoUrl = objectUrl.url;
-			if (objectUrl?.kind === 'audio') fileAudioUrl = objectUrl.url;
-			objectUrlCommitted = objectUrl !== null;
-			fileContent = nextContent;
-			filePdfData = nextPdfData;
-			fileSqliteData = nextSqliteData;
-			fileOfficeData = nextOfficeData;
-			currentSlide = 0;
-		} finally {
-			if (objectUrl && !objectUrlCommitted) URL.revokeObjectURL(objectUrl.url);
-			if (isCurrentRequest()) fileLoading = false;
-			filePreviewOpening = false;
+		} else {
+			fileContent = await readFile(terminal.url, terminal.key, filePath, chatId ?? undefined);
 		}
+		fileLoading = false;
 	};
 
-	let appliedInitialFilePath: string | null | undefined = undefined;
-	const openRequestedFile = async (path: string) => {
-		const normalized = normalizePath(path);
-		const separator = normalized.lastIndexOf('/');
-		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
-		const name = normalized.slice(separator + 1);
-		if (!name) return;
-		if (!(await loadDir(directory))) return;
-		await openEntry({ name, type: 'file', size: 0 }, { notifyWorkspace: false });
-	};
-
-	$: if (mounted && selectedTerminal && initialFilePath !== appliedInitialFilePath) {
-		appliedInitialFilePath = initialFilePath;
-		if (initialFilePath) {
-			void openRequestedFile(initialFilePath);
-		} else if (selectedFile) {
-			selectedFile = null;
-			clearFilePreview();
-			void loadDir(currentPath);
-		}
-	}
 	const openFileMatch = async (match: TerminalFileMatch) => {
 		if (match.type === 'directory') {
 			searchQuery = '';
@@ -1070,12 +984,7 @@
 			// Directories end with '/', downloaded as a ZIP archive
 			const isDir = path.endsWith('/');
 			const result = isDir
-				? await archiveFromTerminal(
-						terminal.url,
-						terminal.key,
-						[path.replace(/\/$/, '')],
-						chatId ?? undefined
-					)
+				? await archiveFromTerminal(terminal.url, terminal.key, [path.replace(/\/$/, '')])
 				: await downloadFileBlob(terminal.url, terminal.key, path, chatId ?? undefined);
 			if (!result) {
 				toast.error($i18n.t('Download failed'));
@@ -1136,33 +1045,15 @@
 
 	const handleUploadFiles = async (files: File[]) => {
 		const terminal = selectedTerminal;
-		if (!files.length || !currentWritable) return;
-		if (!terminal) {
-			toast.error($i18n.t('No terminal is available'));
-			return;
-		}
+		if (!files.length || !terminal || !currentWritable) return;
 
 		uploading = true;
-		let uploadedCount = 0;
-		try {
-			for (const file of files) {
-				const result = await uploadToTerminal(
-					terminal.url,
-					terminal.key,
-					currentPath,
-					file,
-					chatId ?? undefined
-				);
-				if (result) uploadedCount += 1;
-			}
-			if (uploadedCount !== files.length) {
-				toast.error($i18n.t('Some files could not be uploaded'));
-			}
-		} finally {
-			uploading = false;
-			invalidateTreeCache(currentPath);
-			await loadDir(currentPath, { preserveTree: true });
+		for (const file of files) {
+			await uploadToTerminal(terminal.url, terminal.key, currentPath, file, chatId ?? undefined);
 		}
+		uploading = false;
+		invalidateTreeCache(currentPath);
+		await loadDir(currentPath, { preserveTree: true });
 	};
 
 	// ── Folder creation ──────────────────────────────────────────────────
@@ -1215,13 +1106,7 @@
 		if (!terminal) return;
 
 		const emptyFile = new File([''], name, { type: 'application/octet-stream' });
-		const result = await uploadToTerminal(
-			terminal.url,
-			terminal.key,
-			currentPath,
-			emptyFile,
-			chatId ?? undefined
-		);
+		const result = await uploadToTerminal(terminal.url, terminal.key, currentPath, emptyFile);
 		toast[result ? 'success' : 'error']($i18n.t(result ? 'File created' : 'Failed to create file'));
 		invalidateTreeCache(currentPath);
 		await loadDir(currentPath, { preserveTree: true });
@@ -1233,14 +1118,6 @@
 		if (!terminal || !currentWritable) return;
 
 		const result = await deleteEntry(terminal.url, terminal.key, path, chatId ?? undefined);
-		if (result) {
-			workspaceFileUpdate.set({
-				path,
-				kind: result.type === 'file' ? 'deleted' : 'unknown',
-				terminalId: terminal.id,
-				revision: Date.now()
-			});
-		}
 		toast[result ? 'success' : 'error'](
 			$i18n.t(result ? '{{name}} deleted' : 'Failed to delete {{name}}', { name })
 		);
@@ -1286,13 +1163,6 @@
 			toast.error(result.error);
 			return false;
 		} else {
-			workspaceFileUpdate.set({
-				path: destination,
-				previousPath: source,
-				kind: source.endsWith('/') ? 'unknown' : 'renamed',
-				terminalId: terminal.id,
-				revision: Date.now()
-			});
 			toast.success($i18n.t('Moved {{name}}', { name: fileName }));
 			return true;
 		}
@@ -1334,13 +1204,6 @@
 		if ('error' in result) {
 			toast.error(result.error);
 		} else {
-			workspaceFileUpdate.set({
-				path: destination,
-				previousPath: oldPath,
-				kind: 'renamed',
-				terminalId: terminal.id,
-				revision: Date.now()
-			});
 			toast.success($i18n.t('Renamed to {{name}}', { name: newName }));
 		}
 		invalidateTreeCache(currentPath, oldPath);
@@ -1416,21 +1279,8 @@
 		const paths = [...selectedEntries];
 		let ok = 0;
 		for (const p of paths) {
-			const result = await deleteEntry(
-				terminal.url,
-				terminal.key,
-				p.replace(/\/$/, ''),
-				chatId ?? undefined
-			);
-			if (result) {
-				ok++;
-				workspaceFileUpdate.set({
-					path: p.replace(/\/$/, ''),
-					kind: result.type === 'file' ? 'deleted' : 'unknown',
-					terminalId: terminal.id,
-					revision: Date.now()
-				});
-			}
+			const result = await deleteEntry(terminal.url, terminal.key, p.replace(/\/$/, ''));
+			if (result) ok++;
 		}
 		toast[ok > 0 ? 'success' : 'error'](
 			$i18n.t('Deleted {{ok}} of {{total}} items', { ok, total: paths.length })
@@ -1457,12 +1307,7 @@
 		const toastId = toast.loading($i18n.t('Preparing download...'));
 		try {
 			// Archive everything into a single ZIP
-			const result = await archiveFromTerminal(
-				terminal.url,
-				terminal.key,
-				paths,
-				chatId ?? undefined
-			);
+			const result = await archiveFromTerminal(terminal.url, terminal.key, paths);
 			if (!result) {
 				toast.error($i18n.t('Download failed'));
 				return;
@@ -1499,7 +1344,6 @@
 	onMount(() => {
 		showHidden = localStorage.getItem('fileNav:showHidden') === 'true';
 		const terminal = getTerminal();
-		if (terminal) restoreWorkspaceState(terminal, chatId);
 
 		let handledDisplayFile = false;
 
@@ -1520,7 +1364,7 @@
 			const fileName = filePath.substring(lastSlash + 1);
 
 			// Always reload directory to ensure entries are fresh
-			if (!(await loadDir(dir))) return;
+			await loadDir(dir);
 			await tick();
 
 			const entry = entries.find((e) => e.name === fileName);
@@ -1545,41 +1389,35 @@
 			const dir = lastSlash > 0 ? filePath.substring(0, lastSlash + 1) : '/';
 			invalidateTreeCache(dir);
 
-			if (currentPath.startsWith(dir) || dir.startsWith(currentPath)) {
-				// Refresh listings without replacing an active preview or its search target.
-				await refreshBrowser();
+			if (selectedFile) {
+				if (selectedFile === filePath || currentPath.startsWith(dir)) {
+					const fileName = selectedFile.split('/').pop() ?? '';
+					await openEntry({ name: fileName, type: 'file', size: 0 });
+				}
+			} else {
+				if (currentPath.startsWith(dir) || dir.startsWith(currentPath)) {
+					await refreshBrowser();
+				}
 			}
 		});
 
 		if (!handledDisplayFile && terminal) {
 			loading = true;
-			const contextRequestId = ++contextRequestSequence;
-			const requestedTerminalUrl = terminal.url;
-			const requestedChatId = chatId;
 
 			void (async () => {
-				const terminalConfig = await getTerminalConfig(terminal.url, terminal.key);
-				if (destroyed || contextRequestId !== contextRequestSequence) return;
-				terminalEnabled = terminalConfig?.features?.terminal !== false;
-				const cwd = await getCwd(terminal.url, terminal.key, requestedChatId ?? undefined);
-				if (
-					destroyed ||
-					contextRequestId !== contextRequestSequence ||
-					selectedTerminal?.url !== requestedTerminalUrl ||
-					chatId !== requestedChatId
-				)
-					return;
-				savedPath = applyCwd(cwd);
-				currentPath = savedPath;
-				savedPath = clampToFileRoot(savedPath);
-				if (initialFilePath) {
-					if (initialFilePath !== appliedInitialFilePath) {
-						appliedInitialFilePath = initialFilePath;
-						await openRequestedFile(initialFilePath);
-					}
-					return;
+				// Discover server features on initial mount
+				const config = await getTerminalConfig(terminal.url, terminal.key);
+				terminalEnabled = config?.features?.terminal !== false;
+
+				const serverCwd = await getCwd(terminal.url, terminal.key, chatId ?? undefined);
+				const useServerPath = !!chatId || savedPath === '/';
+				const serverPath = applyCwd(serverCwd);
+				if (useServerPath) {
+					// Fetch session-specific cwd from the server (or global default for new chats)
+					savedPath = serverPath;
 				}
-				await loadDir(savedPath, { restoreTree: true });
+				savedPath = clampToFileRoot(savedPath);
+				loadDir(savedPath, { restoreTree: true });
 			})();
 		}
 
@@ -1621,13 +1459,6 @@
 	});
 
 	onDestroy(() => {
-		saveWorkspaceState();
-		destroyed = true;
-		contextRequestSequence += 1;
-		directoryRequestSequence += 1;
-		fileRequestSequence += 1;
-		directoryAbortController?.abort();
-		fileAbortController?.abort();
 		clearMatchRequest();
 		if (fileImageUrl) URL.revokeObjectURL(fileImageUrl);
 		if (fileVideoUrl) URL.revokeObjectURL(fileVideoUrl);
@@ -1662,7 +1493,7 @@
 			class="text-gray-300 dark:text-gray-600 mb-2"
 		/>
 		<div class="text-xs text-gray-500 dark:text-gray-400">
-			{$i18n.t('Save this chat to use files, terminal, and ports.')}
+			{$i18n.t('Start the chat to use this terminal.')}
 		</div>
 	</div>
 {:else if !selectedTerminal}
@@ -1716,7 +1547,8 @@
 				onNavigate={loadDir}
 				onRefresh={() => {
 					if (selectedFile) {
-						refreshBrowser();
+						const fileName = selectedFile.split('/').pop() ?? '';
+						openEntry({ name: fileName, type: 'file', size: 0 });
 					} else {
 						refreshBrowser();
 					}
@@ -1917,9 +1749,8 @@
 			{#if previewPort !== null}
 				<PortPreview
 					baseUrl={selectedTerminal?.url ?? ''}
-					{chatId}
 					port={previewPort}
-					{overlay}
+					overlay={overlay || isDraggingHandle}
 					onClose={() => {
 						previewPort = null;
 					}}
@@ -1939,27 +1770,32 @@
 					{fileAudioUrl}
 					{filePdfData}
 					{fileSqliteData}
-					{fileOfficeData}
+					{fileDocxData}
 					{fileContent}
+					{fileOfficeHtml}
+					{fileOfficeSlides}
 					targetPage={documentTargetPage}
+					{excelSheetNames}
+					{selectedExcelSheet}
 					searchTarget={fileSearchTarget}
+					onSheetChange={async (sheet) => {
+						if (!excelWorkbook) return;
+						selectedExcelSheet = sheet;
+						const { excelToTable } = await import('$lib/utils/excelToTable');
+						const result = await excelToTable(excelWorkbook.Sheets[sheet]);
+						const DOMPurify = (await import('dompurify')).default;
+						fileOfficeHtml = DOMPurify.sanitize(result.html);
+					}}
 					baseUrl={selectedTerminal?.url ?? ''}
 					apiKey={selectedTerminal?.key ?? ''}
-					{chatId}
-					{overlay}
+					overlay={overlay || isDraggingHandle}
 					onSave={async (content) => {
 						const terminal = selectedTerminal;
 						if (!terminal || !selectedFile || !selectedFileWritable) return;
 						const fileName = selectedFile.split('/').pop() ?? 'file';
 						const dir = selectedFile.substring(0, selectedFile.lastIndexOf('/') + 1) || '/';
 						const file = new File([content], fileName, { type: 'text/plain' });
-						const result = await uploadToTerminal(
-							terminal.url,
-							terminal.key,
-							dir,
-							file,
-							chatId ?? undefined
-						);
+						const result = await uploadToTerminal(terminal.url, terminal.key, dir, file);
 						toast[result ? 'success' : 'error'](
 							$i18n.t(result ? 'File saved' : 'Failed to save file')
 						);
@@ -2095,53 +1931,10 @@
 				{:else if error}
 					<div class="p-4 text-xs">{error}</div>
 				{:else if visibleEntries.length === 0 && !creatingFolder && !creatingFile}
-					<div class="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-						<div
-							class="flex size-9 items-center justify-center rounded-lg bg-gray-50 text-gray-400 dark:bg-gray-800/70 dark:text-gray-500"
-						>
-							<Folder className="size-[18px]" />
+					<div class="flex items-center justify-center py-12">
+						<div class="text-xs text-gray-400 dark:text-gray-500">
+							{$i18n.t('This folder is empty')}
 						</div>
-						<div class="mt-3">
-							<div class="text-sm font-medium text-gray-800 dark:text-gray-200">
-								{$i18n.t('No files yet')}
-							</div>
-							<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-								{$i18n.t('Drop files here to upload')}
-							</div>
-						</div>
-						<div
-							class="mt-4 flex items-center divide-x divide-gray-200 text-xs dark:divide-gray-700"
-						>
-							<button
-								type="button"
-								class="flex h-8 items-center gap-1.5 rounded-l-md px-3 font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
-								disabled={uploading || !selectedTerminal || !currentWritable}
-								on:click={openEmptyUploadPicker}
-							>
-								<DocumentArrowUp className="size-3.5" />
-								{$i18n.t('Upload files')}
-							</button>
-							<button
-								type="button"
-								class="flex h-8 items-center gap-1.5 rounded-r-md px-3 font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
-								disabled={!selectedTerminal || !terminalEnabled}
-								on:click={openWorkspaceTerminal}
-							>
-								<TerminalIcon className="size-3.5" strokeWidth="1.7" />
-								{$i18n.t('Open terminal')}
-							</button>
-						</div>
-						<input
-							bind:this={emptyUploadInput}
-							type="file"
-							multiple
-							hidden
-							on:change={() => {
-								if (!emptyUploadInput?.files?.length) return;
-								handleUploadFiles(Array.from(emptyUploadInput.files));
-								emptyUploadInput.value = '';
-							}}
-						/>
 					</div>
 				{/if}
 
@@ -2232,13 +2025,65 @@
 				<PortList
 					baseUrl={selectedTerminal.url}
 					apiKey={selectedTerminal.key}
-					{chatId}
 					on:previewPort={(e) => {
 						selectedFile = null;
 						clearFilePreview();
 						previewPort = e.detail;
 					}}
 				/>
+			</div>
+		{/if}
+
+		<!-- Terminal bottom panel -->
+		{#if terminalEnabled}
+			<div class="shrink-0 border-t border-gray-50 dark:border-gray-850/30">
+				{#if terminalExpanded}
+					<!-- Drag handle (at top of panel) -->
+					<!-- svelte-ignore a11y-no-static-element-interactions -->
+					<div class="relative cursor-row-resize group" on:mousedown={onHandleMouseDown}>
+						<div
+							class="h-px bg-transparent group-hover:bg-black/10 dark:group-hover:bg-white/10 transition"
+						/>
+						<div class="absolute inset-x-0 -top-1.5 -bottom-1.5" />
+					</div>
+				{/if}
+
+				<!-- Toggle header (full-width button) -->
+				<button
+					class="w-full flex items-center gap-2 px-2 py-1 mb-0.5 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-100"
+					on:click={toggleTerminal}
+				>
+					<Icon name="terminal" size={14} strokeWidth={1.4} class="shrink-0" />
+					<span class="font-normal">{$i18n.t('Terminal')}</span>
+
+					{#if terminalExpanded}
+						<div
+							class="w-1.5 h-1.5 rounded-full transition-colors {terminalConnected
+								? 'bg-emerald-500'
+								: terminalConnecting
+									? 'bg-yellow-500 animate-pulse'
+									: 'bg-gray-400'}"
+						/>
+					{/if}
+
+					<Icon
+						name="chevron-up"
+						size={12}
+						strokeWidth={1.4}
+						class="ml-auto transition-transform {terminalExpanded ? 'rotate-180' : ''}"
+					/>
+				</button>
+
+				{#if terminalExpanded}
+					<div style="height: {terminalHeight}px" class="min-h-0">
+						<XTerminal
+							overlay={overlay || isDraggingHandle}
+							bind:connected={terminalConnected}
+							bind:connecting={terminalConnecting}
+							{chatId}
+						/>
+					</div>
+				{/if}
 			</div>
 		{/if}
 

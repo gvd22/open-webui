@@ -105,6 +105,69 @@ def require_canvas_precondition(
         raise CanvasConflictError(canvas_id, document)
 
 
+def build_canvas_document_update(
+    canvas_id: str,
+    current: dict,
+    *,
+    content: str,
+    expected_updated_at: int | None,
+    expected_content_hash: str | None,
+    title: str | None = None,
+    title_edited: bool | None = None,
+    source: str,
+) -> dict:
+    """Build one version-checked Canvas update for both API and model tools."""
+    require_canvas_precondition(
+        canvas_id,
+        current,
+        expected_updated_at,
+        expected_content_hash,
+    )
+
+    if source == 'ai':
+        supplied_title = title is not None and bool(title.strip())
+        title_fields = (
+            {
+                'title': generate_canvas_title(content, title or ''),
+                'title_edited': True,
+            }
+            if supplied_title
+            else (
+                {'title': generate_canvas_title(content), 'title_edited': False}
+                if not current.get('title_edited', False)
+                else {}
+            )
+        )
+        return {
+            **current,
+            'content': content,
+            'updated_at': canvas_timestamp(current.get('updated_at')),
+            'last_ai_update': {
+                'title': current.get('title', ''),
+                'content': current.get('content', ''),
+                'title_edited': bool(current.get('title_edited', False)),
+            },
+            **title_fields,
+        }
+
+    if source != 'manual' or title_edited is None:
+        raise ValueError('Invalid Canvas update source.')
+    next_title = (title or '').strip() or generate_canvas_title(content)
+    has_manual_change = (
+        next_title != current.get('title', '')
+        or content != current.get('content', '')
+        or title_edited != bool(current.get('title_edited', False))
+    )
+    return {
+        **current,
+        'title': next_title,
+        'content': content,
+        'title_edited': title_edited,
+        'last_ai_update': None if has_manual_change else current.get('last_ai_update'),
+        'updated_at': canvas_timestamp(current.get('updated_at')),
+    }
+
+
 def generate_canvas_title(content: str = '', fallback: str = '') -> str:
     """Derive a concise stable title when a Canvas has not been named by its user."""
 

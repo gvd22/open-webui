@@ -10,10 +10,11 @@ formats:
 | PDF (`.pdf`)         | Yes           | PDF viewer             |
 | Word (`.docx`)       | Yes           | Paginated Word preview |
 | PowerPoint (`.pptx`) | Yes           | Slide preview          |
+| Excel (`.xls`, `.xlsx`) | Yes        | Read-only worksheets   |
 
 No other format is presented as supported by this viewer. In particular, this
-does **not** include Excel (`.xlsx`, `.xls`), CSV, OpenDocument (`.odt`, `.ods`,
-`.odp`), or legacy Word/PowerPoint (`.doc`, `.ppt`). Selecting one of these
+does **not** include CSV, OpenDocument (`.odt`, `.ods`, `.odp`), or legacy
+Word/PowerPoint (`.doc`, `.ppt`). Selecting one of these
 files stays in Files and uses its existing preview or download path; it does not
 open an empty or misleading document tab.
 
@@ -32,6 +33,7 @@ limit will render successfully:
 | PDF    |      64 MiB | Maximum 1,000 pages; each canvas is capped at 24,000,000 canvas pixels; maximum 4x zoom.                                                                                                                                |
 | DOCX   |      48 MiB | Maximum 1,500 archive entries; each entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; compression ratio is at most 120:1.                                     |
 | PPTX   |      64 MiB | Maximum 1,500 archive entries; each uncompressed entry is at most 16 MiB; total archive expansion is capped at 96 MiB uncompressed; media is at most 64 MiB; slide media work is limited to four concurrent operations. |
+| XLS/XLSX |    48 MiB | Read-only cell values and worksheet tabs; formulas are not executed. XLSX uses the DOCX archive entry, expansion, and compression limits.                                                                         |
 
 The input limit is enforced while acquiring runtime files. The archive and
 render limits are checked before DOCX/PPTX rendering. A limit failure is shown
@@ -67,13 +69,13 @@ file remains governed by the separately authorized Python or terminal runtime.
 
 ## Fallback and unsupported formats
 
-Excel (`.xlsx`, `.xls`), CSV, OpenDocument (`.odt`, `.ods`, `.odp`), and legacy
-Word/PowerPoint (`.doc`, `.ppt`) remain in Files/FileNav and use its existing
+CSV, OpenDocument (`.odt`, `.ods`, `.odp`), and legacy Word/PowerPoint
+(`.doc`, `.ppt`) remain in Files/FileNav and use its existing
 preview or download behavior. They must not open a blank dedicated tab. If the
 document viewer feature flag is disabled, PDF/DOCX/PPTX also remain in the
 Files/FileNav path.
 
-The automated browser harness verifies the shared Terminal/Pyodide file-open
-decision seam for these unsupported extensions. It does not mount the complete
+The automated browser harness verifies the Pyodide file-open decision for these
+unsupported extensions. It does not mount the complete
 FileNav or PyodideFileNav interfaces; their directory listing, preview, and
 download flows remain a manual integration check.

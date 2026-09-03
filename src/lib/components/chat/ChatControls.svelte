@@ -1,20 +1,18 @@
 <script lang="ts">
-	import { onMount, tick, getContext } from 'svelte';
-	import type { Writable } from 'svelte/store';
-	import type { i18n as i18nType } from 'i18next';
-	import { v4 as uuidv4 } from 'uuid';
-	import { toast } from 'svelte-sonner';
-	import { uploadFile } from '$lib/apis/files';
+	import { onMount } from 'svelte';
 	import {
-		config, terminalServers, showControls, showCallOverlay, showArtifacts,
-		showEmbeds, showFileNavPath, selectedTerminalId, artifactCode,
-		workspaceUtilityInstances
+		config,
+		showControls,
+		showCallOverlay,
+		showArtifacts,
+		showEmbeds,
+		showFileNavPath,
+		artifactCode
 	} from '$lib/stores';
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
 	import ResizableSidePanel from '../common/ResizableSidePanel.svelte';
 	import Artifacts from './Artifacts.svelte';
-	import XTerminal from './XTerminal.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
 	import {
 		getDefaultWorkspaceContentId,
@@ -22,7 +20,6 @@
 		WORKSPACE_FILES_ID
 	} from './Artifacts/workspace';
 
-	const i18n: Writable<i18nType> = getContext('i18n');
 	export let history: Record<string, any> | null = null;
 	export let models: any[] = [];
 	export let chatId: string | null = null;
@@ -40,13 +37,8 @@
 	let largeScreen = false;
 	let resizing = false;
 	let controlsWidth = 600;
-	let workspaceTerminalComponents: Record<string, XTerminal> = {};
-
 	$: workspaceRuntime = resolveWorkspaceRuntime(
-		$terminalServers,
-		$selectedTerminalId,
-		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter',
-		chatId
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
 	);
 
 	const openWorkspaceItem = (id: string) => {
@@ -56,31 +48,9 @@
 	};
 
 	$: if ($showControls && !$showCallOverlay && !$showEmbeds && !$showArtifacts) {
-		openWorkspaceItem(getDefaultWorkspaceContentId(workspaceRuntime));
+		openWorkspaceItem(getDefaultWorkspaceContentId());
 	}
 	$: if ($showFileNavPath) openWorkspaceItem(WORKSPACE_FILES_ID);
-
-	const handleTerminalAttach = async (blob: Blob, name: string, contentType: string) => {
-		const itemId = uuidv4();
-		const pending = {
-			type: 'file', file: '', id: null, url: '', name,
-			collection_name: '', status: 'uploading', error: '', itemId, size: blob.size
-		};
-		files = [...files, pending];
-		try {
-			const file = new File([blob], name, { type: contentType || 'application/octet-stream' });
-			const uploaded = await uploadFile(localStorage.token, file);
-			if (!uploaded) throw new Error('Upload failed');
-			files = files.map((item) => item.itemId !== itemId ? item : {
-				...pending, status: 'uploaded', file: uploaded, id: uploaded.id,
-				url: uploaded.id, collection_name: uploaded?.meta?.collection_name
-			});
-			toast.success($i18n.t('File attached to chat'));
-		} catch {
-			files = files.filter((item) => item.itemId !== itemId);
-			toast.error($i18n.t('Failed to attach file'));
-		}
-	};
 
 	const closeHandler = () => {
 		showControls.set(false);
@@ -99,13 +69,6 @@
 		};
 	});
 
-	$: activeWorkspaceTerminal = $workspaceUtilityInstances.find(
-		(instance) => instance.kind === 'terminal' && instance.id === $artifactCode
-	);
-	$: if (activeWorkspaceTerminal && workspaceTerminalComponents[activeWorkspaceTerminal.id]) {
-		const id = activeWorkspaceTerminal.id;
-		void tick().then(() => workspaceTerminalComponents[id]?.focus());
-	}
 </script>
 
 {#snippet content()}
@@ -120,20 +83,8 @@
 		{:else}
 			<Artifacts
 				{history} overlay={resizing} showFiles={workspaceRuntime.files}
-				{codeInterpreterEnabled} onAttach={handleTerminalAttach}
+				{codeInterpreterEnabled}
 			/>
-			{#each $workspaceUtilityInstances.filter((instance) => instance.kind === 'terminal') as instance (instance.id)}
-				<div
-					class="absolute inset-x-0 bottom-0 top-11 z-10 bg-black"
-					class:invisible={$artifactCode !== instance.id}
-					class:pointer-events-none={$artifactCode !== instance.id}
-				>
-					<XTerminal
-						bind:this={workspaceTerminalComponents[instance.id]}
-						{chatId} terminalId={instance.terminalId}
-					/>
-				</div>
-			{/each}
 		{/if}
 	</div>
 {/snippet}

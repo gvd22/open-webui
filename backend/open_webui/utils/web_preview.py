@@ -161,6 +161,52 @@ def normalize_web_preview_files(files: dict | None) -> dict[str, dict[str, str]]
     return normalized
 
 
+def build_web_preview_document_update(
+    preview_id: str,
+    current: dict,
+    *,
+    files: dict,
+    expected_updated_at: int | None,
+    expected_content_hash: str | None,
+    title: str | None = None,
+    entrypoint: str | None = None,
+    exported_path: str | None = None,
+    exported_runtime: str | None = None,
+    update_export: bool = False,
+) -> dict:
+    """Build one normalized, version-checked update for API and model tools."""
+    normalized_files = normalize_web_preview_files(files)
+    require_web_preview_precondition(
+        preview_id,
+        current,
+        expected_updated_at,
+        expected_content_hash,
+    )
+    next_entrypoint = entrypoint or current.get('entrypoint', 'index.html')
+    if (
+        next_entrypoint not in normalized_files
+        or normalized_files[next_entrypoint]['mime'] != 'text/html'
+    ):
+        raise ValueError('The entrypoint must reference an HTML file in the preview package.')
+
+    updated = {
+        **current,
+        'title': (
+            generate_web_preview_title(normalized_files, next_entrypoint, title)
+            if title is not None
+            else current.get('title')
+            or generate_web_preview_title(normalized_files, next_entrypoint)
+        ),
+        'entrypoint': next_entrypoint,
+        'files': normalized_files,
+        'updated_at': web_preview_timestamp(current.get('updated_at')),
+    }
+    if update_export:
+        updated['exported_path'] = exported_path
+        updated['exported_runtime'] = exported_runtime
+    return updated
+
+
 def build_web_preview_capacity_notice(document_count: int) -> str:
     if document_count < WEB_PREVIEW_WARNING_DOCUMENT_COUNT:
         return ''

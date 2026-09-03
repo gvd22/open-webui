@@ -96,7 +96,7 @@
 					<div class="px-2 pb-1 pt-2 text-[11px] uppercase text-gray-400 dark:text-gray-500">
 						{$i18n.t('Files')}
 					</div>
-					{#each outputs as file (`${file.source}:${file.terminalId ?? ''}:${file.path}`)}
+					{#each outputs as file (file.path)}
 						<button type="button" on:click={() => openFile(file)} title={file.path}>
 							<FileTypeIcon name={file.name} type="file" size={16} />
 							<span class="min-w-0 flex-1 truncate text-left">{file.name}</span>

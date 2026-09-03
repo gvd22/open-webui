@@ -138,7 +138,6 @@
 		if (renaming) return;
 		if (didLongPress) {
 			didLongPress = false;
-			e.preventDefault();
 			return;
 		}
 
@@ -337,13 +336,10 @@
 
 		<Dropdown bind:show={menuOpen} align="end" sideOffset={4}>
 			<button
-				type="button"
 				class="shrink-0 flex h-5 w-5 items-center justify-center mr-1 rounded transition
 					text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-400
 					hover:bg-gray-50/40 dark:hover:bg-white/4"
 				aria-label={$i18n.t('More')}
-				aria-expanded={menuOpen}
-				on:mousedown|preventDefault|stopPropagation
 			>
 				<Icon name="three-dots" size={12} strokeWidth={1.4} />
 			</button>

@@ -1,11 +1,9 @@
 <script lang="ts">
 	import DocumentFileViewer from './DocumentViewer/DocumentFileViewer.svelte';
-	import { getWorkspaceContentId, type WorkspaceContent, type WorkspaceRuntime } from './workspace';
+	import { getWorkspaceContentId, type WorkspaceContent } from './workspace';
 
 	export let contents: WorkspaceContent[] = [];
 	export let selectedContentId = '';
-	export let runtime: WorkspaceRuntime;
-	export let chatId: string | null = null;
 </script>
 
 {#each contents as content, index (getWorkspaceContentId(content, index))}
@@ -22,8 +20,6 @@
 					path={content.path}
 					format={content.fileFormat}
 					targetPage={content.targetPage ?? null}
-					{runtime}
-					{chatId}
 				/>
 			{/if}
 		</div>

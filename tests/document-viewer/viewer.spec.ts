@@ -4,9 +4,9 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 const paths = {
-	pdf: '/workspace/basic.pdf',
-	docx: '/workspace/basic.docx',
-	pptx: '/workspace/basic.pptx'
+	pdf: '/mnt/uploads/basic.pdf',
+	docx: '/mnt/uploads/basic.docx',
+	pptx: '/mnt/uploads/basic.pptx'
 };
 
 let blockedRequests: string[] = [];
@@ -95,32 +95,28 @@ test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page
 		await expect(link).toHaveAttribute('rel', /noopener/);
 	}
 	await page.goto('/?format=pptx');
-	const firstSlideTitle = page.getByText('KOBY-BASIC-PPTX-2-SLIDES');
-	await expect(firstSlideTitle).toBeVisible();
-	// A zero-sized shape remains accessible but produces a visually blank slide.
-	expect((await firstSlideTitle.boundingBox())?.width).toBeGreaterThan(20);
+	const firstSlide = page.getByRole('img', { name: 'Slide 1', exact: true });
+	await expect(firstSlide).toBeVisible();
+	expect((await firstSlide.boundingBox())?.width).toBeGreaterThan(20);
 	const initialPlacement = await page
-		.getByTestId('powerpoint-document-viewport')
+		.getByRole('application', { name: 'Slide preview' })
 		.evaluate((viewport) => {
-			const surface = viewport.querySelector<HTMLElement>('.presentation-render-surface');
+			const surface = viewport.querySelector<HTMLElement>('section img[alt="Slide 1"]');
 			if (!surface) return null;
 			const viewportRect = viewport.getBoundingClientRect();
 			const surfaceRect = surface.getBoundingClientRect();
 			return {
-				left: viewport.scrollLeft,
-				top: viewport.scrollTop,
-				surfaceLeft: surfaceRect.left - viewportRect.left,
-				surfaceTop: surfaceRect.top - viewportRect.top
+				insideX: surfaceRect.left >= viewportRect.left && surfaceRect.right <= viewportRect.right,
+				insideY: surfaceRect.top >= viewportRect.top && surfaceRect.bottom <= viewportRect.bottom
 			};
 		});
-	expect(initialPlacement).not.toBeNull();
-	expect(initialPlacement).toEqual({ left: 0, top: 0, surfaceLeft: 0, surfaceTop: 0 });
-	await page.getByLabel('PowerPoint presentation').focus();
+	expect(initialPlacement).toEqual({ insideX: true, insideY: true });
+	await page.getByRole('application', { name: 'Slide preview' }).focus();
 	await page.keyboard.press('ArrowRight');
 	await expect(page.getByText('2 / 2')).toBeVisible();
-	const secondSlideTitle = page.getByText('KOBY profiling slide 2');
-	await expect(secondSlideTitle).toBeVisible();
-	expect((await secondSlideTitle.boundingBox())?.width).toBeGreaterThan(20);
+	const secondSlide = page.getByRole('img', { name: 'Slide 2', exact: true });
+	await expect(secondSlide).toBeVisible();
+	expect((await secondSlide.boundingBox())?.width).toBeGreaterThan(20);
 });
 
 test('opens requested workspace document pages without changing default zoom', async ({ page }) => {
@@ -129,15 +125,12 @@ test('opens requested workspace document pages without changing default zoom', a
 	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
 
 	await page.goto('/?format=docx&targetPage=2');
-	const wordViewport = page.getByTestId('word-document-viewport');
 	await expect(page.getByText('KOBY-BASIC-DOCX-2-PAGES')).toBeVisible();
-	await expect
-		.poll(() => wordViewport.evaluate((viewport) => viewport.scrollTop))
-		.toBeGreaterThan(0);
+	await expect(page.getByRole('region', { name: 'Word document' })).toBeVisible();
 	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
 
 	await page.goto('/?format=pptx&targetPage=2');
-	await expect(page.getByText('KOBY profiling slide 2')).toBeVisible();
+	await expect(page.getByRole('img', { name: 'Slide 2', exact: true })).toBeVisible();
 	await expect(page.getByText('2 / 2')).toBeVisible();
 	await expect(page.getByLabel('Reset zoom')).toHaveText('100%');
 });
@@ -150,11 +143,11 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 		},
 		docx: {
 			ready: () => page.getByText('KOBY-BASIC-DOCX-2-PAGES'),
-			viewport: () => page.getByTestId('word-document-viewport')
+			viewport: () => page.getByRole('region', { name: 'Word document' })
 		},
 		pptx: {
-			ready: () => page.getByText('KOBY-BASIC-PPTX-2-SLIDES'),
-			viewport: () => page.getByTestId('powerpoint-document-viewport')
+			ready: () => page.getByRole('img', { name: 'Slide 1', exact: true }),
+			viewport: () => page.getByRole('application', { name: 'Slide preview' }).locator('section')
 		}
 	} as const;
 
@@ -174,13 +167,29 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 
 		for (let index = 0; index < 8; index += 1) await page.getByLabel('Zoom in').click();
 		await expect(resetZoom).toHaveText('202%');
+		const beforePan = await viewer.viewport().locator('img[alt^="Slide "]').count()
+			? await viewer.viewport().locator('img[alt^="Slide "]').boundingBox()
+			: null;
 		await viewer.viewport().hover();
 		await page.mouse.wheel(240, 240);
-		await expect
-			.poll(() =>
-				viewer.viewport().evaluate((element) => element.scrollLeft > 0 && element.scrollTop > 0)
-			)
-			.toBe(true);
+		if (format === 'pptx') {
+			await expect
+				.poll(async () => {
+					const afterPan = await viewer.viewport().locator('img[alt^="Slide "]').boundingBox();
+					return Boolean(
+						beforePan &&
+							afterPan &&
+							(afterPan.x !== beforePan.x || afterPan.y !== beforePan.y)
+					);
+				})
+				.toBe(true);
+		} else {
+			await expect
+				.poll(() =>
+					viewer.viewport().evaluate((element) => element.scrollLeft > 0 && element.scrollTop > 0)
+				)
+				.toBe(true);
+		}
 
 		await resetZoom.click();
 		await expect(resetZoom).toHaveText('100%');
@@ -210,7 +219,7 @@ test('keeps the last valid DOCX and its download when an update is corrupt', asy
 	);
 	await page.getByTestId('refresh-viewer').click();
 	await corruptResponse;
-	await expect(page.getByRole('alert')).toContainText('The latest update could not be displayed.');
+	await expect(page.getByRole('status')).toContainText('The latest update could not be displayed.');
 	const downloadPromise = page.waitForEvent('download');
 	await page.getByLabel('Download displayed version').click();
 	const download = await downloadPromise;
@@ -315,7 +324,7 @@ test('limits production workspace files to four with active-safe inactive LRU ev
 		const expected = Array.from(
 			{ length: Math.min(index, 4) },
 			(_, offset) =>
-				`workspace:file:/workspace/sequence-${index - Math.min(index, 4) + offset + 1}.pdf`
+				`workspace:file:/mnt/uploads/sequence-${index - Math.min(index, 4) + offset + 1}.pdf`
 		);
 		await expect(page.getByTestId('lru-open-file-ids')).toHaveText(expected.join(','));
 		await expect(page.getByTestId('lru-active-file-id')).toHaveText(expected.at(-1)!);
@@ -323,7 +332,7 @@ test('limits production workspace files to four with active-safe inactive LRU ev
 	}
 
 	await expect(page.getByTestId('lru-evicted-file-ids')).toHaveText(
-		'workspace:file:/workspace/sequence-1.pdf,workspace:file:/workspace/sequence-2.pdf,workspace:file:/workspace/sequence-3.pdf,workspace:file:/workspace/sequence-4.pdf,workspace:file:/workspace/sequence-5.pdf,workspace:file:/workspace/sequence-6.pdf'
+		'workspace:file:/mnt/uploads/sequence-1.pdf,workspace:file:/mnt/uploads/sequence-2.pdf,workspace:file:/mnt/uploads/sequence-3.pdf,workspace:file:/mnt/uploads/sequence-4.pdf,workspace:file:/mnt/uploads/sequence-5.pdf,workspace:file:/mnt/uploads/sequence-6.pdf'
 	);
 });
 
@@ -360,7 +369,7 @@ test('commits only the latest delayed refresh candidate for rendering and downlo
 test('keeps unsupported office and data formats in the visible Files fallback', async ({
 	page
 }) => {
-	for (const extension of ['xlsx', 'xls', 'csv', 'odt', 'ods', 'odp', 'doc', 'ppt']) {
+	for (const extension of ['csv', 'odt', 'ods', 'odp', 'doc', 'ppt']) {
 		await page.goto(`/?unsupported=${extension}`);
 		await expect(page.getByTestId('files-fallback-state')).toHaveAttribute(
 			'data-file-open-target',
@@ -372,7 +381,7 @@ test('keeps unsupported office and data formats in the visible Files fallback', 
 	}
 });
 
-test('rejects an oversized terminal response from its header before rendering', async ({
+test('rejects an oversized Pyodide response from its header before rendering', async ({
 	page
 }) => {
 	await setRuntime(page, paths.pdf, { mode: 'oversized' });

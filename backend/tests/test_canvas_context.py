@@ -57,6 +57,7 @@ def test_chat_router_includes_artifact_routes_once():
         '/{id}/canvas/{canvas_id}/promote',
         '/{id}/web-preview/{preview_id}',
         '/{id}/web-preview/{preview_id}/select',
+        '/{id}/workspace-outputs',
     ):
         assert paths.count(path) == 1
 

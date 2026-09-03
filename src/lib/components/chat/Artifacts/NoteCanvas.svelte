@@ -168,8 +168,10 @@
 						{ updatedAt: document.updated_at, contentHash: document.contentHash }
 					);
 					saveConflict = false;
-				} catch {
-					// Preserve the conflict state if the canonical document is unavailable.
+				} catch (refreshError) {
+					console.error('Unable to reload conflicted Canvas', refreshError);
+					toast.error($i18n.t('Canvas changed elsewhere and could not be reloaded.'));
+					return;
 				}
 				toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
 				return;

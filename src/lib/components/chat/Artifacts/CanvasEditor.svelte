@@ -172,9 +172,11 @@
 						{ updatedAt: document.updated_at, contentHash: document.contentHash }
 					);
 					transientSaveError = false;
-				} catch {
-					// Keep the conflict visible when the canonical refresh also fails.
-				}
+					} catch (refreshError) {
+						console.error('Unable to reload conflicted Canvas', refreshError);
+						toast.error($i18n.t('Canvas changed elsewhere and could not be reloaded.'));
+						return;
+					}
 				toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
 				return;
 			}

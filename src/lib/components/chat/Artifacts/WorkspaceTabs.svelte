@@ -7,89 +7,31 @@
 	import Document from '$lib/components/icons/Document.svelte';
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
-	import Plus from '$lib/components/icons/Plus.svelte';
-	import Terminal from '$lib/components/icons/Terminal.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 
-	import { hasWorkspaceAddActions, type WorkspaceTab } from './workspace';
+	import type { WorkspaceTab } from './workspace';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let tabs: WorkspaceTab[] = [];
 	export let selectedIndex = 0;
-	export let terminalId: string | null = null;
-	export let filesAvailable = false;
 	export let onSelect: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onClose: () => void = () => {};
 	export let onCloseTab: (tab: WorkspaceTab) => void | Promise<void> = () => {};
 	export let onReorder: (sourceId: string, targetId: string) => void = () => {};
-	export let onOpenFiles: () => void = () => {};
-	export let onOpenTerminal: () => void = () => {};
-	export let onOpenBrowser: () => void = () => {};
-	let showAddMenu = false;
 	let draggedTabId = '';
 	let dragTargetId = '';
 	let pressedTabId = '';
 	let pointerStart = { x: 0, y: 0 };
 	let tabListElement: HTMLElement;
-	let addButtonElement: HTMLButtonElement;
-	let addMenuElement: HTMLElement;
 	let closeButtonElement: HTMLButtonElement;
-	$: hasAddActions = hasWorkspaceAddActions(terminalId);
-
-	const closeAddMenuOnEscape = (event: KeyboardEvent) => {
-		if (event.key === 'Escape' && showAddMenu) {
-			showAddMenu = false;
-			addButtonElement?.focus();
-		}
-	};
-	const closeAddMenuOnPointer = () => {
-		if (showAddMenu) showAddMenu = false;
-	};
-	const keepAddMenuOpen = () => {};
-	const getMenuItems = () =>
-		Array.from(addMenuElement?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
 	const getTabElements = () =>
 		Array.from(tabListElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-	const focusSelectedTab = () =>
-		getTabElements()
-			.find((element) => element.getAttribute('aria-selected') === 'true')
-			?.focus();
-
-	const openAddMenu = async () => {
-		showAddMenu = true;
-		await tick();
-		getMenuItems()[0]?.focus();
-	};
-
-	const toggleAddMenu = () => {
-		if (showAddMenu) showAddMenu = false;
-		else void openAddMenu();
-	};
-
-	const onMenuKeydown = (event: KeyboardEvent) => {
-		const items = getMenuItems();
-		if (!items.length) return;
-		const currentIndex = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
-		let nextIndex = currentIndex;
-		if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % items.length;
-		else if (event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + items.length) % items.length;
-		else if (event.key === 'Home') nextIndex = 0;
-		else if (event.key === 'End') nextIndex = items.length - 1;
-		else if (event.key === 'Escape') {
-			showAddMenu = false;
-			addButtonElement?.focus();
-			return;
-		} else return;
-		event.preventDefault();
-		items[nextIndex]?.focus();
-	};
 
 	const iconKind = (kind: string) => {
 		if (kind === 'canvas-note') return 'document';
 		if (kind === 'workspace-file') return 'document';
 		if (kind === 'web-preview') return 'browser';
-		if (kind.includes('terminal')) return 'terminal';
 		if (kind.includes('browser')) return 'browser';
 		if (kind.includes('file')) return 'files';
 		if (kind.includes('jira') || kind.includes('confluence') || kind.includes('bitbucket')) {
@@ -129,23 +71,6 @@
 		]?.focus();
 	};
 
-	const openFiles = () => {
-		if (filesAvailable) onOpenFiles();
-	};
-
-	const openTerminal = () => {
-		if (!terminalId) return;
-		onOpenTerminal();
-	};
-
-	const openBrowser = () => onOpenBrowser();
-	const finishMenuAction = async (action: () => void) => {
-		action();
-		showAddMenu = false;
-		await tick();
-		focusSelectedTab();
-	};
-
 	const closeTabAndFocus = async (tab: WorkspaceTab) => {
 		const closedIndex = tabs.findIndex((item) => item.id === tab.id);
 		await onCloseTab(tab);
@@ -170,7 +95,6 @@
 
 	const beginTabMouse = (event: MouseEvent, tab: WorkspaceTab) => {
 		if (event.button !== 0) return;
-		showAddMenu = false;
 		pressedTabId = tab.id;
 		pointerStart = { x: event.clientX, y: event.clientY };
 		const move = (moveEvent: MouseEvent) => {
@@ -201,8 +125,6 @@
 		window.addEventListener('mouseup', end, { once: true });
 	};
 </script>
-
-<svelte:window on:mousedown={closeAddMenuOnPointer} on:keydown={closeAddMenuOnEscape} />
 
 <div
 	class="workspace-tabs shrink-0 border-b border-gray-100 bg-white px-2 py-1.5 dark:border-gray-800 dark:bg-gray-850"
@@ -250,8 +172,6 @@
 						>
 							{#if iconKind(tab.kind) === 'document'}
 								<Document className="size-4" />
-							{:else if iconKind(tab.kind) === 'terminal'}
-								<Terminal className="size-4" />
 							{:else if iconKind(tab.kind) === 'files'}
 								<Folder className="size-4" />
 							{:else if ['browser', 'connector'].includes(iconKind(tab.kind))}
@@ -279,72 +199,6 @@
 				</div>
 			{/each}
 		</div>
-
-		{#if hasAddActions}
-			<div class="relative shrink-0">
-				<button
-					bind:this={addButtonElement}
-					type="button"
-					class="flex size-8 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:focus-visible:ring-gray-500 dark:disabled:hover:bg-transparent"
-					aria-label={$i18n.t('Add to workspace')}
-					aria-haspopup="menu"
-					aria-expanded={showAddMenu}
-					aria-controls="workspace-add-menu"
-					title={$i18n.t('Add to workspace')}
-					on:mousedown|stopPropagation={() => {}}
-					on:click|stopPropagation={toggleAddMenu}
-				>
-					<Plus className="size-4" strokeWidth="1.7" />
-				</button>
-
-				{#if showAddMenu}
-					<div
-						bind:this={addMenuElement}
-						id="workspace-add-menu"
-						class="absolute right-0 top-9 z-50 min-w-44 rounded-lg border border-gray-100 bg-white p-1 text-sm shadow-lg dark:border-gray-700 dark:bg-gray-850"
-						role="menu"
-						tabindex="-1"
-						on:mousedown|stopPropagation={keepAddMenuOpen}
-						on:keydown={onMenuKeydown}
-					>
-						{#if terminalId}
-							<button
-								type="button"
-								role="menuitem"
-								class="flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-								on:mousedown|preventDefault|stopPropagation={keepAddMenuOpen}
-								on:click|stopPropagation={() => void finishMenuAction(openTerminal)}
-							>
-								<Terminal className="size-4" />
-								<span>{$i18n.t('Terminal')}</span>
-							</button>
-							<button
-								type="button"
-								role="menuitem"
-								class="flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-								on:mousedown|preventDefault|stopPropagation={keepAddMenuOpen}
-								on:click|stopPropagation={() => void finishMenuAction(openBrowser)}
-							>
-								<GlobeAlt className="size-4" />
-								<span>{$i18n.t('Browser')}</span>
-							</button>
-						{/if}
-						{#if filesAvailable}
-							<button
-								type="button"
-								role="menuitem"
-								class="flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-								on:mousedown|preventDefault|stopPropagation={keepAddMenuOpen}
-								on:click|stopPropagation={() => void finishMenuAction(openFiles)}
-							>
-								<Folder className="size-4" />
-								<span>{$i18n.t('Files')}</span>
-							</button>
-						{/if}
-					</div>
-				{/if}
-			</div>
-		{/if}
 
 		<button
 			bind:this={closeButtonElement}

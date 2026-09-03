@@ -27,15 +27,10 @@ describe('workspace document viewer accessibility contract', () => {
 
 	it('falls back to the Files preview unless the document viewer accepts the file', () => {
 		const artifacts = readComponent('WorkspaceHost.svelte');
-		const terminalFiles = readComponent('../FileNav.svelte');
 		const pyodideFiles = readComponent('../PyodideFileNav.svelte');
 
 		expect(artifacts).toContain('return false;');
 		expect(artifacts).toContain('return true;');
-		expect(terminalFiles.replace(/\s+/g, ' ')).toContain(
-			'export let onOpenFile: (path: string, options?: { page?: number | null }) => boolean = () => false;'
-		);
-		expect(terminalFiles).toMatch(/onOpenFile\(filePath, \{ page: normalizeDocumentTargetPage/);
 		expect(pyodideFiles).toContain(
 			'export let onOpenFile: (path: string) => boolean = () => false;'
 		);
@@ -61,14 +56,12 @@ describe('workspace document viewer accessibility contract', () => {
 		expect(source).not.toContain('<DocumentFileViewer');
 		expect(documentPanels.match(/id=\{`workspace-panel-\$\{index\}`\}/g)).toHaveLength(1);
 		expect(source).toMatch(
-			/\{#if !\['workspace-file', 'workspace-browser'\]\.includes\(contents\[selectedContentIdx\]\.type\)\}\s*<div\s+id=\{workspacePanelId\}/
+			/\{#if contents\[selectedContentIdx\]\.type !== 'workspace-file'\}\s*<div\s+id=\{workspacePanelId\}/
 		);
 		expect(source).toMatch(
-			/\{#if content\.type !== 'workspace-file' && content\.type !== 'workspace-browser' && index !== selectedContentIdx\}\s*<div\s+id=\{`workspace-panel-\$\{index\}`\}/
+			/\{#if content\.type !== 'workspace-file' && index !== selectedContentIdx\}\s*<div\s+id=\{`workspace-panel-\$\{index\}`\}/
 		);
-		expect(source).not.toContain(
-			"hidden={['workspace-browser', 'workspace-file'].includes(contents[selectedContentIdx].type)}"
-		);
+		expect(source).not.toContain("hidden={contents[selectedContentIdx].type === 'workspace-file'}");
 	});
 
 	it('validates PowerPoint before converting it with the shared upstream renderer', () => {
@@ -82,23 +75,12 @@ describe('workspace document viewer accessibility contract', () => {
 		expect(source).toContain("const XLSX = await import('xlsx')");
 	});
 
-	it('uses one shared Office renderer in Workspace, Files, and terminal outputs', () => {
+	it('uses the shared Office renderer for Pyodide workspace documents', () => {
 		const workspaceViewer = readComponent('DocumentViewer/DocumentFileViewer.svelte');
-		const fileNav = readComponent('../FileNav.svelte');
-		const filePreview = readComponent('../FileNav/FilePreview.svelte');
-		const terminalOutput = readComponent('../Messages/TerminalOutputFile.svelte');
 
-		for (const source of [workspaceViewer, filePreview]) {
-			expect(source).toContain('OfficeDocumentPreview');
-			expect(source).not.toContain('WordDocumentViewer');
-			expect(source).not.toContain('PowerPointDocumentViewer');
-		}
-		expect(terminalOutput).toContain('<FilePreview');
-		expect(terminalOutput).toContain('{fileOfficeData}');
-		expect(fileNav).toContain("['docx', 'pptx', 'xls', 'xlsx']");
-		expect(fileNav).not.toContain("await import('mammoth')");
-		expect(fileNav).not.toContain("await import('xlsx')");
-		expect(fileNav).not.toContain('pptxToImages');
+		expect(workspaceViewer).toContain('OfficeDocumentPreview');
+		expect(workspaceViewer).not.toContain('WordDocumentViewer');
+		expect(workspaceViewer).not.toContain('PowerPointDocumentViewer');
 	});
 
 	it('keeps the shared PowerPoint controls free of Svelte accessibility warnings', () => {

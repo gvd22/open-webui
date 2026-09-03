@@ -2,7 +2,6 @@
 
 from urllib.parse import quote
 
-from open_webui.models.chats import Chats
 from open_webui.utils.chat_id import is_saved_chat_id
 
 TERMINAL_CONTEXT_HEADER = 'X-Terminal-Context-Id'
@@ -10,14 +9,6 @@ TERMINAL_CONTEXT_DEFAULT = 'default'
 TERMINAL_CONTEXT_TYPES = {'chat', 'automation'}
 TERMINAL_CONTEXT_ID_SOURCES = {'chat': 'chat_id', 'automation': 'automation_id'}
 TERMINAL_CHAT_UPLOAD_MODES = {'default', 'filesystem'}
-
-
-class TerminalChatBindingError(ValueError):
-    """A terminal request cannot use the requested saved-chat binding."""
-
-    def __init__(self, message: str, *, status_code: int = 409):
-        super().__init__(message)
-        self.status_code = status_code
 
 
 def is_terminal_orchestrator(connection: dict) -> bool:
@@ -36,49 +27,6 @@ def get_terminal_server_url(connection: dict) -> str:
     if policy_id:
         return f'{base_url}/p/{quote(policy_id, safe="")}'
     return base_url
-
-
-async def ensure_terminal_chat_binding(chat_id: str, user_id: str, terminal_id: str) -> bool:
-    """Validate and claim the chat's terminal connection exactly once.
-
-    The initial read avoids a write for an already matching binding. A first
-    claim goes through ``mutate_chat_by_id`` so concurrent callers cannot
-    retarget the chat after either one wins.
-    """
-    if not isinstance(chat_id, str) or not is_saved_chat_id(chat_id):
-        raise TerminalChatBindingError('A saved chat is required for this terminal')
-    if not isinstance(user_id, str) or not user_id:
-        raise TerminalChatBindingError('A saved chat is required for this terminal')
-    if not isinstance(terminal_id, str) or not terminal_id.strip():
-        raise TerminalChatBindingError('A terminal connection is required')
-
-    chat = await Chats.get_chat_by_id_and_user_id(chat_id, user_id)
-    if chat is None:
-        raise TerminalChatBindingError('Chat not found', status_code=404)
-
-    chat_data = chat.chat if isinstance(getattr(chat, 'chat', None), dict) else {}
-    existing_terminal_id = chat_data.get('terminal_id')
-    if existing_terminal_id is not None:
-        if existing_terminal_id != terminal_id:
-            raise TerminalChatBindingError('Chat is already bound to a different terminal')
-        return True
-
-    async def claim(data, _session):
-        existing = data.get('terminal_id')
-        if existing is not None and existing != terminal_id:
-            raise TerminalChatBindingError('Chat is already bound to a different terminal')
-        data['terminal_id'] = terminal_id
-        return data, True
-
-    mutation = await Chats.mutate_chat_by_id(
-        chat_id,
-        claim,
-        user_id=user_id,
-        touch=False,
-    )
-    if mutation is None:
-        raise TerminalChatBindingError('Chat not found', status_code=404)
-    return True
 
 
 def terminal_context_config(connection: dict, context: str) -> dict | bool:

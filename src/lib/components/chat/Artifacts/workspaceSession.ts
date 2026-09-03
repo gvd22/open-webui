@@ -1,5 +1,3 @@
-import { WORKSPACE_LAUNCHER_ID } from './workspace';
-
 const WORKSPACE_STATE_VERSION = 1;
 
 export type PersistedWorkspaceState = {
@@ -8,12 +6,6 @@ export type PersistedWorkspaceState = {
 	closed: string[];
 	filesOpened: boolean;
 	openedFiles: string[];
-	utilities: Array<{
-		id: string;
-		kind: 'terminal' | 'browser';
-		title: string;
-		terminalId?: string;
-	}>;
 };
 
 const workspaceStateKey = (chatId: string) =>
@@ -35,26 +27,11 @@ export const readWorkspaceState = (
 				? value.order.filter((item: unknown) => typeof item === 'string').slice(0, 100)
 				: [],
 			closed: Array.isArray(value.closed)
-				? value.closed
-						.filter((item: unknown) => typeof item === 'string' && item !== WORKSPACE_LAUNCHER_ID)
-						.slice(0, 100)
+				? value.closed.filter((item: unknown) => typeof item === 'string').slice(0, 100)
 				: [],
 			filesOpened: Boolean(value.filesOpened),
 			openedFiles: Array.isArray(value.openedFiles)
 				? value.openedFiles.filter((item: unknown) => typeof item === 'string').slice(-4)
-				: [],
-			utilities: Array.isArray(value.utilities)
-				? value.utilities
-						.filter(
-							(item: any) =>
-								item &&
-								typeof item.id === 'string' &&
-								item.id !== WORKSPACE_LAUNCHER_ID &&
-								['terminal', 'browser'].includes(item.kind) &&
-								typeof item.title === 'string' &&
-								(item.terminalId === undefined || typeof item.terminalId === 'string')
-						)
-						.slice(0, 30)
 				: []
 		};
 	} catch (error) {

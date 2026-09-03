@@ -15,24 +15,20 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from open_webui.config import TERMINAL_PROXY_HEADERS
 from open_webui.env import AIOHTTP_CLIENT_SESSION_SSL
 from open_webui.events import EVENTS, publish_event
-from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.groups import Groups
 from open_webui.utils.access_control import has_connection_access
 from open_webui.utils.auth import get_verified_user
-from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.headers import bearer_auth_header, normalize_bearer_token
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.terminals import (
     TERMINAL_CONTEXT_HEADER,
-    TerminalChatBindingError,
-    ensure_terminal_chat_binding,
     get_terminal_server_url,
     is_terminal_orchestrator,
-    terminal_chat_uploads,
     terminal_context_available,
     terminal_context_config,
     terminal_context_id,
+    terminal_chat_uploads,
     terminal_contexts,
 )
 from starlette.background import BackgroundTask
@@ -44,7 +40,6 @@ router = APIRouter()
 
 STREAMING_CONTENT_TYPES = ('application/octet-stream', 'image/', 'application/pdf')
 STRIPPED_RESPONSE_HEADERS = frozenset(('transfer-encoding', 'connection', 'content-encoding', 'content-length'))
-DISCOVERY_PATHS = frozenset(('api/config', 'health', 'openapi.json'))
 
 
 def _sanitize_proxy_path(path: str) -> str | None:
@@ -80,33 +75,6 @@ def _sanitize_proxy_path(path: str) -> str | None:
     if had_trailing_slash and cleaned and not cleaned.endswith('/'):
         cleaned += '/'
     return cleaned
-
-
-def _extract_chat_scope(path: str, header_session_id: str | None) -> tuple[str | None, str, bool]:
-    """Extract an optional ``chat/<id>/`` path scope and detect conflicts."""
-    if not path.startswith('chat/'):
-        return header_session_id, path, False
-
-    scoped_path = path.removeprefix('chat/')
-    path_chat_id, separator, remaining_path = scoped_path.partition('/')
-    if not separator:
-        remaining_path = ''
-    if header_session_id and header_session_id != path_chat_id:
-        return None, remaining_path, True
-    return path_chat_id, remaining_path, False
-
-
-async def _validate_chat_scope(connection: dict, path: str, session_id: str | None, user):
-    """Validate a saved-chat scope, leaving only native discovery unscoped."""
-    if not session_id and path.strip('/') in DISCOVERY_PATHS:
-        return None
-    if not terminal_context_available(connection, 'chat'):
-        return JSONResponse({'error': 'Terminal server is not available in chats'}, status_code=403)
-    if not session_id or not is_saved_chat_id(session_id):
-        return JSONResponse({'error': 'A saved chat is required for this terminal'}, status_code=409)
-    if path.strip('/') in DISCOVERY_PATHS and not await Chats.get_chat_by_id_and_user_id(session_id, user.id):
-        return JSONResponse({'error': 'Chat not found'}, status_code=404)
-    return None
 
 
 @router.get('/')
@@ -156,25 +124,9 @@ async def proxy_terminal(
     if not base_url:
         return JSONResponse({'error': 'Terminal server URL not configured'}, status_code=503)
 
-    # An explicit path scope survives iframe-relative asset requests. Never infer
-    # scope from a global cookie, a last-opened tab, or a runtime header alone.
-    session_id, path, scope_conflict = _extract_chat_scope(path, request.headers.get('x-session-id'))
-    if scope_conflict:
-        return JSONResponse({'error': 'Conflicting chat context'}, status_code=400)
-
-    scope_error = await _validate_chat_scope(connection, path, session_id, user)
-    if scope_error:
-        return scope_error
-
     safe_path = _sanitize_proxy_path(path)
     if safe_path is None:
         return JSONResponse({'error': 'Invalid path'}, status_code=400)
-
-    if path.strip('/') not in DISCOVERY_PATHS:
-        try:
-            await ensure_terminal_chat_binding(session_id, user.id, server_id)
-        except TerminalChatBindingError as error:
-            return JSONResponse({'error': str(error)}, status_code=error.status_code)
 
     target_url = f'{base_url}/{safe_path}'
 
@@ -183,14 +135,13 @@ async def proxy_terminal(
 
     headers = {'X-User-Id': user.id}
     # Forward per-session cwd tracking header
+    session_id = request.headers.get('x-session-id')
     if session_id:
-        # Open Terminal uses this header as the PTY ID on creation. Let it
-        # allocate a unique shell; the trusted context still scopes the worker.
-        if not (request.method == 'POST' and safe_path.rstrip('/') == 'api/terminals'):
-            headers['X-Session-Id'] = session_id
+        headers['X-Session-Id'] = session_id
+        if not terminal_context_available(connection, 'chat'):
+            return JSONResponse({'error': 'Terminal server is not available in chats'}, status_code=403)
         context_id = terminal_context_id(connection, {'chat_id': session_id}, 'chat')
-        context_config = terminal_context_config(connection, 'chat')
-        if isinstance(context_config, dict) and context_config.get('context_id') == 'chat_id' and not context_id:
+        if terminal_context_config(connection, 'chat').get('context_id') == 'chat_id' and not context_id:
             return JSONResponse({'error': 'A saved chat is required for this terminal'}, status_code=409)
         if context_id:
             headers[TERMINAL_CONTEXT_HEADER] = context_id
@@ -313,7 +264,7 @@ async def _resolve_authenticated_connection(ws: WebSocket, server_id: str):
         if user is None:
             await ws.close(code=4001, reason='Invalid token')
             return None
-    except (TimeoutError, JSONCodec.JSONDecodeError):
+    except (asyncio.TimeoutError, JSONCodec.JSONDecodeError):
         await ws.close(code=4001, reason='Auth timeout or invalid payload')
         return None
     except Exception:
@@ -341,12 +292,7 @@ async def _resolve_authenticated_connection(ws: WebSocket, server_id: str):
     if not terminal_context_available(connection, 'chat'):
         await ws.close(code=4003, reason='Terminal server is not available in chats')
         return None
-    try:
-        await ensure_terminal_chat_binding(chat_id, user.id, server_id)
-    except TerminalChatBindingError as error:
-        await ws.close(code=4003, reason=str(error))
-        return None
-    return user, connection, chat_id, token
+    return user, connection, chat_id if isinstance(chat_id, str) else '', token
 
 
 @router.websocket('/{server_id}/api/terminals/{session_id}')
@@ -381,8 +327,7 @@ async def ws_terminal(
     upstream_params['user_id'] = user.id
     context_id = terminal_context_id(connection, {'chat_id': chat_id}, 'chat')
     upstream_headers = {}
-    context_config = terminal_context_config(connection, 'chat')
-    if isinstance(context_config, dict) and context_config.get('context_id') == 'chat_id' and not context_id:
+    if terminal_context_config(connection, 'chat').get('context_id') == 'chat_id' and not context_id:
         await ws.close(code=4003, reason='A saved chat is required for this terminal')
         return
     if context_id:

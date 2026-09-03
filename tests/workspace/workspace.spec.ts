@@ -6,8 +6,6 @@ const CANVAS_ALPHA = 'workspace-e2e-canvas-alpha';
 const CANVAS_BETA = 'workspace-e2e-canvas-beta';
 const PREVIEW_ALPHA = 'workspace-e2e-preview-alpha';
 const PREVIEW_BETA = 'workspace-e2e-preview-beta';
-const TERMINAL_ID = 'workspace-dev-v0111';
-const RUNTIME_API_BASE_URL = process.env.OPEN_WEBUI_RUNTIME_API_BASE_URL ?? 'http://127.0.0.1:8081';
 
 type SeededWorkspace = {
 	chatId: string;
@@ -116,7 +114,6 @@ const seedWorkspaceChat = async (request: APIRequestContext): Promise<SeededWork
 	const betaFiles = virtualFetchFiles();
 	const chat = {
 		title,
-		terminal_id: TERMINAL_ID,
 		history: {
 			currentId: assistantId,
 			messages: {
@@ -216,22 +213,6 @@ const readChat = async (request: APIRequestContext, seeded: SeededWorkspace) => 
 	expect(response.ok()).toBeTruthy();
 	return response.json();
 };
-
-const terminalPath = (chatId: string, path: string) =>
-	`/api/v1/terminals/${TERMINAL_ID}/chat/${chatId}/${path}`;
-const runtimeApiUrl = (path: string) => new URL(path, RUNTIME_API_BASE_URL).toString();
-
-const addWorkspaceItem = async (page: Page, name: 'Files' | 'Terminal' | 'Browser') => {
-	await page.getByRole('button', { name: 'Add to workspace' }).click();
-	await page.getByRole('menuitem', { name, exact: true }).click();
-};
-
-const workspaceTabTitles = (page: Page) =>
-	page
-		.getByTestId('workspace-tabs')
-		.getByRole('tab')
-		.allTextContents()
-		.then((titles) => titles.map((title) => title.trim()));
 
 const openSeededWorkspace = async (page: Page, seeded: SeededWorkspace) => {
 	await page.addInitScript((token) => localStorage.setItem('token', token), seeded.token);
@@ -363,164 +344,15 @@ test.describe('seeded workspace lifecycle', () => {
 		expect(reloadedChat.chat._canvas_documents[CANVAS_ALPHA].last_ai_update).toBeNull();
 	});
 
-	test('keeps Files to one workspace tab when the runtime exposes it', async ({ page }) => {
+	test('keeps the Pyodide workspace free of Terminal and Browser launch controls', async ({
+		page
+	}) => {
 		await openSeededWorkspace(page, seeded);
 		const filesTab = page.getByRole('tab', { name: 'Files', exact: true });
-		const addToWorkspace = page.getByRole('button', { name: 'Add to workspace' });
-
-		if ((await filesTab.count()) === 0 && (await addToWorkspace.count()) > 0) {
-			await addToWorkspace.click();
-			const filesMenuItem = page.getByRole('menuitem', { name: 'Files', exact: true });
-			if (await filesMenuItem.count()) await filesMenuItem.click();
-		}
-
-		if (await filesTab.count()) {
-			await expect(filesTab).toHaveCount(1);
-			await filesTab.click();
-			await page.reload();
-			await dismissReleaseNotes(page);
-			await expect(filesTab).toHaveCount(1);
-		} else {
-			test.info().annotations.push({
-				type: 'runtime',
-				description: 'Files was unavailable in this isolated runtime.'
-			});
-		}
-	});
-
-	test('restores Files and duplicate utility instances in their saved order after reload', async ({
-		page
-	}) => {
-		await openSeededWorkspace(page, seeded);
-		await expect(page.getByRole('button', { name: 'Add to workspace' })).toBeVisible();
-
-		for (const name of ['Files', 'Terminal', 'Terminal', 'Browser', 'Browser'] as const) {
-			await addWorkspaceItem(page, name);
-		}
-
-		const expected = [
-			'E2E Canvas Alpha',
-			'E2E Canvas Beta',
-			'E2E Preview Alpha',
-			'E2E Preview Beta',
-			'Files',
-			'Terminal',
-			'Terminal 2',
-			'Browser',
-			'Browser 2'
-		];
-		await expect.poll(() => workspaceTabTitles(page)).toEqual(expected);
-
-		await page.reload();
-		await dismissReleaseNotes(page);
-		await expect(page.getByTestId('workspace-tabs')).toBeVisible();
-		await expect.poll(() => workspaceTabTitles(page)).toEqual(expected);
-	});
-
-	test('moves the workspace across the chat and preserves its side after reload', async ({
-		page
-	}) => {
-		await openSeededWorkspace(page, seeded);
-		const workspace = page.locator('#controls-container');
-		const position = () => workspace.evaluate((element) => element.getBoundingClientRect().x);
-
-		const moveLeft = page.getByRole('button', { name: 'Move workspace to left', exact: true });
-		if ((await moveLeft.count()) === 0) {
-			await page.getByRole('button', { name: 'Move workspace to right', exact: true }).click();
-		}
-
-		const rightX = await position();
-		await page.getByRole('button', { name: 'Move workspace to left', exact: true }).click();
-		await expect(
-			page.getByRole('button', { name: 'Move workspace to right', exact: true })
-		).toBeVisible();
-		await expect.poll(position).toBeLessThan(rightX);
-
-		const leftX = await position();
-		await page.reload();
-		await dismissReleaseNotes(page);
-		await expect(
-			page.getByRole('button', { name: 'Move workspace to right', exact: true })
-		).toBeVisible();
-		await expect.poll(position).toBeLessThanOrEqual(leftX + 1);
-	});
-
-	test('retries a failed shell and creates a different shell for the next tab', async ({
-		page
-	}) => {
-		await openSeededWorkspace(page, seeded);
-		const createRoute = '**/api/v1/terminals/**/api/terminals';
-		await page.route(createRoute, (route) =>
-			route.fulfill({
-				status: 503,
-				contentType: 'application/json',
-				body: '{"error":"Test outage"}'
-			})
-		);
-		await addWorkspaceItem(page, 'Terminal');
-		const reconnect = page.getByRole('button', { name: 'Reconnect', exact: true });
-		await expect(reconnect).toBeVisible();
-		await page.unroute(createRoute);
-		const created = () =>
-			page.waitForResponse(
-				(response) =>
-					response.request().method() === 'POST' && response.url().endsWith('/api/terminals')
-			);
-		const firstResponse = created();
-		await reconnect.click();
-		const first = await firstResponse;
-		expect(first.ok()).toBeTruthy();
-		await expect(reconnect).toBeHidden();
-		const firstId = (await first.json()).id;
-		const secondResponse = created();
-		await addWorkspaceItem(page, 'Terminal');
-		const second = await secondResponse;
-		expect(second.ok()).toBeTruthy();
-		expect((await second.json()).id).not.toBe(firstId);
-		await expect(page.getByRole('tab', { name: 'Terminal 2', exact: true })).toHaveAttribute(
-			'aria-selected',
-			'true'
-		);
-	});
-
-	test('opens JSON inline in Files on the first click without creating a document tab', async ({
-		page
-	}) => {
-		const name = `workspace-e2e-inline-${Date.now()}.json`;
-		const content = JSON.stringify({ value: 'workspace-e2e-inline-value' });
-		const write = await page.request.post(
-			runtimeApiUrl(terminalPath(seeded.chatId, 'files/write')),
-			{
-				headers: authHeaders(seeded.token),
-				data: { path: name, content }
-			}
-		);
-		expect(write.ok()).toBeTruthy();
-
-		await openSeededWorkspace(page, seeded);
-		await addWorkspaceItem(page, 'Files');
-		const filesTab = page.getByRole('tab', { name: 'Files', exact: true });
-		await expect(filesTab).toHaveAttribute('aria-selected', 'true');
-
-		const jsonEntry = page.getByRole('button', {
-			name: new RegExp(`^${name.replace('.', '\\.')}(?:\\s|$)`)
-		});
-		await expect(jsonEntry).toBeVisible();
-		const readResponse = page.waitForResponse(
-			(response) =>
-				response.url().includes('/files/read?') &&
-				new URL(response.url()).searchParams.get('path')?.endsWith(`/${name}`),
-			{ timeout: 5_000 }
-		);
-		await jsonEntry.click();
-		expect((await readResponse).ok()).toBeTruthy();
-
-		const filesPanel = page.getByRole('tabpanel', { name: 'Files', exact: true });
-		await expect(filesPanel.locator('.json-root')).toBeVisible();
-		await expect(filesPanel.locator('.json-key')).toHaveText('value');
-		await expect(filesPanel.locator('.json-string')).toContainText('workspace-e2e-inline-value');
-		await expect(filesTab).toHaveAttribute('aria-selected', 'true');
-		await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0);
+		await expect(filesTab).toHaveCount((await filesTab.count()) ? 1 : 0);
+		await expect(page.getByRole('button', { name: 'Add to workspace' })).toHaveCount(0);
+		await expect(page.getByRole('tab', { name: /^Terminal(?: \d+)?$/ })).toHaveCount(0);
+		await expect(page.getByRole('tab', { name: /^Browser(?: \d+)?$/ })).toHaveCount(0);
 	});
 });
 
@@ -532,14 +364,6 @@ test('uploads a CSV through the visible composer chooser without a managed Termi
 	const name = `workspace-e2e-upload-${Date.now()}.csv`;
 
 	try {
-		const terminals = await page.request.get('/api/v1/terminals/', {
-			headers: authHeaders(uploadChat.token)
-		});
-		expect(terminals.ok()).toBeTruthy();
-		test.skip(
-			(await terminals.json()).some((terminal: { id?: string }) => Boolean(terminal.id)),
-			'Requires the current no-managed-Terminal Pyodide configuration.'
-		);
 		await page.addInitScript((token) => localStorage.setItem('token', token), uploadChat.token);
 		await page.goto(`/c/${uploadChat.chatId}`);
 		await dismissReleaseNotes(page);

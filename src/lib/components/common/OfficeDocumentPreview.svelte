@@ -4,7 +4,7 @@
 	import DocxPreview from './DocxPreview.svelte';
 	import PptxPreview from './PptxPreview.svelte';
 	import Spinner from './Spinner.svelte';
-	import { validatePptxArchive } from './documentSecurity';
+	import { validatePptxArchive, validateSpreadsheetArchive } from './documentSecurity';
 
 	type OfficeDocumentFormat = 'docx' | 'pptx' | 'xls' | 'xlsx';
 
@@ -76,6 +76,7 @@
 				return;
 			}
 
+			if (candidateFormat === 'xlsx') await validateSpreadsheetArchive(candidate);
 			const XLSX = await import('xlsx');
 			workbook = XLSX.read(new Uint8Array(candidate), { type: 'array' });
 			if (currentGeneration !== generation) return;

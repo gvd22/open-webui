@@ -15,7 +15,7 @@
 		type WorkspaceContent,
 		type WorkspaceTab
 	} from '$lib/components/chat/Artifacts/workspace';
-	import { terminalServers, workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
+	import { workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
 
 	const i18n = writable({ t: (message: string) => message });
 	setContext('i18n', i18n);
@@ -28,14 +28,14 @@
 	localStorage.setItem('viewer-runtime-session', runtimeSessionId);
 	const unsupportedExtension = new URLSearchParams(window.location.search).get('unsupported');
 	const documents: Record<string, { path: string; format: 'pdf' | 'docx' | 'pptx' }> = {
-		pdf: { path: '/workspace/basic.pdf', format: 'pdf' },
-		docx: { path: '/workspace/basic.docx', format: 'docx' },
-		pptx: { path: '/workspace/basic.pptx', format: 'pptx' }
+		pdf: { path: '/mnt/uploads/basic.pdf', format: 'pdf' },
+		docx: { path: '/mnt/uploads/basic.docx', format: 'docx' },
+		pptx: { path: '/mnt/uploads/basic.pptx', format: 'pptx' }
 	};
 	const document = documents[format];
 	const workspacePanels = new URLSearchParams(window.location.search).has('workspace-panels');
 	const workspaceLru = new URLSearchParams(window.location.search).has('workspace-lru');
-	const unsupportedPath = unsupportedExtension ? `/workspace/example.${unsupportedExtension}` : '';
+	const unsupportedPath = unsupportedExtension ? `/mnt/uploads/example.${unsupportedExtension}` : '';
 	const unsupportedFileOpenTarget = unsupportedPath
 		? getWorkspaceFileOpenTarget(unsupportedPath)
 		: null;
@@ -67,23 +67,19 @@
 			: null
 	);
 
-	terminalServers.set([{ id: 'viewer-runtime', url: `${window.location.origin}/runtime` }]);
 	workspaceActiveFile.set(document ?? null);
-	localStorage.token = 'viewer-test-token';
 
 	const refresh = () =>
 		workspaceFileUpdate.set({
 			path: selectedContent?.path ?? document?.path ?? '',
 			kind: 'changed',
-			revision: Date.now(),
-			terminalId: 'viewer-runtime'
+			revision: Date.now()
 		});
 	const remove = () =>
 		workspaceFileUpdate.set({
 			path: selectedContent?.path ?? document?.path ?? '',
 			kind: 'deleted',
-			revision: Date.now(),
-			terminalId: 'viewer-runtime'
+			revision: Date.now()
 		});
 	const selectWorkspaceTab = (tab: WorkspaceTab) => {
 		selectedIndex = tab.index;
@@ -144,7 +140,7 @@
 			{#each Array(10) as _, index}
 				<button
 					type="button"
-					on:click={() => openWorkspaceFile(`/workspace/sequence-${index + 1}.pdf`)}
+					on:click={() => openWorkspaceFile(`/mnt/uploads/sequence-${index + 1}.pdf`)}
 				>
 					Open sequence-{index + 1}.pdf
 				</button>
@@ -158,8 +154,6 @@
 		<WorkspaceTabs
 			tabs={workspaceTabs}
 			bind:selectedIndex
-			terminalId={null}
-			filesAvailable={false}
 			onSelect={selectWorkspaceTab}
 			onCloseTab={closeWorkspaceTab}
 		/>
@@ -168,15 +162,6 @@
 		<WorkspaceDocumentPanels
 			contents={workspaceContents}
 			{selectedContentId}
-			runtime={{
-				kind: 'terminal',
-				terminalId: 'viewer-runtime',
-				files: true,
-				writable: true,
-				shell: true,
-				ports: true
-			}}
-			chatId={runtimeSessionId}
 		/>
 	</div>
 </main>

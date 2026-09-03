@@ -1,4 +1,3 @@
-import { isSavedChatId } from '$lib/utils/chatId';
 import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
 
 export type WorkspaceContent = {
@@ -18,7 +17,6 @@ export type WorkspaceContent = {
 	updatedAt?: number;
 	source?: string;
 	path?: string;
-	terminalId?: string;
 	fileFormat?: WorkspaceDocumentFormat;
 	targetPage?: number;
 };
@@ -40,130 +38,34 @@ export type WorkspaceModelFocus = {
 
 export type WorkspaceRuntime =
 	| {
-			kind: 'terminal';
-			terminalId: string;
-			files: boolean;
-			writable: boolean;
-			shell: boolean;
-			ports: boolean;
-	  }
-	| {
 			kind: 'pyodide';
-			terminalId: null;
 			files: true;
 			writable: true;
-			shell: false;
-			ports: false;
 	  }
 	| {
 			kind: 'none';
-			terminalId: null;
 			files: false;
 			writable: false;
-			shell: false;
-			ports: false;
-	  }
-	| {
-			kind: 'unavailable';
-			terminalId: null;
-			files: false;
-			writable: false;
-			shell: false;
-			ports: false;
 	  };
 
-export const resolveWorkspaceRuntime = (
-	terminalServers: Array<{ id?: string; contexts?: { chat?: unknown } }> | null | undefined,
-	selectedTerminalId: string | null | undefined,
-	pyodideEnabled: boolean,
-	chatId: string | null
-): WorkspaceRuntime => {
-	// `null` means the managed Terminal catalog has not loaded or failed to load.
-	// It must not be treated as an authoritative empty catalog because that would
-	// redirect work into Pyodide even when a managed Terminal is configured.
-	if (terminalServers == null) {
-		return {
-			kind: 'unavailable',
-			terminalId: null,
-			files: false,
-			writable: false,
-			shell: false,
-			ports: false
-		};
-	}
-	if (
-		selectedTerminalId &&
-		!terminalServers.some(
-			(terminal) => terminal.id === selectedTerminalId && terminal.contexts?.chat !== false
-		)
-	) {
-		return {
-			kind: 'unavailable',
-			terminalId: null,
-			files: false,
-			writable: false,
-			shell: false,
-			ports: false
-		};
-	}
-
-	const systemTerminals = (terminalServers ?? []).filter(
-		(terminal): terminal is { id: string } =>
-			Boolean(terminal.id) && terminal.contexts?.chat !== false
-	);
-	const terminal =
-		systemTerminals.find((candidate) => candidate.id === selectedTerminalId) ?? systemTerminals[0];
-
-	// A configured managed terminal is authoritative. Runtime failures are shown by
-	// that surface and must not silently redirect work into a different filesystem.
-	if (terminal) {
-		return {
-			kind: 'terminal',
-			terminalId: terminal.id,
-			files: isSavedChatId(chatId),
-			writable: isSavedChatId(chatId),
-			shell: isSavedChatId(chatId),
-			ports: isSavedChatId(chatId)
-		};
-	}
-
+export const resolveWorkspaceRuntime = (pyodideEnabled: boolean): WorkspaceRuntime => {
 	if (pyodideEnabled) {
 		return {
 			kind: 'pyodide',
-			terminalId: null,
 			files: true,
-			writable: true,
-			shell: false,
-			ports: false
+			writable: true
 		};
 	}
 
 	return {
 		kind: 'none',
-		terminalId: null,
 		files: false,
-		writable: false,
-		shell: false,
-		ports: false
+		writable: false
 	};
 };
 
 export const WORKSPACE_FILES_ID = 'workspace:files';
-export const WORKSPACE_TERMINAL_ID = 'workspace:terminal';
-export const WORKSPACE_BROWSER_ID = 'workspace:browser';
-export const WORKSPACE_LAUNCHER_ID = 'workspace:launcher';
 export const getWorkspaceFileId = (path: string) => `workspace:file:${path}`;
-export const getWorkspaceInstanceId = (kind: 'terminal' | 'browser', id: string) =>
-	`workspace:${kind}:${id}`;
-
-export const getNextWorkspaceInstanceTitle = (kind: 'terminal' | 'browser', titles: string[]) => {
-	const base = kind === 'terminal' ? 'Terminal' : 'Browser';
-	const used = titles
-		.map((title) => (title === base ? 1 : Number(title.match(new RegExp(`^${base} (\\d+)$`))?.[1])))
-		.filter((value) => Number.isFinite(value));
-	const ordinal = Math.max(0, ...used) + 1;
-	return ordinal === 1 ? base : `${base} ${ordinal}`;
-};
 
 // Pointer actions run on mousedown so a Svelte rerender cannot swallow the click.
 // Keyboard activation has no preceding mousedown and reports click detail 0.
@@ -172,20 +74,7 @@ export const isKeyboardActivationClick = (detail: number) => detail === 0;
 export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: string) =>
 	Boolean(previousId && previousId !== nextId);
 
-export const getDefaultWorkspaceContentId = (runtime: WorkspaceRuntime) =>
-	runtime.kind === 'pyodide' ? WORKSPACE_FILES_ID : WORKSPACE_LAUNCHER_ID;
-
-// Files is the default Pyodide surface, not an additional workspace tool. The add
-// menu is reserved for managed Terminal environments that can create more tabs.
-export const hasWorkspaceAddActions = (terminalId: string | null) => Boolean(terminalId);
-
-export const resolveBoundWorkspaceTerminal = <T extends { id?: string }>(
-	terminalServers: T[] | null | undefined,
-	terminalId: string | null | undefined
-): T | null =>
-	terminalId
-		? ((terminalServers ?? []).find((terminal) => terminal.id === terminalId) ?? null)
-		: null;
+export const getDefaultWorkspaceContentId = () => WORKSPACE_FILES_ID;
 
 export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentFormat | null => {
 	const extension = path.split('.').pop()?.toLowerCase();
@@ -200,8 +89,8 @@ export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boole
 export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFormat(path) !== null;
 
 /**
- * Shared by the Terminal and Pyodide Files views before either delegates to a
- * workspace tab. Formats outside the narrow viewer contract stay in Files.
+ * Shared by Pyodide Files before it delegates to a workspace tab. Formats
+ * outside the narrow viewer contract stay in Files.
  */
 export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
 	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
@@ -219,53 +108,17 @@ export const buildWorkspaceFileContent = (path: string, targetPage?: unknown): W
 	};
 };
 
-export const buildWorkspaceUtilityContents = ({
-	showFiles,
-	showTerminal,
-	showBrowser = false
-}: {
-	showFiles: boolean;
-	showTerminal: boolean;
-	showBrowser?: boolean;
-}): WorkspaceContent[] => [
-	...(showFiles
-		? [
-				{
-					type: 'workspace-files',
-					workspaceId: WORKSPACE_FILES_ID,
-					title: 'Files',
-					content: ''
-				}
-			]
-		: []),
-	...(showTerminal
-		? [
-				{
-					type: 'workspace-terminal',
-					workspaceId: WORKSPACE_TERMINAL_ID,
-					title: 'Terminal',
-					content: ''
-				}
-			]
-		: []),
-	...(showBrowser
-		? [
-				{
-					type: 'workspace-browser',
-					workspaceId: WORKSPACE_BROWSER_ID,
-					title: 'Browser',
-					content: ''
-				}
-			]
-		: [])
-];
+export const buildWorkspaceFilesContent = (): WorkspaceContent => ({
+	type: 'workspace-files',
+	workspaceId: WORKSPACE_FILES_ID,
+	title: 'Files',
+	content: ''
+});
 
 const fallbackTitle = (kind: string) => {
 	if (kind === 'canvas-note') return 'Document';
 	if (kind === 'web-preview') return 'Web Preview';
 	if (kind.includes('jira')) return 'Jira';
-	if (kind.includes('terminal')) return 'Terminal';
-	if (kind.includes('browser')) return 'Browser';
 	if (kind.includes('file')) return 'Files';
 	return 'Preview';
 };

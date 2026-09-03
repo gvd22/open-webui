@@ -4,8 +4,16 @@ Kompakte sichtbare Abnahmekriterien:
 [KOBY Artifact Workspace - Abnahmekriterien](2026-09-01-koby-artifact-workspace-acceptance-criteria.md).
 
 **Status:** Verbindliche Produkt- und Verhaltensspezifikation  
-**Version:** 1.3
-**Datum:** 1. September 2026
+**Version:** 1.4
+**Datum:** 3. September 2026
+
+### Aktuelles Implementierungsprofil
+
+Der erste auszuliefernde Branch `codex/koby-canvas-workspace` ist bewusst Pyodide-only. Er umfasst
+Canvas, Web Preview, genau einen Files-Navigator und chatgebundene Dokumentausgaben. Die Kapitel zu
+verwaltetem Terminal und lokalem Browser bleiben als spaetere Zielarchitektur erhalten, gehoeren
+aber nicht zur aktuellen Abnahme. Der zuvor implementierte Terminal-Stand ist auf
+`codex/koby-terminal-workspace` gesichert und darf nicht still in diesen Branch zurueckfliessen.
 
 ### Upgrade-Vertrag fuer Open WebUI 0.11.3
 
