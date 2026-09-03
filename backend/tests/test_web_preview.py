@@ -22,11 +22,11 @@ from open_webui.utils.tools import get_builtin_tools
 from open_webui.utils.web_preview import (
     WEB_PREVIEW_ACTIVE_DOCUMENT_KEY,
     WEB_PREVIEW_DOCUMENTS_KEY,
-    WEB_PREVIEW_MODEL_CONTEXT_MAX_CHARS,
     WEB_PREVIEW_MAX_FILE_BYTES,
     WEB_PREVIEW_MAX_PATH_CHARS,
-    build_web_preview_capacity_notice,
+    WEB_PREVIEW_MODEL_CONTEXT_MAX_CHARS,
     build_active_web_preview_prompt,
+    build_web_preview_capacity_notice,
     generate_web_preview_title,
     normalize_web_preview_files,
     web_preview_content_hash,
@@ -250,74 +250,6 @@ def test_preview_timestamps_always_advance():
     assert web_preview_timestamp(current) > current
 
 
-def test_canvas_and_web_preview_are_independent_model_tools(monkeypatch):
-    chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
-    chat = SimpleNamespace(id=chat_id, meta={})
-    categories = {
-        'user_input',
-        'automations',
-        'calendar',
-        'canvas',
-        'channels',
-        'chats',
-        'code_interpreter',
-        'files',
-        'image_generation',
-        'knowledge',
-        'memory',
-        'notes',
-        'notifications',
-        'subagents',
-        'tasks',
-        'time',
-        'web_preview',
-        'web_search',
-    }
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Config, 'get_many', AsyncMock(return_value={}))
-
-    async def tool_names(capability):
-        builtin_tools = {category: False for category in categories}
-        builtin_tools[capability] = True
-        tools = await get_builtin_tools(
-            Request({'type': 'http', 'method': 'POST', 'path': '/'}),
-            {
-                '__user__': {'id': 'user-1', 'role': 'user'},
-                '__metadata__': {'chat_id': chat_id},
-            },
-            model={
-                'info': {
-                    'meta': {
-                        'builtinTools': builtin_tools,
-                        'capabilities': {capability: True},
-                    }
-                }
-            },
-        )
-        return set(tools)
-
-    preview_tools = asyncio.run(tool_names('web_preview'))
-    canvas_tools = asyncio.run(tool_names('canvas'))
-
-    assert preview_tools == {
-        'web_preview_create',
-        'web_preview_update',
-        'web_preview_select',
-        'web_preview_list',
-        'web_preview_read_file',
-        'web_preview_replace_text',
-    }
-    assert canvas_tools == {
-        'canvas_create_document',
-        'canvas_update_document',
-        'canvas_select_document',
-        'canvas_list_documents',
-        'canvas_read_document',
-        'canvas_replace_text',
-    }
-
-
 def test_terminal_metadata_does_not_enable_runtime_import_on_pyodide_branch(monkeypatch):
     chat_id = '9e2ea702-0b76-42b9-9e0e-4f804a4f8851'
     chat = SimpleNamespace(id=chat_id, meta={})
@@ -385,7 +317,7 @@ def test_runtime_import_tool_is_exposed_with_active_pyodide(monkeypatch):
     assert 'web_preview_import_runtime_file' in tools
 
 
-def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(monkeypatch):
+def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(install_chat_mutator):
     preview_id = 'preview-1'
     document = {
         'preview_id': preview_id,
@@ -407,12 +339,7 @@ def test_runtime_file_import_copies_a_versioned_snapshot_into_preview(monkeypatc
         calls.append(event)
         return {'content': '{"values":[1,2,3]}'}
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        chat.chat, result = mutator(dict(chat.chat), None)
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     result = json.loads(
         asyncio.run(
@@ -502,18 +429,10 @@ def test_runtime_file_import_rejects_paths_outside_pyodide_uploads(monkeypatch):
     event_call.assert_not_awaited()
 
 
-def test_create_then_update_reuses_stable_preview_id(monkeypatch):
+def test_create_then_update_reuses_stable_preview_id(install_chat_mutator):
     chat = SimpleNamespace(id='chat-1', user_id='user-1', chat={})
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     created = json.loads(
         asyncio.run(
@@ -556,7 +475,7 @@ def test_create_then_update_reuses_stable_preview_id(monkeypatch):
     assert chat.chat[WEB_PREVIEW_DOCUMENTS_KEY][preview_id]['files']['app.js']['content'] == 'boot()'
 
 
-def test_web_preview_full_tool_update_rejects_stale_version(monkeypatch):
+def test_web_preview_full_tool_update_rejects_stale_version(install_chat_mutator):
     document = {
         'preview_id': 'preview-1',
         'title': 'Current',
@@ -572,15 +491,7 @@ def test_web_preview_full_tool_update_rejects_stale_version(monkeypatch):
         chat={WEB_PREVIEW_DOCUMENTS_KEY: {'preview-1': document}},
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     result = json.loads(
         asyncio.run(
@@ -601,7 +512,7 @@ def test_web_preview_full_tool_update_rejects_stale_version(monkeypatch):
     assert chat.chat[WEB_PREVIEW_DOCUMENTS_KEY]['preview-1']['title'] == 'Current'
 
 
-def test_web_preview_partial_read_and_versioned_replace(monkeypatch):
+def test_web_preview_partial_read_and_versioned_replace(install_chat_mutator):
     preview_id = 'preview-1'
     chat = SimpleNamespace(
         id='chat-1',
@@ -621,12 +532,7 @@ def test_web_preview_partial_read_and_versioned_replace(monkeypatch):
         },
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        chat.chat, result = mutator(dict(chat.chat), None)
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     excerpt = json.loads(
         asyncio.run(
@@ -679,7 +585,7 @@ def test_web_preview_partial_read_and_versioned_replace(monkeypatch):
     assert files['app.js']['content'] == 'before\nreplacement\nafter'
 
 
-def test_direct_editor_autosaves_keep_the_latest_revision(monkeypatch):
+def test_direct_editor_autosaves_keep_the_latest_revision(install_chat_mutator):
     preview_id = 'preview-1'
     chat = SimpleNamespace(
         id='chat-1',
@@ -697,14 +603,7 @@ def test_direct_editor_autosaves_keep_the_latest_revision(monkeypatch):
         },
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat, load=False)
 
     async def save(content, expected_updated_at, expected_content_hash):
         return await update_transient_web_preview(

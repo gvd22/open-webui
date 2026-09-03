@@ -1,197 +1,80 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-
 from open_webui.utils import middleware
-from open_webui.utils.middleware import has_workspace_runtime_access, validate_workspace_file_reference
+from open_webui.utils.middleware import has_pyodide_workspace_access, validate_workspace_file_reference
+
+
+@pytest.mark.parametrize(
+    ('reference', 'available', 'expected'),
+    [
+        ({'path': '/mnt/uploads/brief.docx', 'format': 'docx'}, True, True),
+        ({'path': '/mnt/uploads/deck.pptx', 'format': 'pdf'}, True, False),
+        ({'path': '/mnt/uploads/sheet.xlsx', 'format': 'xlsx'}, True, False),
+        ({'path': '/mnt/uploads/bad\ndoc.pdf', 'format': 'pdf'}, True, False),
+        ({'path': '/mnt/uploads/../private.pdf', 'format': 'pdf'}, True, False),
+        ({'path': '/mnt/uploads//deck.pptx', 'format': 'pptx'}, True, False),
+        ({'path': '/mnt/uploads\\deck.pptx', 'format': 'pptx'}, True, False),
+        ({'path': '/workspace/deck.pptx', 'format': 'pptx'}, True, False),
+        ({'path': '/mnt/uploads/evil\u202epptx.pdf', 'format': 'pdf'}, True, False),
+        ({'path': '/mnt/uploads/brief.docx', 'format': 'docx'}, False, False),
+    ],
+)
+def test_workspace_file_reference_validation(reference, available, expected):
+    result = validate_workspace_file_reference(reference, pyodide_available=available)
+
+    assert bool(result) is expected
+    if expected:
+        assert result == reference
+
+
+def test_workspace_file_reference_rejects_oversized_paths():
+    reference = {'path': f'/mnt/uploads/{"a" * 4090}.pdf', 'format': 'pdf'}
+
+    assert validate_workspace_file_reference(reference, pyodide_available=True) is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('tool_name', 'params', 'expected'),
+    ('feature', 'engine', 'enabled', 'capability', 'builtin', 'role', 'permission', 'expected'),
     [
-        (
-            'write_file',
-            {'path': '/workspace/report.docx'},
-            {'type': 'terminal:write_file', 'data': {'path': '/workspace/report.docx', 'kind': 'changed'}},
-        ),
-        (
-            'replace_file_content',
-            {'path': '/workspace/report.docx'},
-            {
-                'type': 'terminal:replace_file_content',
-                'data': {'path': '/workspace/report.docx', 'kind': 'changed'},
-            },
-        ),
-        ('run_command', {'command': 'python revise.py'}, {'type': 'terminal:run_command', 'data': {'kind': 'unknown'}}),
+        (True, 'pyodide', True, True, True, 'admin', False, True),
+        (True, 'pyodide', True, True, True, 'user', True, True),
+        (False, 'pyodide', True, True, True, 'admin', True, False),
+        (True, 'jupyter', True, True, True, 'admin', True, False),
+        (True, 'pyodide', False, True, True, 'admin', True, False),
+        (True, 'pyodide', True, False, True, 'admin', True, False),
+        (True, 'pyodide', True, True, False, 'admin', True, False),
+        (True, 'pyodide', True, True, True, 'user', False, False),
     ],
 )
-async def test_terminal_file_events_distinguish_known_and_unknown_changes(tool_name, params, expected):
-    events = []
+async def test_pyodide_workspace_access_matrix(
+    monkeypatch, feature, engine, enabled, capability, builtin, role, permission, expected
+):
+    values = {
+        'code_interpreter.engine': engine,
+        'code_interpreter.enable': enabled,
+        'user.permissions': {},
+    }
 
-    async def emit(event):
-        events.append(event)
-
-    await middleware.terminal_event_handler(tool_name, params, {}, emit)
-
-    assert events == [expected]
-
-
-def test_workspace_file_reference_requires_an_active_runtime():
-    reference = {'path': '/workspace/brief.docx', 'format': 'docx'}
-
-    assert validate_workspace_file_reference(reference, runtime_available=False) is None
-    assert validate_workspace_file_reference(reference, runtime_available=True) == reference
-
-
-def test_workspace_file_reference_accepts_only_supported_matching_formats():
-    assert validate_workspace_file_reference(
-        {'path': '/workspace/deck.pptx', 'format': 'pptx'}, runtime_available=True
-    ) == {'path': '/workspace/deck.pptx', 'format': 'pptx'}
-    assert (
-        validate_workspace_file_reference({'path': '/workspace/deck.pptx', 'format': 'pdf'}, runtime_available=True)
-        is None
-    )
-    assert (
-        validate_workspace_file_reference({'path': '/workspace/sheet.xlsx', 'format': 'xlsx'}, runtime_available=True)
-        is None
-    )
-
-
-def test_workspace_file_reference_rejects_control_characters_and_oversized_paths():
-    assert (
-        validate_workspace_file_reference({'path': '/workspace/bad\ndoc.pdf', 'format': 'pdf'}, runtime_available=True)
-        is None
-    )
-    assert (
-        validate_workspace_file_reference(
-            {'path': f'/workspace/{"a" * 4090}.pdf', 'format': 'pdf'}, runtime_available=True
-        )
-        is None
-    )
-
-
-def test_workspace_file_reference_rejects_noncanonical_and_ambiguous_paths():
-    invalid_references = [
-        {'path': 'workspace/deck.pptx', 'format': 'pptx'},
-        {'path': '/workspace/../secrets/deck.pptx', 'format': 'pptx'},
-        {'path': '/workspace//deck.pptx', 'format': 'pptx'},
-        {'path': '/workspace\\deck.pptx', 'format': 'pptx'},
-        {'path': '/workspace/evil\u202epptx.pdf', 'format': 'pdf'},
-    ]
-
-    for reference in invalid_references:
-        assert validate_workspace_file_reference(reference, runtime_available=True) is None
-
-
-@pytest.mark.asyncio
-async def test_workspace_runtime_requires_an_enabled_authorized_terminal(monkeypatch):
     async def config_get(key, default=None):
-        if key == 'terminal_server.connections':
-            return [{'id': 'terminal-a', 'enabled': True}]
-        return default
-
-    async def denied_access(*_args, **_kwargs):
-        return False
+        return values.get(key, default)
 
     monkeypatch.setattr(middleware.Config, 'get', config_get)
-    monkeypatch.setattr(middleware, 'has_connection_access', denied_access)
+    monkeypatch.setattr(middleware, 'has_permission', AsyncMock(return_value=permission))
 
-    assert not await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'terminal_id': 'terminal-a'},
-        SimpleNamespace(id='user-a', role='user'),
-        {'info': {'meta': {}}},
-    )
-    assert not await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'terminal_id': 'missing'},
-        SimpleNamespace(id='user-a', role='user'),
-        {'info': {'meta': {}}},
-    )
-
-
-@pytest.mark.asyncio
-async def test_workspace_runtime_accepts_authorized_terminal(monkeypatch):
-    async def config_get(key, default=None):
-        if key == 'terminal_server.connections':
-            return [{'id': 'terminal-a', 'enabled': True}]
-        return default
-
-    async def allowed_access(*_args, **_kwargs):
-        return True
-
-    async def terminal_servers(_request):
-        return [{'id': 'terminal-a', 'specs': [{'name': 'execute'}]}]
-
-    monkeypatch.setattr(middleware.Config, 'get', config_get)
-    monkeypatch.setattr(middleware, 'has_connection_access', allowed_access)
-    monkeypatch.setattr(middleware, 'get_terminal_servers', terminal_servers)
-
-    assert await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'terminal_id': 'terminal-a'},
-        SimpleNamespace(id='user-a', role='user'),
-        {'info': {'meta': {}}},
+    result = await has_pyodide_workspace_access(
+        {'features': {'code_interpreter': feature}},
+        SimpleNamespace(id='user-a', role=role),
+        {
+            'info': {
+                'meta': {
+                    'capabilities': {'code_interpreter': capability},
+                    'builtinTools': {'code_interpreter': builtin},
+                }
+            }
+        },
     )
 
-
-@pytest.mark.asyncio
-async def test_workspace_runtime_rejects_terminal_without_available_tools(monkeypatch):
-    async def config_get(key, default=None):
-        if key == 'terminal_server.connections':
-            return [{'id': 'terminal-a', 'enabled': True}]
-        return default
-
-    async def allowed_access(*_args, **_kwargs):
-        return True
-
-    async def terminal_servers(_request):
-        return [{'id': 'terminal-a', 'specs': []}]
-
-    monkeypatch.setattr(middleware.Config, 'get', config_get)
-    monkeypatch.setattr(middleware, 'has_connection_access', allowed_access)
-    monkeypatch.setattr(middleware, 'get_terminal_servers', terminal_servers)
-
-    assert not await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'terminal_id': 'terminal-a'},
-        SimpleNamespace(id='user-a', role='user'),
-        {'info': {'meta': {}}},
-    )
-
-
-@pytest.mark.asyncio
-async def test_workspace_runtime_rejects_jupyter_for_browser_file_tabs(monkeypatch):
-    async def config_get(key, default=None):
-        if key == 'code_interpreter.engine':
-            return 'jupyter'
-        return default
-
-    monkeypatch.setattr(middleware.Config, 'get', config_get)
-
-    assert not await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'features': {'code_interpreter': True}},
-        SimpleNamespace(id='user-a', role='admin'),
-        {'info': {'meta': {}}},
-    )
-
-
-@pytest.mark.asyncio
-async def test_workspace_runtime_respects_model_builtin_code_interpreter_gate(monkeypatch):
-    async def config_get(key, default=None):
-        if key == 'code_interpreter.engine':
-            return 'pyodide'
-        if key == 'code_interpreter.enable':
-            return True
-        return default
-
-    monkeypatch.setattr(middleware.Config, 'get', config_get)
-
-    assert not await has_workspace_runtime_access(
-        SimpleNamespace(),
-        {'features': {'code_interpreter': True}},
-        SimpleNamespace(id='admin-a', role='admin'),
-        {'info': {'meta': {'builtinTools': {'code_interpreter': False}}}},
-    )
+    assert result is expected

@@ -224,7 +224,7 @@ def test_canvas_prompt_keeps_valid_compact_catalog_under_small_budget():
     assert payload['catalog_truncated'] is True
 
 
-def test_canvas_partial_read_and_versioned_replace(monkeypatch):
+def test_canvas_partial_read_and_versioned_replace(install_chat_mutator):
     chat = SimpleNamespace(
         id='9e2ea702-0b76-42b9-9e0e-4f804a4f8851',
         user_id='user-1',
@@ -241,15 +241,7 @@ def test_canvas_partial_read_and_versioned_replace(monkeypatch):
         },
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     excerpt = json.loads(
         asyncio.run(
@@ -289,7 +281,7 @@ def test_canvas_partial_read_and_versioned_replace(monkeypatch):
     assert chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']['content'] == 'before\r\nreplacement\r\nafter'
 
 
-def test_canvas_ai_update_retains_one_undo_snapshot(monkeypatch):
+def test_canvas_ai_update_retains_one_undo_snapshot(install_chat_mutator):
     chat = SimpleNamespace(
         id='9e2ea702-0b76-42b9-9e0e-4f804a4f8851',
         user_id='user-1',
@@ -311,17 +303,7 @@ def test_canvas_ai_update_retains_one_undo_snapshot(monkeypatch):
             },
         },
     )
-    get_chat = AsyncMock(return_value=chat)
-
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', get_chat)
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     result = json.loads(
         asyncio.run(
@@ -349,7 +331,7 @@ def test_canvas_ai_update_retains_one_undo_snapshot(monkeypatch):
     }
 
 
-def test_canvas_full_tool_update_rejects_stale_version(monkeypatch):
+def test_canvas_full_tool_update_rejects_stale_version(install_chat_mutator):
     document = {
         'canvas_id': 'canvas-1',
         'title': 'Plan',
@@ -362,15 +344,7 @@ def test_canvas_full_tool_update_rejects_stale_version(monkeypatch):
         chat={CANVAS_DOCUMENTS_KEY: {'canvas-1': document}},
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
 
     result = json.loads(
         asyncio.run(
@@ -391,7 +365,7 @@ def test_canvas_full_tool_update_rejects_stale_version(monkeypatch):
     assert chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']['content'] == 'newer content'
 
 
-def test_manual_canvas_edit_clears_stale_ai_undo(monkeypatch):
+def test_manual_canvas_edit_clears_stale_ai_undo(install_chat_mutator):
     chat = SimpleNamespace(
         id='5a7f82a0-9c61-465e-a1a1-8ad81a1d5fe4',
         user_id='user-1',
@@ -413,14 +387,7 @@ def test_manual_canvas_edit_clears_stale_ai_undo(monkeypatch):
         },
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat, load=False)
 
     result = asyncio.run(
         update_transient_canvas_document(
@@ -442,7 +409,7 @@ def test_manual_canvas_edit_clears_stale_ai_undo(monkeypatch):
     assert chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']['last_ai_update'] is None
 
 
-def test_undo_route_restores_the_last_ai_snapshot(monkeypatch):
+def test_undo_route_restores_the_last_ai_snapshot(install_chat_mutator):
     chat = SimpleNamespace(
         id='d5604748-0b35-423a-8fd6-5c38a1a3a3a3',
         user_id='user-1',
@@ -463,14 +430,7 @@ def test_undo_route_restores_the_last_ai_snapshot(monkeypatch):
         },
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat, load=False)
 
     result = asyncio.run(
         undo_last_canvas_ai_update(
@@ -737,7 +697,7 @@ def test_direct_note_update_synchronizes_linked_canvas(monkeypatch):
     )
 
 
-def test_canvas_update_clears_deleted_linked_note(monkeypatch):
+def test_canvas_update_clears_deleted_linked_note(monkeypatch, install_chat_mutator):
     document = {
         'canvas_id': 'canvas-1',
         'title': 'Plan',
@@ -751,15 +711,7 @@ def test_canvas_update_clears_deleted_linked_note(monkeypatch):
         chat={CANVAS_DOCUMENTS_KEY: {'canvas-1': document}},
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
     monkeypatch.setattr(Notes, 'get_note_by_id', AsyncMock(return_value=None))
 
     result = json.loads(
@@ -779,7 +731,7 @@ def test_canvas_update_clears_deleted_linked_note(monkeypatch):
     assert chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']['note_id'] is None
 
 
-def test_canvas_select_clears_deleted_linked_note(monkeypatch):
+def test_canvas_select_clears_deleted_linked_note(monkeypatch, install_chat_mutator):
     document = {
         'canvas_id': 'canvas-1',
         'title': 'Plan',
@@ -793,15 +745,7 @@ def test_canvas_select_clears_deleted_linked_note(monkeypatch):
         chat={CANVAS_DOCUMENTS_KEY: {'canvas-1': document}},
     )
 
-    async def mutate_chat(_id, mutator, **_kwargs):
-        mutation = mutator(dict(chat.chat), None)
-        if asyncio.iscoroutine(mutation):
-            mutation = await mutation
-        chat.chat, result = mutation
-        return chat, result
-
-    monkeypatch.setattr(Chats, 'get_chat_by_id', AsyncMock(return_value=chat))
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
+    install_chat_mutator(chat)
     monkeypatch.setattr(Notes, 'get_note_by_id', AsyncMock(return_value=None))
 
     result = json.loads(asyncio.run(canvas_select_document('canvas-1', __chat_id__=chat.id, __user__={'id': 'user-1'})))

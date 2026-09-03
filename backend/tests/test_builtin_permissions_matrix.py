@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
-from fastapi import Request
-
 import open_webui.env as env
 import open_webui.utils.tools as tools_utils
+import pytest
+from fastapi import Request
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
-from open_webui.utils.web_preview import WEB_PREVIEW_DOCUMENTS_KEY, web_preview_content_hash
-
 
 CHAT_ID = 'builtin-matrix-chat'
 
@@ -191,9 +187,7 @@ async def test_skill_registration_requires_attached_skill_ids(monkeypatch):
     model = model_for()
 
     absent = await tools_utils.get_builtin_tools(make_request(), extra_params(), model=model)
-    present = await tools_utils.get_builtin_tools(
-        make_request(), extra_params(skill_ids=['skill-1']), model=model
-    )
+    present = await tools_utils.get_builtin_tools(make_request(), extra_params(skill_ids=['skill-1']), model=model)
 
     assert 'view_skill' not in absent
     assert set(present) == {'view_skill'}
@@ -205,12 +199,8 @@ async def test_null_builtin_tools_uses_backward_compatible_defaults(monkeypatch)
     model_without_builtin_tools = {'info': {'meta': {}}}
     model_with_null_builtin_tools = {'info': {'meta': {'builtinTools': None}}}
 
-    expected = await tools_utils.get_builtin_tools(
-        make_request(), extra_params(), model=model_without_builtin_tools
-    )
-    actual = await tools_utils.get_builtin_tools(
-        make_request(), extra_params(), model=model_with_null_builtin_tools
-    )
+    expected = await tools_utils.get_builtin_tools(make_request(), extra_params(), model=model_without_builtin_tools)
+    actual = await tools_utils.get_builtin_tools(make_request(), extra_params(), model=model_with_null_builtin_tools)
 
     assert set(actual) == set(expected)
 
@@ -222,8 +212,22 @@ async def test_null_builtin_tools_uses_backward_compatible_defaults(monkeypatch)
         ('files', {'file_upload': True, 'file_context': False}, {}, {}, False, {'files': [{'id': 'file-1'}]}),
         ('memory', {'memory': True}, {'memory': True}, {}, False, {}),
         ('web_search', {'web_search': True}, {'web_search': True}, {'web.search.enable': False}, True, {}),
-        ('image_generation', {'image_generation': True}, {'image_generation': True}, {'image_generation.enable': False, 'images.edit.enable': False}, True, {}),
-        ('code_interpreter', {'code_interpreter': True}, {'code_interpreter': True}, {'code_interpreter.enable': False}, True, {}),
+        (
+            'image_generation',
+            {'image_generation': True},
+            {'image_generation': True},
+            {'image_generation.enable': False, 'images.edit.enable': False},
+            True,
+            {},
+        ),
+        (
+            'code_interpreter',
+            {'code_interpreter': True},
+            {'code_interpreter': True},
+            {'code_interpreter.enable': False},
+            True,
+            {},
+        ),
         ('notes', {}, {}, {'notes.enable': False}, True, {}),
         ('canvas', {'canvas': False}, {}, {}, True, {}),
         ('web_preview', {'web_preview': False}, {}, {}, True, {}),
@@ -265,64 +269,3 @@ async def test_canvas_and_preview_are_excluded_from_internal_note_chats(monkeypa
 
     assert set(tools).isdisjoint(CATEGORY_TO_TOOLS['canvas'])
     assert set(tools).isdisjoint(CATEGORY_TO_TOOLS['web_preview'])
-
-
-@pytest.mark.asyncio
-async def test_terminal_runtime_wins_when_pyodide_is_configured_but_code_is_restricted(monkeypatch):
-    preview_id = 'preview-1'
-    document = {
-        'preview_id': preview_id,
-        'title': 'Dashboard',
-        'entrypoint': 'index.html',
-        'files': {'index.html': {'content': '<h1>Dashboard</h1>', 'mime': 'text/html'}},
-        'updated_at': 10,
-    }
-    chat = SimpleNamespace(
-        id=CHAT_ID,
-        user_id='user-1',
-        meta={},
-        chat={WEB_PREVIEW_DOCUMENTS_KEY: {preview_id: document}},
-    )
-    events = []
-
-    async def event_call(event):
-        events.append(event)
-        return {'content': '{"values":[1,2,3]}'}
-
-    async def mutate_chat(_id, mutator, **_kwargs):
-        chat.chat, result = mutator(dict(chat.chat), None)
-        return chat, result
-
-    install_config(monkeypatch, permissions=False, chat=chat)
-    monkeypatch.setattr(Chats, 'mutate_chat_by_id', mutate_chat)
-
-    tools = await tools_utils.get_builtin_tools(
-        make_request(),
-        extra_params(
-            metadata={'terminal_id': 'terminal-1', 'session_id': 'session-1'},
-            user={'id': 'user-1', 'role': 'user'},
-            event_call=event_call,
-        ),
-        features={'code_interpreter': True},
-        model=model_for(
-            'code_interpreter',
-            'web_preview',
-            capabilities={'code_interpreter': True, 'web_preview': True},
-        ),
-    )
-
-    assert 'execute_code' not in tools
-    assert 'web_preview_import_runtime_file' in tools
-
-    result = json.loads(
-        await tools['web_preview_import_runtime_file']['callable'](
-            preview_id=preview_id,
-            source_path='/workspace/results.json',
-            expected_updated_at=10,
-            expected_content_hash=web_preview_content_hash(document),
-        )
-    )
-
-    assert result['previewId'] == preview_id
-    assert events[0]['data']['runtime'] == 'terminal'
-    assert events[0]['data']['terminal_id'] == 'terminal-1'

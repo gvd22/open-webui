@@ -138,7 +138,6 @@ from open_webui.utils.tools import (
     build_tool_server_headers,
     get_attached_knowledge,
     get_builtin_tools,
-    get_terminal_servers,
     get_terminal_tools,
     get_tools,
     get_updated_tool_function,
@@ -1266,8 +1265,8 @@ async def terminal_event_handler(
     """Emit terminal:* events for Open Terminal tools.
 
     - display_file  → emits 'terminal:display_file' to open the file preview.
-    - write_file / replace_file_content → emits an exact changed path.
-    - run_command → emits an unknown change: shell commands can rename/delete any file.
+    - write_file / replace_file_content → emits 'terminal:write_file' to refresh.
+    - run_command → emits 'terminal:run_command' with cwd to refresh if relevant.
     """
     if not event_emitter:
         return
@@ -1306,14 +1305,14 @@ async def terminal_event_handler(
         await event_emitter(
             {
                 'type': f'terminal:{tool_function_name}',
-                'data': {'path': path, 'kind': 'changed'},
+                'data': {'path': path},
             }
         )
     elif tool_function_name == 'run_command':
         await event_emitter(
             {
                 'type': 'terminal:run_command',
-                'data': {'kind': 'unknown'},
+                'data': {},
             }
         )
 
@@ -2406,8 +2405,8 @@ async def connect_mcp_server(
     return client, tool_specs
 
 
-def validate_workspace_file_reference(reference, *, runtime_available: bool):
-    if not runtime_available or not isinstance(reference, dict):
+def validate_workspace_file_reference(reference, *, pyodide_available: bool):
+    if not pyodide_available or not isinstance(reference, dict):
         return None
 
     path = reference.get('path')
@@ -2415,7 +2414,7 @@ def validate_workspace_file_reference(reference, *, runtime_available: bool):
     if (
         not isinstance(path, str)
         or not 0 < len(path) <= 4096
-        or not path.startswith('/')
+        or not path.startswith('/mnt/uploads/')
         or '\\' in path
         or posixpath.normpath(path) != path
         or any(unicodedata.category(character) in {'Cc', 'Cf'} for character in path)
@@ -2427,24 +2426,7 @@ def validate_workspace_file_reference(reference, *, runtime_available: bool):
     return {'path': path, 'format': file_format}
 
 
-async def has_workspace_runtime_access(request, form_data, user, model) -> bool:
-    terminal_id = form_data.get('terminal_id')
-    if terminal_id:
-        terminal_capability = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('terminal', True)
-        connections = await Config.get('terminal_server.connections', []) or []
-        connection = next((item for item in connections if item.get('id') == terminal_id), None)
-        has_access = bool(
-            terminal_capability
-            and connection
-            and connection.get('enabled', True)
-            and await has_connection_access(user, connection)
-        )
-        if not has_access:
-            return False
-        terminal_servers = await get_terminal_servers(request)
-        server = next((item for item in terminal_servers if item.get('id') == terminal_id), None)
-        return bool(server and server.get('specs'))
-
+async def has_pyodide_workspace_access(form_data, user, model) -> bool:
     features = form_data.get('features') or {}
     if not features.get('code_interpreter'):
         return False
@@ -2717,10 +2699,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         form_data['files'] = files
 
     variables = form_data.pop('variables', None)
-    workspace_runtime_available = await has_workspace_runtime_access(request, form_data, user, model)
+    pyodide_available = await has_pyodide_workspace_access(form_data, user, model)
     workspace_file = validate_workspace_file_reference(
         form_data.pop('workspace_file', None),
-        runtime_available=workspace_runtime_available,
+        pyodide_available=pyodide_available,
     )
     if workspace_file:
         metadata['workspace_file'] = workspace_file
