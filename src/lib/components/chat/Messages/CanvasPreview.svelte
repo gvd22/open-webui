@@ -4,20 +4,12 @@
 	import type { i18n as i18nType } from 'i18next';
 
 	import { toast } from 'svelte-sonner';
-	import { selectTransientCanvasDocument } from '$lib/apis/chats';
-	import {
-		artifactCode,
-		artifactContents,
-		chatId,
-		showArtifacts,
-		showControls,
-		showEmbeds,
-		workspaceOpenRequestId
-	} from '$lib/stores';
+	import { artifactCode, artifactContents, showArtifacts } from '$lib/stores';
 	import Document from '$lib/components/icons/Document.svelte';
 	import Pencil from '$lib/components/icons/Pencil.svelte';
 	import { generateCanvasTitle } from '../Artifacts/canvas';
 	import Markdown from './Markdown.svelte';
+	import { openCanvasArtifact } from './workspaceArtifactOpen';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 
@@ -48,36 +40,22 @@
 	$: generatedTitle = generateCanvasTitle(currentContent, currentTitle);
 	$: isSelected = $showArtifacts && $artifactCode === selectedId;
 
-	const openEditor = async () => {
-		if ($chatId && canvasId) {
-			try {
-				const document = await selectTransientCanvasDocument(localStorage.token, $chatId, canvasId);
-				(artifactContents as any).update((items: any[]) =>
-					(items ?? []).map((item) =>
-						item?.canvasId === canvasId
-							? {
-									...item,
-									title: document.title ?? item.title,
-									content: document.content ?? item.content,
-									titleEdited: Boolean(document.title_edited),
-									updatedAt: document.updated_at ?? item.updatedAt,
-									contentHash: document.contentHash ?? item.contentHash,
-									noteId: document.note_id ?? undefined
-								}
-							: item
-					)
-				);
-			} catch {
-				toast.error($i18n.t('Document could not be opened'));
-				return;
-			}
-		}
-		workspaceOpenRequestId.set(selectedId);
-		artifactCode.set(selectedId as any);
-		showEmbeds.set(false);
-		if (!$showArtifacts) showArtifacts.set(true);
-		if (!$showControls) showControls.set(true);
-	};
+	const openEditor = () =>
+		openCanvasArtifact(
+			{
+				type: 'canvas-note',
+				title: currentTitle,
+				content: currentContent,
+				canvasId,
+				noteId: noteId || undefined,
+				titleEdited: currentArtifact?.titleEdited,
+				updatedAt: currentArtifact?.updatedAt,
+				contentHash: currentArtifact?.contentHash,
+				hasContentPayload: true,
+				source: 'tool'
+			},
+			() => toast.error($i18n.t('Document could not be opened'))
+		);
 </script>
 
 {#if $showArtifacts}

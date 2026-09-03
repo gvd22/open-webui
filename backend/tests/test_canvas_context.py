@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import open_webui.routers.chat_artifacts as artifacts_router
 import open_webui.routers.chats as chats_router
 import open_webui.routers.notes as notes_router
 import open_webui.socket.main as socket_main
@@ -12,7 +13,7 @@ from fastapi import HTTPException
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.notes import NoteForm, Notes
-from open_webui.routers.chats import (
+from open_webui.routers.chat_artifacts import (
     CanvasDocumentForm,
     CanvasPromotionForm,
     promote_transient_canvas_document,
@@ -38,12 +39,26 @@ from open_webui.utils.canvas import (
     canvas_document_limit_reached,
     generate_canvas_title,
     is_internal_note_chat,
-    set_active_canvas_document,
     serialize_canvas_documents,
+    set_active_canvas_document,
     sync_linked_canvas_note_content,
 )
 from open_webui.utils.tools import get_builtin_tools, supports_chat_workspace_tools
 from starlette.requests import Request
+
+
+def test_chat_router_includes_artifact_routes_once():
+    paths = [route.path for route in chats_router.router.routes]
+
+    for path in (
+        '/{id}/canvas/{canvas_id}',
+        '/{id}/canvas/{canvas_id}/undo-ai',
+        '/{id}/canvas/{canvas_id}/select',
+        '/{id}/canvas/{canvas_id}/promote',
+        '/{id}/web-preview/{preview_id}',
+        '/{id}/web-preview/{preview_id}/select',
+    ):
+        assert paths.count(path) == 1
 
 
 def test_serialized_canvas_documents_include_current_content_hash_without_mutating_chat():
@@ -594,7 +609,7 @@ def test_canvas_promotion_is_rejected_without_notes_permission(monkeypatch):
         return default
 
     monkeypatch.setattr(Config, 'get', get_config)
-    monkeypatch.setattr(chats_router, 'has_permission', AsyncMock(return_value=False))
+    monkeypatch.setattr(artifacts_router, 'has_permission', AsyncMock(return_value=False))
 
     with pytest.raises(HTTPException) as error:
         asyncio.run(

@@ -4,21 +4,10 @@
 	import type { i18n as i18nType } from 'i18next';
 	import { toast } from 'svelte-sonner';
 
-	import { selectTransientWebPreview } from '$lib/apis/chats';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
-	import {
-		artifactCode,
-		artifactContents,
-		chatId,
-		showArtifacts,
-		showControls,
-		showEmbeds,
-		workspaceOpenRequestId
-	} from '$lib/stores';
-	import {
-		mergePersistedWebPreview,
-		type WebPreviewArtifact
-	} from '../Artifacts/webPreview';
+	import { artifactContents } from '$lib/stores';
+	import { type WebPreviewArtifact } from '../Artifacts/webPreview';
+	import { openWebPreviewArtifact } from './workspaceArtifactOpen';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	export let artifact: WebPreviewArtifact;
@@ -28,41 +17,8 @@
 	) as WebPreviewArtifact | undefined;
 	$: title = current?.title ?? artifact.title;
 
-	const openPreview = async () => {
-		const targetArtifact = artifact;
-		const targetChatId = $chatId;
-		const targetPreviewId = targetArtifact.previewId;
-
-		if (targetChatId && targetArtifact.source === 'tool') {
-			try {
-				const document = await selectTransientWebPreview(
-					localStorage.token,
-					targetChatId,
-					targetPreviewId
-				);
-				if ($chatId !== targetChatId) return;
-
-				(artifactContents as any).update((items: any[] | null) =>
-					(items ?? []).map((item) =>
-						item?.previewId === targetPreviewId
-							? mergePersistedWebPreview(item as WebPreviewArtifact, document)
-							: item
-					)
-				);
-			} catch {
-				if ($chatId !== targetChatId) return;
-				toast.error($i18n.t('Preview could not be refreshed'));
-				return;
-			}
-		}
-
-		if ($chatId !== targetChatId) return;
-		workspaceOpenRequestId.set(targetPreviewId);
-		artifactCode.set(targetPreviewId);
-		showEmbeds.set(false);
-		showArtifacts.set(true);
-		showControls.set(true);
-	};
+	const openPreview = () =>
+		openWebPreviewArtifact(artifact, () => toast.error($i18n.t('Preview could not be refreshed')));
 </script>
 
 <button

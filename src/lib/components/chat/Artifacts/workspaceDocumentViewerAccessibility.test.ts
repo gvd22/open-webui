@@ -26,7 +26,7 @@ describe('workspace document viewer accessibility contract', () => {
 	});
 
 	it('falls back to the Files preview unless the document viewer accepts the file', () => {
-		const artifacts = readComponent('../Artifacts.svelte');
+		const artifacts = readComponent('WorkspaceHost.svelte');
 		const terminalFiles = readComponent('../FileNav.svelte');
 		const pyodideFiles = readComponent('../PyodideFileNav.svelte');
 
@@ -48,11 +48,11 @@ describe('workspace document viewer accessibility contract', () => {
 
 		expect(panels).toContain('targetPage={content.targetPage ?? null}');
 		expect(viewer).toContain('export let targetPage: number | null = null;');
-		expect(viewer.match(/\{targetPage\}/g)).toHaveLength(3);
+		expect(viewer.match(/\{targetPage\}/g)).toHaveLength(2);
 	});
 
 	it('assigns exactly one existing tabpanel owner to every workspace tab', () => {
-		const source = readComponent('../Artifacts.svelte');
+		const source = readComponent('WorkspaceHost.svelte');
 		const documentPanels = readComponent('WorkspaceDocumentPanels.svelte');
 		const tabs = readComponent('WorkspaceTabs.svelte');
 
@@ -71,53 +71,38 @@ describe('workspace document viewer accessibility contract', () => {
 		);
 	});
 
-	it('keeps PowerPoint staging inert and off-canvas until it is committed', () => {
-		const source = readComponent('DocumentViewer/PowerPointDocumentViewer.svelte');
+	it('validates PowerPoint before converting it with the shared upstream renderer', () => {
+		const source = readComponent('../../common/OfficeDocumentPreview.svelte');
 
-		expect(source).toContain("candidateContainer.setAttribute('aria-hidden', 'true')");
-		expect(source).toContain('candidateContainer.inert = true');
-		expect(source).toContain("candidateContainer.style.transform = 'translateX(-200vw)'");
-		expect(source).toContain("candidateContainer.removeAttribute('aria-hidden')");
-		expect(source).toContain('candidateContainer.inert = false');
+		expect(source.indexOf('await validatePptxArchive(candidate)')).toBeGreaterThan(-1);
+		expect(source.indexOf('await validatePptxArchive(candidate)')).toBeLessThan(
+			source.indexOf('await pptxToImages(candidate.slice(0))')
+		);
+		expect(source).toContain('<PptxPreview');
+		expect(source).toContain("const XLSX = await import('xlsx')");
 	});
 
-	it('validates PowerPoint relationships before invoking the renderer', () => {
-		const source = readComponent('DocumentViewer/PowerPointDocumentViewer.svelte');
+	it('uses one shared Office renderer in Workspace, Files, and terminal outputs', () => {
+		const workspaceViewer = readComponent('DocumentViewer/DocumentFileViewer.svelte');
+		const fileNav = readComponent('../FileNav.svelte');
+		const filePreview = readComponent('../FileNav/FilePreview.svelte');
+		const terminalOutput = readComponent('../Messages/TerminalOutputFile.svelte');
 
-		expect(source.indexOf('await validatePptxArchive(candidateData)')).toBeGreaterThan(-1);
-		expect(source.indexOf('await validatePptxArchive(candidateData)')).toBeLessThan(
-			source.indexOf('await PptxViewer.open(candidateData')
-		);
+		for (const source of [workspaceViewer, filePreview]) {
+			expect(source).toContain('OfficeDocumentPreview');
+			expect(source).not.toContain('WordDocumentViewer');
+			expect(source).not.toContain('PowerPointDocumentViewer');
+		}
+		expect(terminalOutput).toContain('<FilePreview');
+		expect(terminalOutput).toContain('{fileOfficeData}');
+		expect(fileNav).toContain("['docx', 'pptx', 'xls', 'xlsx']");
+		expect(fileNav).not.toContain("await import('mammoth')");
+		expect(fileNav).not.toContain("await import('xlsx')");
+		expect(fileNav).not.toContain('pptxToImages');
 	});
 
-	it('makes the labelled PowerPoint stage itself the keyboard slider target', () => {
-		const source = readComponent('DocumentViewer/PowerPointDocumentViewer.svelte');
-
-		expect(source).toMatch(
-			/bind:this=\{host\}\s+role="slider"[\s\S]*?aria-label=\{\$i18n\.t\('PowerPoint presentation'\)\}[\s\S]*?on:keydown=\{handlePresentationKeydown\}/
-		);
-		expect(source.match(/on:keydown=\{handlePresentationKeydown\}/g)).toHaveLength(1);
-	});
-
-	it('drops stale or rejected PowerPoint slide navigation without changing the active slide', () => {
-		const source = readComponent('DocumentViewer/PowerPointDocumentViewer.svelte');
-
-		expect(source).toMatch(
-			/const activeViewer = viewer;\s+const generation = renderGeneration;\s+if \(!mounted \|\| !activeViewer \|\| navigationPending\) return;\s+const navigation = \+\+navigationGeneration;/
-		);
-		expect(source).toMatch(
-			/try \{\s+await activeViewer\.goToSlide\([\s\S]*?\);\s+\} catch \(cause\) \{[\s\S]*?return;\s+\}/
-		);
-		expect(source).toMatch(
-			/!mounted \|\|\s+viewer !== activeViewer \|\|\s+generation !== renderGeneration \|\|\s+navigation !== navigationGeneration/
-		);
-		expect(source).toContain('currentSlide = activeViewer.currentSlideIndex');
-		expect(source).toContain('navigationGeneration += 1;');
-		expect(source).toContain('navigationPending = false;');
-	});
-
-	it('keeps the PowerPoint keyboard controls free of Svelte accessibility warnings', () => {
-		const warnings = compile(readComponent('DocumentViewer/PowerPointDocumentViewer.svelte'), {
+	it('keeps the shared PowerPoint controls free of Svelte accessibility warnings', () => {
+		const warnings = compile(readComponent('../../common/PptxPreview.svelte'), {
 			generate: 'client'
 		}).warnings.map((warning) => warning.code);
 

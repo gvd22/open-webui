@@ -3,18 +3,14 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import open_webui.models.chats as chats_model
+import open_webui.routers.chat_artifacts as artifacts_router
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from starlette.requests import Request
-
-import open_webui.models.chats as chats_model
-import open_webui.routers.chats as chats_router
 from open_webui.models.chats import Chat, Chats
 from open_webui.models.config import Config
 from open_webui.models.notes import Note, NoteModel, Notes
-from open_webui.routers.chats import (
+from open_webui.routers.chat_artifacts import (
     CanvasDocumentForm,
     CanvasPromotionForm,
     promote_transient_canvas_document,
@@ -26,6 +22,9 @@ from open_webui.utils.canvas import (
     detach_linked_canvases_from_note,
     sync_linked_canvases_from_note,
 )
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 
 def _request() -> Request:
@@ -241,7 +240,7 @@ def test_concurrent_canvas_promotion_creates_one_note(monkeypatch, tmp_path):
             )
             _patch_chat_sessions(monkeypatch, sessions)
             monkeypatch.setattr(Config, 'get', AsyncMock(return_value=True))
-            monkeypatch.setattr(chats_router, 'publish_event', AsyncMock())
+            monkeypatch.setattr(artifacts_router, 'publish_event', AsyncMock())
 
             async def get_note(note_id, db=None):
                 async with sessions() as session:
@@ -423,7 +422,7 @@ def test_workspace_endpoint_does_not_hide_persistence_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match='write failed'):
         asyncio.run(
-            chats_router.select_transient_canvas_document(
+            artifacts_router.select_transient_canvas_document(
                 'chat-1',
                 'canvas-1',
                 user=SimpleNamespace(id='user-1'),

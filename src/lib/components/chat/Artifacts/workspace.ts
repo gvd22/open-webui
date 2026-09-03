@@ -23,7 +23,7 @@ export type WorkspaceContent = {
 	targetPage?: number;
 };
 
-export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx';
+export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx' | 'xls' | 'xlsx';
 
 export type WorkspaceTab = {
 	id: string;
@@ -189,7 +189,9 @@ export const resolveBoundWorkspaceTerminal = <T extends { id?: string }>(
 
 export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentFormat | null => {
 	const extension = path.split('.').pop()?.toLowerCase();
-	return extension === 'pdf' || extension === 'docx' || extension === 'pptx' ? extension : null;
+	return extension && ['pdf', 'docx', 'pptx', 'xls', 'xlsx'].includes(extension)
+		? (extension as WorkspaceDocumentFormat)
+		: null;
 };
 
 export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boolean) =>
@@ -268,16 +270,6 @@ const fallbackTitle = (kind: string) => {
 	return 'Preview';
 };
 
-export const replaceWorkspaceFileContent = (
-	contents: WorkspaceContent[],
-	path: string
-): WorkspaceContent[] => {
-	const id = getWorkspaceFileId(path);
-	return contents.length === 1 && getWorkspaceContentId(contents[0], 0) === id
-		? contents
-		: [buildWorkspaceFileContent(path)];
-};
-
 export const upsertWorkspaceFileContent = (
 	contents: WorkspaceContent[],
 	path: string,
@@ -326,8 +318,6 @@ export const limitWorkspaceFileContents = (
 		evictedIds
 	};
 };
-
-export const nextDocumentLoadSequence = (current: number) => current + 1;
 
 export const getWorkspaceFileRefreshAction = (
 	changedPaths: string[] | undefined,

@@ -12,8 +12,7 @@
 	import Spinner from '../../common/Spinner.svelte';
 	import PdfPagesPreview from '../../common/PdfPagesPreview.svelte';
 	import PanzoomContainer from '../../common/PanzoomContainer.svelte';
-	import DocxPreview from '../../common/DocxPreview.svelte';
-	import PptxPreview from '../../common/PptxPreview.svelte';
+	import OfficeDocumentPreview from '../../common/OfficeDocumentPreview.svelte';
 	import JsonTreeView from './JsonTreeView.svelte';
 	import NotebookView from './NotebookView.svelte';
 	import SqliteView from './SqliteView.svelte';
@@ -31,7 +30,10 @@
 	export let fileAudioUrl: string | null = null;
 	export let filePdfData: ArrayBuffer | null = null;
 	export let fileSqliteData: ArrayBuffer | null = null;
-	export let fileDocxData: ArrayBuffer | null = null;
+	export let fileOfficeData: {
+		data: ArrayBuffer;
+		format: 'docx' | 'pptx' | 'xls' | 'xlsx';
+	} | null = null;
 	export let fileContent: string | null = null;
 
 	// Terminal connection for notebook execution
@@ -39,14 +41,8 @@
 	export let apiKey: string = '';
 	export let chatId: string | null = null;
 
-	// Office preview props
-	export let fileOfficeHtml: string | null = null;
-	export let fileOfficeSlides: string[] | null = null;
 	export let currentSlide = 0;
 	export let targetPage: number | null = null;
-	export let excelSheetNames: string[] = [];
-	export let selectedExcelSheet = '';
-	export let onSheetChange: ((sheet: string) => void) | null = null;
 
 	export let overlay = false;
 	export let readOnly = false;
@@ -280,11 +276,9 @@
 	}
 
 	let panzoomRef: PanzoomContainer;
-	let pptxPreviewRef: PptxPreview;
 	let imageZoomLevel = 1;
 	export const resetImageView = () => {
 		panzoomRef?.reset();
-		pptxPreviewRef?.resetView();
 	};
 
 	export const resetPdfView = () => {
@@ -293,10 +287,7 @@
 </script>
 
 <div
-	class="flex-1 {fileImageUrl !== null ||
-	fileDocxData !== null ||
-	filePdfData !== null ||
-	(fileOfficeSlides !== null && fileOfficeSlides.length > 0)
+	class="flex-1 {fileImageUrl !== null || fileOfficeData !== null || filePdfData !== null
 		? 'overflow-hidden'
 		: 'overflow-y-auto'} min-h-0 min-w-0 relative h-full"
 >
@@ -343,36 +334,10 @@
 		/>
 	{:else if fileSqliteData !== null}
 		<SqliteView data={fileSqliteData} />
-	{:else if fileDocxData !== null}
-		<DocxPreview data={fileDocxData} {targetPage} className="w-full h-full" />
-	{:else if fileOfficeHtml !== null}
-		<div class="flex flex-col h-full">
-			<div class="office-preview overflow-auto flex-1 min-h-0">
-				{@html fileOfficeHtml}
-			</div>
-			{#if excelSheetNames.length > 1}
-				<div
-					class="flex items-center gap-1 py-1.5 px-3 border-t border-gray-100 dark:border-gray-800 overflow-x-auto"
-				>
-					{#each excelSheetNames as sheet}
-						<button
-							class="shrink-0 px-3 py-1 text-xs rounded-md transition-colors
-								{selectedExcelSheet === sheet
-								? 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-normal'
-								: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}"
-							on:click={() => onSheetChange?.(sheet)}
-						>
-							{sheet}
-						</button>
-					{/each}
-				</div>
-			{/if}
-		</div>
-	{:else if fileOfficeSlides !== null && fileOfficeSlides.length > 0}
-		<PptxPreview
-			bind:this={pptxPreviewRef}
-			slides={fileOfficeSlides}
-			bind:currentSlide
+	{:else if fileOfficeData !== null}
+		<OfficeDocumentPreview
+			data={fileOfficeData.data}
+			format={fileOfficeData.format}
 			{targetPage}
 			className="w-full h-full"
 		/>
@@ -628,132 +593,6 @@
 	}
 	:global(.dark) .csv-row-num {
 		color: #6b7280;
-	}
-	/* ── Office preview styles ──────────────────────────────────────── */
-	:global(.office-preview) {
-		font-size: 0.875rem;
-		line-height: 1.6;
-		color: #1f2937;
-		background: #fff;
-		border-radius: 0.25rem;
-	}
-	:global(.dark .office-preview) {
-		color: #e5e7eb;
-		background: #1a1a2e;
-	}
-	:global(.office-preview table) {
-		border-collapse: collapse;
-		font-size: 0.75rem;
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-		line-height: 1.3;
-	}
-	:global(.office-preview table td),
-	:global(.office-preview table th) {
-		border: 1px solid rgba(200, 200, 200, 0.5);
-		padding: 0.25rem 0.625rem;
-		text-align: left;
-		white-space: nowrap;
-		user-select: text;
-		cursor: cell;
-		max-width: 18.75rem;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	:global(.dark .office-preview table td),
-	:global(.dark .office-preview table th) {
-		border-color: rgba(80, 80, 80, 0.5);
-	}
-	/* Column letter headers */
-	:global(.office-preview table th.excel-col-hdr) {
-		position: sticky;
-		top: 0;
-		z-index: 2;
-		background: #f0f0f0;
-		color: #666;
-		font-weight: 500;
-		font-size: 0.65rem;
-		text-align: center;
-		padding: 0.1875rem 0.625rem;
-		border-bottom: 2px solid rgba(180, 180, 180, 0.6);
-	}
-	:global(.dark .office-preview table th.excel-col-hdr) {
-		background: #2a2a3e;
-		color: #888;
-		border-bottom-color: rgba(100, 100, 100, 0.6);
-	}
-	/* Row number cells */
-	:global(.office-preview .excel-row-num) {
-		position: sticky;
-		left: 0;
-		z-index: 1;
-		background: #f0f0f0;
-		color: #999;
-		font-size: 0.6rem;
-		text-align: right !important;
-		padding: 0.25rem 0.5rem 0.25rem 0.25rem !important;
-		user-select: none;
-		width: 1px;
-		white-space: nowrap;
-		border-right: 2px solid rgba(180, 180, 180, 0.6) !important;
-	}
-	:global(.dark .office-preview .excel-row-num) {
-		background: #2a2a3e;
-		color: #666;
-		border-right-color: rgba(100, 100, 100, 0.6) !important;
-	}
-	/* Corner cell (intersection of row nums and col headers) */
-	:global(.office-preview thead .excel-row-num) {
-		z-index: 3;
-	}
-	/* Number cells right-aligned */
-	:global(.office-preview .excel-num) {
-		text-align: right;
-		font-variant-numeric: tabular-nums;
-	}
-	/* Row hover and selection */
-	:global(.office-preview table tbody tr:nth-child(even) td:not(.excel-row-num)) {
-		background: rgba(0, 0, 0, 0.015);
-	}
-	:global(.dark .office-preview table tbody tr:nth-child(even) td:not(.excel-row-num)) {
-		background: rgba(255, 255, 255, 0.02);
-	}
-	:global(.office-preview table tbody tr:hover td:not(.excel-row-num)) {
-		background: rgba(59, 130, 246, 0.06);
-	}
-	:global(.dark .office-preview table tbody tr:hover td:not(.excel-row-num)) {
-		background: rgba(59, 130, 246, 0.1);
-	}
-	:global(.office-preview table td:focus) {
-		outline: 2px solid rgba(59, 130, 246, 0.5);
-		outline-offset: -2px;
-	}
-	/* DOCX / generic office styles */
-	:global(.office-preview img) {
-		max-width: 100%;
-		height: auto;
-	}
-	:global(.office-preview h1) {
-		font-size: 1.5rem;
-		font-weight: 700;
-		margin: 0.75em 0 0.5em;
-	}
-	:global(.office-preview h2) {
-		font-size: 1.25rem;
-		font-weight: 600;
-		margin: 0.75em 0 0.5em;
-	}
-	:global(.office-preview h3) {
-		font-size: 1.1rem;
-		font-weight: 600;
-		margin: 0.5em 0 0.25em;
-	}
-	:global(.office-preview p) {
-		margin: 0.25em 0;
-	}
-	:global(.office-preview ul),
-	:global(.office-preview ol) {
-		padding-left: 1.5em;
-		margin: 0.5em 0;
 	}
 	/* ── Shiki code highlighting ─────────────────────────────────── */
 	.shiki-preview :global(pre.shiki) {

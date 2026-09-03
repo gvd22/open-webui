@@ -1,15 +1,3 @@
-<script context="module">
-	type FileNavSessionState = {
-		savedPath: string;
-		fileRoot: { path: string; label: string } | null;
-		expandedDirs: string[];
-		treeContents: [string, any[]][];
-	};
-
-	// Module state survives closing the panel, but must never cross a terminal/chat boundary.
-	const sessionStateByWorkspace = new Map<string, FileNavSessionState>();
-</script>
-
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
@@ -51,7 +39,6 @@
 	import TerminalIcon from '../icons/Terminal.svelte';
 	import PenAlt from '../icons/PenAlt.svelte';
 	import ZoomReset from '../icons/ZoomReset.svelte';
-	import { isSavedChatId } from '$lib/utils/chatId';
 	import { copyToClipboard } from '$lib/utils';
 	import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
 
@@ -68,6 +55,11 @@
 	import BulkActionBar from './FileNav/BulkActionBar.svelte';
 	import PortList from './FileNav/PortList.svelte';
 	import PortPreview from './FileNav/PortPreview.svelte';
+	import {
+		getFileNavWorkspaceKey,
+		readFileNavSessionState,
+		saveFileNavSessionState
+	} from './FileNav/session';
 	import {
 		getWorkspaceFileOpenTarget,
 		isKeyboardActivationClick,
@@ -310,7 +302,10 @@
 	let fileAudioUrl: string | null = null;
 	let filePdfData: ArrayBuffer | null = null;
 	let fileSqliteData: ArrayBuffer | null = null;
-	let fileDocxData: ArrayBuffer | null = null;
+	let fileOfficeData: {
+		data: ArrayBuffer;
+		format: 'docx' | 'pptx' | 'xls' | 'xlsx';
+	} | null = null;
 	let fileLoading = false;
 	let filePreviewRef: FilePreview;
 	let directoryRequestSequence = 0;
@@ -323,13 +318,7 @@
 	let fileSearchTarget: FileSearchTarget | null = null;
 	let documentTargetPage: number | null = null;
 
-	// ── Office preview state ────────────────────────────────────────────
-	let fileOfficeHtml: string | null = null;
-	let fileOfficeSlides: string[] | null = null;
 	let currentSlide = 0;
-	let excelSheetNames: string[] = [];
-	let selectedExcelSheet = '';
-	let excelWorkbook: import('xlsx').WorkBook | null = null;
 
 	// ── File preview toolbar state (bound from FilePreview) ─────────────
 	let editing = false;
@@ -339,7 +328,7 @@
 	const MD_EXTS = new Set(['md', 'markdown', 'mdx']);
 	const CSV_EXTS = new Set(['csv', 'tsv']);
 	const HTML_EXTS = new Set(['html', 'htm']);
-	const OFFICE_EXTS = new Set(['docx', 'xlsx', 'pptx']);
+	const OFFICE_EXTS = new Set(['docx', 'pptx', 'xls', 'xlsx']);
 	const getFileExt = (path: string | null) => path?.split('.').pop()?.toLowerCase() ?? '';
 
 	$: isMarkdown = MD_EXTS.has(getFileExt(selectedFile));
@@ -383,12 +372,9 @@
 
 	const chatContext = (terminal: any) => terminal?.contexts?.chat ?? {};
 
-	const workspaceKeyFor = (terminal: { id: string | null; url: string }, id: string | null) =>
-		isSavedChatId(id) ? `${terminal.id ?? terminal.url}\u0000${id}` : null;
-
 	const saveWorkspaceState = () => {
 		if (!activeWorkspaceKey) return;
-		sessionStateByWorkspace.set(activeWorkspaceKey, {
+		saveFileNavSessionState(activeWorkspaceKey, {
 			savedPath,
 			fileRoot: fileRoot ? { ...fileRoot } : null,
 			expandedDirs: [...expandedDirs],
@@ -400,8 +386,8 @@
 		terminal: { id: string | null; url: string },
 		id: string | null
 	) => {
-		activeWorkspaceKey = workspaceKeyFor(terminal, id);
-		const state = activeWorkspaceKey ? sessionStateByWorkspace.get(activeWorkspaceKey) : null;
+		activeWorkspaceKey = getFileNavWorkspaceKey(terminal, id);
+		const state = readFileNavSessionState(activeWorkspaceKey);
 		savedPath = state?.savedPath ?? '/';
 		currentPath = savedPath;
 		fileRoot = state?.fileRoot ?? null;
@@ -753,13 +739,8 @@
 		}
 		filePdfData = null;
 		fileSqliteData = null;
-		fileDocxData = null;
-		fileOfficeHtml = null;
-		fileOfficeSlides = null;
+		fileOfficeData = null;
 		currentSlide = 0;
-		excelSheetNames = [];
-		selectedExcelSheet = '';
-		excelWorkbook = null;
 	};
 
 	// ── Directory operations ─────────────────────────────────────────────
@@ -949,11 +930,7 @@
 		let nextContent: string | null = null;
 		let nextPdfData: ArrayBuffer | null = null;
 		let nextSqliteData: ArrayBuffer | null = null;
-		let nextOfficeHtml: string | null = null;
-		let nextOfficeSlides: string[] | null = null;
-		let nextWorkbook: import('xlsx').WorkBook | null = null;
-		let nextSheetNames: string[] = [];
-		let nextSelectedSheet = '';
+		let nextOfficeData: typeof fileOfficeData = null;
 
 		try {
 			if (isImage(filePath) || isVideo(filePath) || isAudio(filePath)) {
@@ -997,34 +974,11 @@
 					const arrayBuffer = await result.blob.arrayBuffer();
 					if (isPdf(filePath)) nextPdfData = arrayBuffer;
 					else if (isSqlite(filePath)) nextSqliteData = arrayBuffer;
-					else {
-						try {
-							if (ext === 'docx') {
-								const mammoth = await import('mammoth');
-								const res = await mammoth.convertToHtml({ arrayBuffer });
-								const DOMPurify = (await import('dompurify')).default;
-								nextOfficeHtml = DOMPurify.sanitize(res.value);
-							} else if (ext === 'xlsx') {
-								const XLSX = await import('xlsx');
-								const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-								nextWorkbook = workbook;
-								nextSheetNames = workbook.SheetNames;
-								if (nextSheetNames.length > 0) {
-									nextSelectedSheet = nextSheetNames[0];
-									const { excelToTable } = await import('$lib/utils/excelToTable');
-									const table = await excelToTable(workbook.Sheets[nextSelectedSheet]);
-									const DOMPurify = (await import('dompurify')).default;
-									nextOfficeHtml = DOMPurify.sanitize(table.html);
-								}
-							} else if (ext === 'pptx') {
-								const { pptxToImages } = await import('$lib/utils/pptxToHtml');
-								nextOfficeSlides = (await pptxToImages(arrayBuffer)).images;
-							}
-						} catch (error) {
-							console.error('Failed to render Office file:', error);
-							nextContent = `Error previewing file: ${error instanceof Error ? error.message : 'Unknown error'}`;
-						}
-					}
+					else
+						nextOfficeData = {
+							data: arrayBuffer,
+							format: ext as NonNullable<typeof nextOfficeData>['format']
+						};
 				}
 			} else {
 				nextContent = await readFile(
@@ -1047,11 +1001,7 @@
 			fileContent = nextContent;
 			filePdfData = nextPdfData;
 			fileSqliteData = nextSqliteData;
-			fileOfficeHtml = nextOfficeHtml;
-			fileOfficeSlides = nextOfficeSlides;
-			excelWorkbook = nextWorkbook;
-			excelSheetNames = nextSheetNames;
-			selectedExcelSheet = nextSelectedSheet;
+			fileOfficeData = nextOfficeData;
 			currentSlide = 0;
 		} finally {
 			if (objectUrl && !objectUrlCommitted) URL.revokeObjectURL(objectUrl.url);
@@ -1989,22 +1939,10 @@
 					{fileAudioUrl}
 					{filePdfData}
 					{fileSqliteData}
-					{fileDocxData}
+					{fileOfficeData}
 					{fileContent}
-					{fileOfficeHtml}
-					{fileOfficeSlides}
 					targetPage={documentTargetPage}
-					{excelSheetNames}
-					{selectedExcelSheet}
 					searchTarget={fileSearchTarget}
-					onSheetChange={async (sheet) => {
-						if (!excelWorkbook) return;
-						selectedExcelSheet = sheet;
-						const { excelToTable } = await import('$lib/utils/excelToTable');
-						const result = await excelToTable(excelWorkbook.Sheets[sheet]);
-						const DOMPurify = (await import('dompurify')).default;
-						fileOfficeHtml = DOMPurify.sanitize(result.html);
-					}}
 					baseUrl={selectedTerminal?.url ?? ''}
 					apiKey={selectedTerminal?.key ?? ''}
 					{chatId}

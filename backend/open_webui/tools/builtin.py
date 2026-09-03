@@ -172,8 +172,8 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
-async def _get_canvas_chat(__chat_id__: str | None, __user__: dict | None):
-    """Return the owner-visible chat that holds transient Canvas documents."""
+async def _get_artifact_chat(__chat_id__: str | None, __user__: dict | None):
+    """Return the owner-visible chat that holds chat-bound artifacts."""
     if not is_saved_chat_id(__chat_id__):
         return None
 
@@ -182,7 +182,7 @@ async def _get_canvas_chat(__chat_id__: str | None, __user__: dict | None):
     return chat if chat and chat.user_id == user_id else None
 
 
-async def _mutate_canvas_chat(chat, mutator):
+async def _mutate_artifact_chat(chat, mutator, artifact_label: str):
     mutation = await Chats.mutate_chat_by_id(
         chat.id,
         mutator,
@@ -190,7 +190,7 @@ async def _mutate_canvas_chat(chat, mutator):
         touch=False,
     )
     if mutation is None:
-        raise RuntimeError('Canvas chat could not be persisted.')
+        raise RuntimeError(f'{artifact_label} chat could not be persisted.')
     return mutation[1]
 
 
@@ -268,7 +268,7 @@ async def canvas_create_document(
     :param title: Optional short document title. Leave empty when the content should determine it.
     :return: A compact reference to the Canvas document, including its stable canvasId.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
@@ -295,7 +295,7 @@ async def canvas_create_document(
         return set_active_canvas_document(chat_data, canvas_id), len(documents)
 
     try:
-        document_count = await _mutate_canvas_chat(chat, mutate)
+        document_count = await _mutate_artifact_chat(chat, mutate, 'Canvas')
     except (RuntimeError, ValueError) as exc:
         return _canvas_tool_error(str(exc))
     return _canvas_tool_document(document, build_canvas_capacity_notice(document_count))
@@ -324,7 +324,7 @@ async def canvas_update_document(
     :param title: Optional replacement title. Omit it to keep the current title.
     :return: A compact reference to the updated Canvas document.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
@@ -378,7 +378,7 @@ async def canvas_update_document(
         return chat_data, {'document': updated, 'note': sync.note}
 
     try:
-        result = await _mutate_canvas_chat(chat, mutate)
+        result = await _mutate_artifact_chat(chat, mutate, 'Canvas')
     except CanvasConflictError as exc:
         return _canvas_tool_conflict(exc)
     except (RuntimeError, ValueError) as exc:
@@ -404,7 +404,7 @@ async def canvas_select_document(
     :param canvas_id: Stable ID of the Canvas document to open.
     :return: The selected Canvas document.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
@@ -428,7 +428,7 @@ async def canvas_select_document(
         return set_active_canvas_document(chat_data, canvas_id), document
 
     try:
-        document = await _mutate_canvas_chat(chat, mutate)
+        document = await _mutate_artifact_chat(chat, mutate, 'Canvas')
     except (RuntimeError, ValueError) as exc:
         return _canvas_tool_error(str(exc))
     return _canvas_tool_document(document)
@@ -442,7 +442,7 @@ async def canvas_list_documents(
 
     :return: Canvas IDs, titles, and update times for this chat.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
@@ -486,7 +486,7 @@ async def canvas_read_document(
     :param query: Optional exact text fragment used to locate a relevant range.
     :return: A line-addressed Canvas excerpt and current update version.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
     document = ((chat.chat or {}).get(CANVAS_DOCUMENTS_KEY) or {}).get(canvas_id)
@@ -532,7 +532,7 @@ async def canvas_replace_text(
     :param expected_updated_at: Optional timestamp returned by canvas_read_document.
     :return: The updated Canvas document.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
     if not old_text:
@@ -582,7 +582,7 @@ async def canvas_replace_text(
         return chat_data, {'document': updated, 'note': sync.note}
 
     try:
-        result = await _mutate_canvas_chat(chat, mutate)
+        result = await _mutate_artifact_chat(chat, mutate, 'Canvas')
     except (RuntimeError, ValueError) as exc:
         return _canvas_tool_error(str(exc))
 
@@ -626,18 +626,6 @@ def _web_preview_document(document: dict, warning: str = '') -> str:
     )
 
 
-async def _mutate_web_preview_chat(chat, mutator):
-    mutation = await Chats.mutate_chat_by_id(
-        chat.id,
-        mutator,
-        user_id=chat.user_id,
-        touch=False,
-    )
-    if mutation is None:
-        raise RuntimeError('Web Preview chat could not be persisted.')
-    return mutation[1]
-
-
 async def web_preview_create(
     files: dict[str, str],
     title: str = '',
@@ -655,7 +643,7 @@ async def web_preview_create(
     :param entrypoint: HTML file displayed first, normally index.html.
     :return: The Web Preview with its stable previewId.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
@@ -690,7 +678,7 @@ async def web_preview_create(
         return set_active_web_preview(chat_data, preview_id), len(documents)
 
     try:
-        document_count = await _mutate_web_preview_chat(chat, mutate)
+        document_count = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
     return _web_preview_document(document, build_web_preview_capacity_notice(document_count))
@@ -716,7 +704,7 @@ async def web_preview_update(
     :param entrypoint: Optional replacement HTML entrypoint.
     :return: The updated Web Preview.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
@@ -755,7 +743,7 @@ async def web_preview_update(
         return chat_data, updated
 
     try:
-        document = await _mutate_web_preview_chat(chat, mutate)
+        document = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except WebPreviewConflictError as exc:
         return _web_preview_conflict(exc)
     except (RuntimeError, ValueError) as exc:
@@ -773,7 +761,7 @@ async def web_preview_select(
     :param preview_id: Stable ID of the Web Preview to select.
     :return: The selected Web Preview.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
 
@@ -784,7 +772,7 @@ async def web_preview_select(
         return set_active_web_preview(chat_data, preview_id), document
 
     try:
-        document = await _mutate_web_preview_chat(chat, mutate)
+        document = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
     return _web_preview_document(document)
@@ -795,7 +783,7 @@ async def web_preview_list(
     __user__: dict | None = None,
 ) -> str:
     """List the Web Previews attached to this chat."""
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
     documents = (chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {}
@@ -843,7 +831,7 @@ async def web_preview_read_file(
     :param query: Optional exact text fragment used to locate a relevant range.
     :return: A file excerpt with its ``contentHash`` and the whole preview's ``previewContentHash``.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
     document = ((chat.chat or {}).get(WEB_PREVIEW_DOCUMENTS_KEY) or {}).get(preview_id)
@@ -897,7 +885,7 @@ async def web_preview_replace_text(
     :param expected_updated_at: Optional timestamp returned by web_preview_read_file.
     :return: The updated Web Preview metadata.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
     if not old_text:
@@ -932,7 +920,7 @@ async def web_preview_replace_text(
         return chat_data, updated
 
     try:
-        document = await _mutate_web_preview_chat(chat, mutate)
+        document = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
     return _web_preview_document(document)
@@ -962,7 +950,7 @@ async def web_preview_import_runtime_file(
     :param target_path: Optional relative path inside the preview, for example data/results.json.
     :return: The updated Web Preview metadata.
     """
-    chat = await _get_canvas_chat(__chat_id__, __user__)
+    chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _web_preview_error('Web Preview is available only in a saved chat.')
     if __event_call__ is None:
@@ -1043,7 +1031,7 @@ async def web_preview_import_runtime_file(
         return chat_data, updated
 
     try:
-        document = await _mutate_web_preview_chat(chat, mutate)
+        document = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except WebPreviewConflictError as exc:
         return _web_preview_conflict(exc)
     except (RuntimeError, ValueError) as exc:

@@ -11,12 +11,11 @@
 	} from '$lib/stores';
 	import { downloadFileBlobDetailed } from '$lib/apis/terminal';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
+	import OfficeDocumentPreview from '$lib/components/common/OfficeDocumentPreview.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Download from '$lib/components/icons/Download.svelte';
 	import ArrowsPointingOut from '$lib/components/icons/ArrowsPointingOut.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import WordDocumentViewer from './WordDocumentViewer.svelte';
-	import PowerPointDocumentViewer from './PowerPointDocumentViewer.svelte';
 	import {
 		assertDocumentSize,
 		DOCUMENT_TOO_LARGE_ERROR,
@@ -25,7 +24,6 @@
 	import {
 		getWorkspaceFileRefreshAction,
 		getWorkspaceFileUpdateAction,
-		nextDocumentLoadSequence,
 		type WorkspaceDocumentFormat,
 		type WorkspaceRuntime
 	} from '../workspace';
@@ -61,12 +59,16 @@
 	const mimeTypes: Record<WorkspaceDocumentFormat, string> = {
 		pdf: 'application/pdf',
 		docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-		pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+		pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+		xls: 'application/vnd.ms-excel',
+		xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 	};
 	const maxDocumentBytes: Record<WorkspaceDocumentFormat, number> = {
 		pdf: 64 * 1024 * 1024,
 		docx: 48 * 1024 * 1024,
-		pptx: 64 * 1024 * 1024
+		pptx: 64 * 1024 * 1024,
+		xls: 48 * 1024 * 1024,
+		xlsx: 48 * 1024 * 1024
 	};
 
 	const readPyodideFile = (signal: AbortSignal): Promise<ArrayBuffer> => {
@@ -110,7 +112,7 @@
 
 	const loadFile = async (isRefresh = false) => {
 		if (!mounted) return;
-		const generation = (loadGeneration = nextDocumentLoadSequence(loadGeneration));
+		const generation = ++loadGeneration;
 		loadAbortController?.abort();
 		const abortController = new AbortController();
 		loadAbortController = abortController;
@@ -255,7 +257,7 @@
 			return;
 		const action = getWorkspaceFileUpdateAction(update, path, $workspaceActiveFile?.path === path);
 		if (action === 'deleted') {
-			loadGeneration = nextDocumentLoadSequence(loadGeneration);
+			loadGeneration += 1;
 			loadAbortController?.abort();
 			candidateData = null;
 			displayedData = null;
@@ -267,7 +269,7 @@
 			return;
 		}
 		if (action === 'renamed') {
-			loadGeneration = nextDocumentLoadSequence(loadGeneration);
+			loadGeneration += 1;
 			loadAbortController?.abort();
 			candidateData = null;
 			displayedData = null;
@@ -292,7 +294,7 @@
 
 		return () => {
 			mounted = false;
-			loadGeneration = nextDocumentLoadSequence(loadGeneration);
+			loadGeneration += 1;
 			loadAbortController?.abort();
 			if (refreshTimer) window.clearTimeout(refreshTimer);
 			unsubscribeUpdate();
@@ -349,16 +351,10 @@
 			on:preview-failed={handlePreviewFailed}
 			className="w-full h-full bg-[#f5f4f1] dark:bg-[#171719] px-3 pt-12 pb-16 sm:px-6"
 		/>
-	{:else if format === 'docx' && candidateData}
-		<WordDocumentViewer
+	{:else if candidateData}
+		<OfficeDocumentPreview
 			data={candidateData}
-			{targetPage}
-			on:preview-rendered={handlePreviewRendered}
-			on:preview-failed={handlePreviewFailed}
-		/>
-	{:else if format === 'pptx' && candidateData}
-		<PowerPointDocumentViewer
-			data={candidateData}
+			format={format as Exclude<WorkspaceDocumentFormat, 'pdf'>}
 			{targetPage}
 			on:preview-rendered={handlePreviewRendered}
 			on:preview-failed={handlePreviewFailed}

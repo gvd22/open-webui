@@ -7,20 +7,12 @@ const zoomControls = readFileSync(
 	'utf8'
 );
 const pdfViewer = readFileSync(new URL('./PDFViewer.svelte', import.meta.url), 'utf8');
-const presentationViewer = readFileSync(
-	new URL('../chat/Artifacts/DocumentViewer/PowerPointDocumentViewer.svelte', import.meta.url),
-	'utf8'
-);
-const wordViewer = readFileSync(
-	new URL('../chat/Artifacts/DocumentViewer/WordDocumentViewer.svelte', import.meta.url),
-	'utf8'
-);
+const presentationViewer = readFileSync(new URL('./PptxPreview.svelte', import.meta.url), 'utf8');
+const wordViewer = readFileSync(new URL('./DocxPreview.svelte', import.meta.url), 'utf8');
 
 describe('document pagination', () => {
-	it('uses one shared Open WebUI control in paginated document viewers', () => {
+	it('uses the shared Open WebUI pagination control for PDFs', () => {
 		expect(pdfViewer).toContain('<DocumentPagination');
-		expect(presentationViewer).toContain('<DocumentPagination');
-		expect(presentationViewer).not.toContain('slide-controls');
 	});
 
 	it('keeps page controls accessible and stable across boundaries', () => {
@@ -31,34 +23,27 @@ describe('document pagination', () => {
 		expect(pagination).toContain('tabular-nums');
 	});
 
-	it('shares bounded zoom controls between PDF and PowerPoint', () => {
+	it('keeps bounded 10 percent zoom controls across document viewers', () => {
 		expect(pdfViewer).toContain('<DocumentZoomControls');
-		expect(presentationViewer).toContain('<DocumentZoomControls');
-		expect(presentationViewer).not.toContain("from 'panzoom'");
-		expect(presentationViewer).toContain('viewerContainer.style.transform = `scale(${scale})`');
+		expect(presentationViewer).toContain('DOCUMENT_ZOOM_BUTTON_STEP');
+		expect(wordViewer).toContain('DOCUMENT_ZOOM_BUTTON_STEP');
 		expect(zoomControls).toContain('disabled={percent <= minimum || pending}');
 		expect(zoomControls).toContain('disabled={percent >= maximum || pending}');
 	});
 
-	it('uses the shared document zoom behavior for PDF, PowerPoint, and Word', () => {
+	it('uses the shared wheel zoom behavior for PDF, PowerPoint, and Word', () => {
 		for (const viewer of [pdfViewer, presentationViewer, wordViewer]) {
 			expect(viewer).toContain('getDocumentWheelZoomDelta');
-			expect(viewer).toContain('panDocumentViewport');
-			expect(viewer).toContain('DOCUMENT_ZOOM_BUTTON_STEP');
-			expect(viewer).toContain('DOCUMENT_ZOOM_MAX');
 		}
+		expect(wordViewer).toContain('panDocumentViewport');
 		expect(wordViewer).toContain('<DocumentZoomToolbar');
 	});
 
-	it('uses native two-axis scrolling and fast pointer-anchored PowerPoint zoom', () => {
-		expect(presentationViewer).toContain('overflow-auto');
-		expect(presentationViewer).toContain('on:wheel|nonpassive={handleDocumentWheel}');
-		expect(presentationViewer).toContain('getDocumentWheelZoomDelta(event.deltaY)');
-		expect(presentationViewer).toContain('host.scrollLeft =');
-		expect(presentationViewer).toContain('host.scrollTop =');
-		expect(presentationViewer).toContain("'--presentation-scroll-size'");
-		expect(presentationViewer).toContain('.presentation-container::before');
-		expect(presentationViewer).toContain('position: absolute');
-		expect(presentationViewer).toContain('on:pointermove={dragPresentation}');
+	it('supports two-axis trackpad panning in PowerPoint and Word', () => {
+		expect(presentationViewer).toContain('on:wheel|nonpassive={handleStageWheel}');
+		expect(presentationViewer).toContain('getDocumentWheelZoomDelta(e.deltaY)');
+		expect(presentationViewer).toContain('moveBy(-e.deltaX, -e.deltaY, false)');
+		expect(wordViewer).toContain('panDocumentViewport(outerContainer, e.deltaX, e.deltaY)');
+		expect(wordViewer).toContain('on:pointermove={dragDocument}');
 	});
 });

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 
-import { isSafeDocumentLink, validateDocxArchive, validatePptxArchive } from './security';
+import {
+	isSafeDocumentLink,
+	validateDocxArchive,
+	validatePptxArchive
+} from '$lib/components/common/documentSecurity';
 
 describe('document viewer security', () => {
 	it('allows only inert fragments and expected external link protocols', () => {

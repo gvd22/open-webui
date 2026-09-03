@@ -16,9 +16,7 @@ import {
 	isKeyboardActivationClick,
 	limitWorkspaceFileContents,
 	moveWorkspaceContent,
-	nextDocumentLoadSequence,
 	orderWorkspaceContents,
-	replaceWorkspaceFileContent,
 	resolveBoundWorkspaceTerminal,
 	upsertWorkspaceFileContent,
 	getWorkspaceDocumentFormat,
@@ -319,11 +317,6 @@ describe('workspace tabs', () => {
 		]);
 	});
 
-	it('keeps refresh generations monotonic so stale renders cannot win', () => {
-		expect(nextDocumentLoadSequence(9)).toBe(10);
-		expect(nextDocumentLoadSequence(10)).toBe(11);
-	});
-
 	it('refreshes active Pyodide documents and defers inactive matching documents', () => {
 		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', true)).toBe('refresh');
 		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', false)).toBe('defer');
@@ -349,9 +342,9 @@ describe('workspace tabs', () => {
 		expect(getWorkspaceDocumentFormat('/workspace/report.PDF')).toBe('pdf');
 		expect(getWorkspaceDocumentFormat('/workspace/report.docx')).toBe('docx');
 		expect(getWorkspaceDocumentFormat('/workspace/slides.pptx')).toBe('pptx');
+		expect(getWorkspaceDocumentFormat('/workspace/table.xlsx')).toBe('xlsx');
+		expect(getWorkspaceDocumentFormat('/workspace/legacy.xls')).toBe('xls');
 		for (const path of [
-			'/workspace/table.xlsx',
-			'/workspace/legacy.xls',
 			'/workspace/data.csv',
 			'/workspace/report.odt',
 			'/workspace/table.ods',
@@ -368,7 +361,9 @@ describe('workspace tabs', () => {
 		for (const path of [
 			'/workspace/report.pdf',
 			'/workspace/report.docx',
-			'/workspace/deck.pptx'
+			'/workspace/deck.pptx',
+			'/workspace/table.xlsx',
+			'/workspace/legacy.xls'
 		]) {
 			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
 			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBe(
@@ -376,17 +371,18 @@ describe('workspace tabs', () => {
 			);
 		}
 
-		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+		for (const path of ['/workspace/data.csv', '/workspace/report.odt']) {
 			expect(getWorkspaceDocumentFormatForViewer(path, false)).toBeNull();
 			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBeNull();
 		}
 	});
 
 	it('keeps unsupported formats in Files for both Terminal and Pyodide callers', () => {
-		for (const path of ['/workspace/table.xlsx', '/workspace/data.csv', '/workspace/report.odt']) {
+		for (const path of ['/workspace/data.csv', '/workspace/report.odt']) {
 			expect(getWorkspaceFileOpenTarget(path)).toBe('files');
 		}
 		expect(getWorkspaceFileOpenTarget('/workspace/report.pdf')).toBe('document-viewer');
+		expect(getWorkspaceFileOpenTarget('/workspace/table.xlsx')).toBe('document-viewer');
 	});
 
 	it('preserves a custom tab order and appends unknown items', () => {

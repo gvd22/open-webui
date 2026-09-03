@@ -32,14 +32,11 @@
 	let fileAudioUrl: string | null = null;
 	let filePdfData: ArrayBuffer | null = null;
 	let fileSqliteData: ArrayBuffer | null = null;
-	let fileDocxData: ArrayBuffer | null = null;
+	let fileOfficeData: {
+		data: ArrayBuffer;
+		format: 'docx' | 'pptx' | 'xls' | 'xlsx';
+	} | null = null;
 	let fileContent: string | null = null;
-	let fileOfficeHtml: string | null = null;
-	let fileOfficeSlides: string[] | null = null;
-	let currentSlide = 0;
-	let excelSheetNames: string[] = [];
-	let selectedExcelSheet = '';
-	let excelWorkbook: any = null;
 
 	const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']);
 	const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'ogv', 'avi', 'mkv']);
@@ -103,14 +100,8 @@
 		fileAudioUrl = null;
 		filePdfData = null;
 		fileSqliteData = null;
-		fileDocxData = null;
+		fileOfficeData = null;
 		fileContent = null;
-		fileOfficeHtml = null;
-		fileOfficeSlides = null;
-		currentSlide = 0;
-		excelSheetNames = [];
-		selectedExcelSheet = '';
-		excelWorkbook = null;
 	}
 
 	async function blobForPreview() {
@@ -118,16 +109,9 @@
 		return downloadFileBlob(terminal.url, terminal.key, path, chatId || undefined);
 	}
 
-	async function loadExcelSheet(sheet: string) {
-		if (!excelWorkbook) return;
-		selectedExcelSheet = sheet;
-		const { excelToTable } = await import('$lib/utils/excelToTable');
-		const result = await excelToTable(excelWorkbook.Sheets[selectedExcelSheet]);
-		const DOMPurify = (await import('dompurify')).default;
-		fileOfficeHtml = DOMPurify.sanitize(result.html);
-	}
-
 	async function loadPreview(key: string) {
+		const activeTerminal = terminal;
+		if (!activeTerminal) return;
 		loadedKey = key;
 		loading = true;
 		error = '';
@@ -157,8 +141,8 @@
 					fileSqliteData = arrayBuffer;
 				} else if (ext === 'docx') {
 					const preview = await downloadFilePreview(
-						terminal.url,
-						terminal.key,
+						activeTerminal.url,
+						activeTerminal.key,
 						path,
 						chatId || undefined
 					);
@@ -167,22 +151,16 @@
 					} else {
 						const result = await blobForPreview();
 						if (!result) throw new Error(t('Preview failed'));
-						fileDocxData = await result.blob.arrayBuffer();
+						fileOfficeData = { data: await result.blob.arrayBuffer(), format: ext };
 					}
 				} else if (ext === 'xlsx' || ext === 'xls') {
 					const result = await blobForPreview();
 					if (!result) throw new Error(t('Preview failed'));
-					const arrayBuffer = await result.blob.arrayBuffer();
-					const XLSX = await import('xlsx');
-					excelWorkbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-					excelSheetNames = excelWorkbook.SheetNames;
-					if (excelSheetNames.length > 0) {
-						await loadExcelSheet(excelSheetNames[0]);
-					}
+					fileOfficeData = { data: await result.blob.arrayBuffer(), format: ext };
 				} else if (ext === 'pptx') {
 					const preview = await downloadFilePreview(
-						terminal.url,
-						terminal.key,
+						activeTerminal.url,
+						activeTerminal.key,
 						path,
 						chatId || undefined
 					);
@@ -191,14 +169,16 @@
 					} else {
 						const result = await blobForPreview();
 						if (!result) throw new Error(t('Preview failed'));
-						const arrayBuffer = await result.blob.arrayBuffer();
-						const { pptxToImages } = await import('$lib/utils/pptxToHtml');
-						const resultImages = await pptxToImages(arrayBuffer);
-						fileOfficeSlides = resultImages.images;
+						fileOfficeData = { data: await result.blob.arrayBuffer(), format: ext };
 					}
 				}
-			} else if (terminal) {
-				fileContent = await readFile(terminal.url, terminal.key, path, chatId || undefined);
+			} else {
+				fileContent = await readFile(
+					activeTerminal.url,
+					activeTerminal.key,
+					path,
+					chatId || undefined
+				);
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : t('Preview failed');
@@ -293,20 +273,14 @@
 					{fileAudioUrl}
 					{filePdfData}
 					{fileSqliteData}
-					{fileDocxData}
+					{fileOfficeData}
 					{fileContent}
 					baseUrl={terminal?.url ?? ''}
 					apiKey={terminal?.key ?? ''}
-					{fileOfficeHtml}
-					{fileOfficeSlides}
-					{currentSlide}
 					{targetPage}
-					{excelSheetNames}
-					{selectedExcelSheet}
-					onSheetChange={loadExcelSheet}
 					readOnly={true}
 				/>
-				{#if !loading && fileImageUrl === null && fileVideoUrl === null && fileAudioUrl === null && filePdfData === null && fileSqliteData === null && fileDocxData === null && fileContent === null && fileOfficeHtml === null && fileOfficeSlides === null}
+				{#if !loading && fileImageUrl === null && fileVideoUrl === null && fileAudioUrl === null && filePdfData === null && fileSqliteData === null && fileOfficeData === null && fileContent === null}
 					<div
 						class="flex h-full items-center justify-center px-3 text-xs text-gray-500 dark:text-gray-400"
 					>

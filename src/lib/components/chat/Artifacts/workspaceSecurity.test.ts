@@ -18,19 +18,20 @@ describe('workspace security and configuration invariants', () => {
 	});
 
 	it('persists only real per-chat workspace objects', () => {
-		const artifacts = source('../Artifacts.svelte');
+		const workspace = source('./WorkspaceHost.svelte');
+		const session = source('./workspaceSession.ts');
 
-		expect(artifacts).toContain('open-webui.workspace.tabs.v');
-		expect(artifacts).toContain('closedWorkspaceContentIds');
-		expect(artifacts).toContain('workspaceContentOrder');
-		expect(artifacts).toContain('item !== WORKSPACE_LAUNCHER_ID');
-		expect(artifacts).toContain('workspaceOpenRequestId.subscribe');
-		expect(artifacts).toContain('workspaceRuntime.files ? openedFileContents : []');
-		expect(artifacts).toContain("console.warn('Unable to persist workspace tab state'");
+		expect(session).toContain('open-webui.workspace.tabs.v');
+		expect(session).toContain('item !== WORKSPACE_LAUNCHER_ID');
+		expect(session).toContain("console.warn('Unable to persist workspace tab state'");
+		expect(workspace).toContain('closedWorkspaceContentIds');
+		expect(workspace).toContain('workspaceContentOrder');
+		expect(workspace).toContain('workspaceOpenRequestId.subscribe');
+		expect(workspace).toContain('workspaceRuntime.files ? openedFileContents : []');
 	});
 
 	it('opens Pyodide Files once without reopening a manually closed tab', () => {
-		const artifacts = source('../Artifacts.svelte');
+		const artifacts = source('./WorkspaceHost.svelte');
 
 		expect(artifacts).toContain("workspaceRuntime.kind === 'pyodide'");
 		expect(artifacts).toContain('!workspaceRuntime.shell');
@@ -53,13 +54,16 @@ describe('workspace security and configuration invariants', () => {
 	});
 
 	it('marks chat cards as explicit workspace-open requests', () => {
+		const controller = source('../Messages/workspaceArtifactOpen.ts');
+		expect(controller).toContain('workspaceOpenRequestId.set');
+
 		for (const relativePath of [
 			'../Messages/CanvasActivity.svelte',
 			'../Messages/CanvasPreview.svelte',
 			'../Messages/WebPreviewActivity.svelte',
 			'../Messages/WebPreviewCard.svelte'
 		]) {
-			expect(source(relativePath)).toContain('workspaceOpenRequestId.set');
+			expect(source(relativePath)).toMatch(/open(Canvas|WebPreview)Artifact/);
 		}
 	});
 

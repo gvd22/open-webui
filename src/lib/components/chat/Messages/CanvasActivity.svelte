@@ -4,37 +4,13 @@
 	import type { i18n as i18nType } from 'i18next';
 
 	import { toast } from 'svelte-sonner';
-	import { selectTransientCanvasDocument } from '$lib/apis/chats';
-	import {
-		artifactCode,
-		artifactContents,
-		chatId,
-		showArtifacts,
-		showControls,
-		showEmbeds,
-		workspaceOpenRequestId
-	} from '$lib/stores';
 	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import {
-		generateCanvasTitle,
-		mergePersistedCanvasArtifact,
-		type CanvasNoteArtifact
-	} from '../Artifacts/canvas';
+	import { generateCanvasTitle, type CanvasNoteArtifact } from '../Artifacts/canvas';
+	import { openCanvasArtifact } from './workspaceArtifactOpen';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
-	type WorkspaceItem = {
-		canvasId?: string;
-		noteId?: string;
-		title?: string;
-		content?: string;
-		titleEdited?: boolean;
-		updatedAt?: number;
-		[key: string]: unknown;
-	};
-	const workspaceArtifacts = artifactContents as unknown as Writable<WorkspaceItem[] | null>;
-
 	export let name = '';
 	export let done = false;
 	export let artifact: CanvasNoteArtifact | undefined = undefined;
@@ -79,62 +55,9 @@
 	$: errorLabel = errorLabels[name] ?? errorLabels.canvas_update_document;
 	$: title = artifact ? generateCanvasTitle(artifact.content, artifact.title) : '';
 
-	const openCanvas = async () => {
-		if (!artifact) return;
-
-		const targetArtifact = artifact;
-		const targetChatId = $chatId;
-		const targetCanvasId = targetArtifact.canvasId;
-		const selectedId =
-			targetArtifact.canvasId || targetArtifact.noteId || targetArtifact.content;
-
-		if (targetChatId && targetCanvasId) {
-			try {
-				const document = await selectTransientCanvasDocument(
-					localStorage.token,
-					targetChatId,
-					targetCanvasId
-				);
-				if ($chatId !== targetChatId) return;
-
-				workspaceArtifacts.update((items) => {
-					let found = false;
-					const updatedItems = (items ?? []).map((item) => {
-						if (item?.canvasId !== targetCanvasId) {
-							return item;
-						}
-
-						found = true;
-						return mergePersistedCanvasArtifact(item as CanvasNoteArtifact, {
-							...document,
-							content_hash: document.contentHash
-						});
-					});
-
-					return found
-						? updatedItems
-						: [
-								...updatedItems,
-								mergePersistedCanvasArtifact(targetArtifact, {
-									...document,
-									content_hash: document.contentHash
-								})
-							];
-				});
-			} catch {
-				if ($chatId !== targetChatId) return;
-				toast.error($i18n.t('Document could not be opened'));
-				return;
-			}
-		}
-
-		if ($chatId !== targetChatId) return;
-		workspaceOpenRequestId.set(selectedId);
-		artifactCode.set(selectedId);
-		showEmbeds.set(false);
-		if (!$showArtifacts) showArtifacts.set(true);
-		if (!$showControls) showControls.set(true);
-	};
+	const openCanvas = () =>
+		artifact &&
+		openCanvasArtifact(artifact, () => toast.error($i18n.t('Document could not be opened')));
 </script>
 
 {#if artifact && done && !error}

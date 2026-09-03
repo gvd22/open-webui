@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { get, writable } from 'svelte/store';
+import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
 import {
+	createWorkspaceOutputCatalog,
 	createWorkspaceOutputFile,
 	createRuntimeWorkspaceOutputFile,
 	getWorkspaceOutputFilesFromHistory,
@@ -10,6 +13,34 @@ import {
 } from './workspaceOutputs';
 
 describe('workspace output catalog', () => {
+	it('keeps runtime output state outside Chat and applies explicit delete events', () => {
+		const files = writable<WorkspaceOutputFile[]>([]);
+		const catalog = createWorkspaceOutputCatalog(files);
+
+		expect(catalog.record('chat-1', '/mnt/uploads/report.pdf', { source: 'pyodide' })).toBe(true);
+		expect(get(files)).toEqual([
+			expect.objectContaining({ path: '/mnt/uploads/report.pdf', source: 'pyodide' })
+		]);
+
+		catalog.applyPyodideChange('chat-1', {
+			chatId: 'chat-1',
+			kind: 'deleted',
+			paths: ['/mnt/uploads/report.pdf']
+		});
+		expect(get(files)).toEqual([]);
+	});
+
+	it('ignores Pyodide events from another chat', () => {
+		const files = writable<WorkspaceOutputFile[]>([]);
+		const catalog = createWorkspaceOutputCatalog(files);
+
+		catalog.applyPyodideChange('chat-1', {
+			chatId: 'chat-2',
+			paths: ['/mnt/uploads/other.pdf']
+		});
+		expect(get(files)).toEqual([]);
+	});
+
 	it('accepts office outputs and rejects unsafe or unrelated paths', () => {
 		expect(isWorkspaceOutputPath('/mnt/uploads/report.pdf')).toBe(true);
 		expect(isWorkspaceOutputPath('/workspace/data.xlsx')).toBe(true);

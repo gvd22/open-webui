@@ -1,4 +1,6 @@
-import type { WorkspaceOutputFile } from '$lib/stores';
+import { get, type Writable } from 'svelte/store';
+
+import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
 
 export const WORKSPACE_OPEN_OUTPUT_EVENT = 'workspace:open-output';
 
@@ -166,12 +168,74 @@ export const readWorkspaceOutputFiles = (chatId: string): WorkspaceOutputFile[] 
 			[],
 			value.map((item) => createWorkspaceOutputFile(item?.path, item))
 		);
-	} catch {
+	} catch (error) {
+		console.warn('Unable to restore workspace output catalog', error);
 		return [];
 	}
 };
 
-export const writeWorkspaceOutputFiles = (chatId: string, files: WorkspaceOutputFile[]) => {
-	if (!chatId || typeof localStorage === 'undefined') return;
-	localStorage.setItem(workspaceOutputStorageKey(chatId), JSON.stringify(files.slice(0, 100)));
+export const writeWorkspaceOutputFiles = (
+	chatId: string,
+	files: WorkspaceOutputFile[]
+): boolean => {
+	if (!chatId || typeof localStorage === 'undefined') return false;
+	try {
+		localStorage.setItem(workspaceOutputStorageKey(chatId), JSON.stringify(files.slice(0, 100)));
+		return true;
+	} catch (error) {
+		console.warn('Unable to persist workspace output catalog', error);
+		return false;
+	}
+};
+
+export const createWorkspaceOutputCatalog = (files: Writable<WorkspaceOutputFile[]>) => {
+	let activeChatId = '';
+
+	const persist = (chatId: string, next: WorkspaceOutputFile[]) => {
+		files.set(next);
+		writeWorkspaceOutputFiles(chatId, next);
+	};
+	const record = (
+		chatId: string,
+		path: unknown,
+		options: { source: 'terminal' | 'pyodide'; terminalId?: string | null; page?: number | null }
+	) => {
+		const item = createWorkspaceOutputFile(path, options);
+		if (!item || !chatId) return false;
+		persist(chatId, mergeWorkspaceOutputFiles(get(files), [item]));
+		return true;
+	};
+
+	return {
+		sync(chatId: string, history: any) {
+			if (!chatId) {
+				activeChatId = '';
+				files.set([]);
+				return;
+			}
+			const current = activeChatId === chatId ? get(files) : readWorkspaceOutputFiles(chatId);
+			const merged = mergeWorkspaceOutputFiles(
+				current,
+				getWorkspaceOutputFilesFromHistory(history)
+			);
+			activeChatId = chatId;
+			persist(chatId, merged);
+		},
+
+		record,
+
+		applyPyodideChange(chatId: string, detail: any) {
+			if (!chatId || (detail?.chatId && detail.chatId !== chatId)) return;
+			const paths = Array.isArray(detail?.paths) ? detail.paths : [];
+			if (detail?.kind === 'deleted') {
+				const deleted = new Set(paths);
+				persist(
+					chatId,
+					get(files).filter((item) => item.source !== 'pyodide' || !deleted.has(item.path))
+				);
+				return;
+			}
+			for (const path of paths) record(chatId, path, { source: 'pyodide' });
+		}
+	};
 };
