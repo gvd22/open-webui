@@ -48,7 +48,6 @@
 		getVisibleWorkspaceContents,
 		moveWorkspaceContent,
 		orderWorkspaceContents,
-		resolveWorkspaceRuntime,
 		shouldShowWorkspaceTabs,
 		shouldResetWorkspaceForChatChange,
 		type WorkspaceContent,
@@ -59,7 +58,6 @@
 	export let overlay = false;
 	export let history: Record<string, any> | null = null;
 	export let showFiles = false;
-	export let codeInterpreterEnabled = false;
 
 	let artifactSourceContents: WorkspaceContent[] = [];
 	let openedFileContents: WorkspaceContent[] = [];
@@ -114,18 +112,12 @@
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
 	const MAX_OPEN_DOCUMENTS = 4;
-	$: workspaceRuntime = resolveWorkspaceRuntime(showFiles && codeInterpreterEnabled);
-	$: if (
-		workspaceRuntime.kind === 'pyodide' &&
-		workspaceRuntime.files &&
-		!filesOpened &&
-		!closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)
-	) {
+	$: if (showFiles && !filesOpened && !closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)) {
 		openWorkspaceFiles();
 	}
 	$: documentViewerEnabled = $config?.features?.enable_document_viewer === true;
 	$: {
-		const nextRuntimeKey = workspaceRuntime.kind;
+		const nextRuntimeKey = showFiles ? 'pyodide' : 'none';
 		if (nextRuntimeKey !== openedFileRuntimeKey) {
 			const previousRuntimeKey = openedFileRuntimeKey;
 			openedFileRuntimeKey = nextRuntimeKey;
@@ -235,7 +227,7 @@
 		const nextSourceContents = [
 			...(showFiles && filesOpened ? [buildWorkspaceFilesContent()] : []),
 			...artifactSourceContents,
-			...(workspaceRuntime.files ? openedFileContents : [])
+			...(showFiles ? openedFileContents : [])
 		];
 		sourceContents = orderWorkspaceContents(nextSourceContents, workspaceContentOrder);
 		const sourceIds = sourceContents.map((content, index) => getWorkspaceContentId(content, index));
@@ -267,10 +259,7 @@
 	}
 
 	function openWorkspaceFile(path: string, options: { page?: number | null } = {}): boolean {
-		if (
-			!workspaceRuntime.files ||
-			!getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)
-		) {
+		if (!showFiles || !getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)) {
 			return false;
 		}
 		const id = `workspace:file:${path}`;
@@ -493,7 +482,7 @@
 	}
 
 	$: {
-		(showFiles, codeInterpreterEnabled);
+		showFiles;
 		rebuildWorkspaceContents();
 	}
 </script>
@@ -646,10 +635,7 @@
 			<div class=" h-full flex flex-col">
 				{#if contents.length > 0}
 					<div class="relative max-w-full w-full h-full">
-						<WorkspaceDocumentPanels
-							{contents}
-							{selectedContentId}
-						/>
+						<WorkspaceDocumentPanels {contents} {selectedContentId} />
 						{#each contents as content, index (getWorkspaceContentId(content, index))}
 							{#if content.type !== 'workspace-file' && index !== selectedContentIdx}
 								<div
@@ -709,7 +695,7 @@
 										<WebPreviewRenderer
 											artifact={contents[selectedContentIdx] as any}
 											chatId={$chatId ?? ''}
-											codeInterpreterEnabled={showFiles && codeInterpreterEnabled}
+											pyodideFilesAvailable={showFiles}
 											iframeCsp={$config?.ui?.iframe_csp ?? ''}
 											sandboxAllowScripts={$settings?.iframeSandboxAllowScripts ?? true}
 											sandboxAllowDownloads={$settings?.iframeSandboxAllowDownloads ?? true}
@@ -718,14 +704,14 @@
 										/>
 									{/key}
 								{:else if contents[selectedContentIdx].type === 'workspace-files'}
-									{#if workspaceRuntime.kind === 'pyodide'}
+									{#if showFiles}
 										<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
 									{/if}
 								{/if}
 							</div>
 						{/if}
 					</div>
-			{/if}
+				{/if}
 			</div>
 		</div>
 	</div>

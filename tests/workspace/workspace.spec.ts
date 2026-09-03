@@ -261,6 +261,15 @@ test.describe('seeded workspace lifecycle', () => {
 	}) => {
 		await openSeededWorkspace(page, seeded);
 		await expectSingleArtifactCards(page);
+		const tabs = page.getByRole('tab');
+		await tabs.first().focus();
+		await page.keyboard.press('End');
+		await expect(tabs.last()).toBeFocused();
+		await page.keyboard.press('Home');
+		await expect(tabs.first()).toBeFocused();
+		const controlledPanelId = await tabs.first().getAttribute('aria-controls');
+		expect(controlledPanelId).toBeTruthy();
+		await expect(page.locator(`#${controlledPanelId}`)).toBeVisible();
 
 		await page.getByRole('tab', { name: 'E2E Canvas Alpha', exact: true }).click();
 		const canvasTitle = page.locator('#artifacts-container').getByLabel('Title');

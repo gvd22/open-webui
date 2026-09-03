@@ -36,34 +36,6 @@ export type WorkspaceModelFocus = {
 	id: string;
 };
 
-export type WorkspaceRuntime =
-	| {
-			kind: 'pyodide';
-			files: true;
-			writable: true;
-	  }
-	| {
-			kind: 'none';
-			files: false;
-			writable: false;
-	  };
-
-export const resolveWorkspaceRuntime = (pyodideEnabled: boolean): WorkspaceRuntime => {
-	if (pyodideEnabled) {
-		return {
-			kind: 'pyodide',
-			files: true,
-			writable: true
-		};
-	}
-
-	return {
-		kind: 'none',
-		files: false,
-		writable: false
-	};
-};
-
 export const WORKSPACE_FILES_ID = 'workspace:files';
 export const getWorkspaceFileId = (path: string) => `workspace:file:${path}`;
 

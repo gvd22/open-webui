@@ -18,11 +18,7 @@ const OUTPUT_EXTENSIONS = new Set([
 ]);
 
 export const isWorkspaceOutputPath = (path: unknown): path is string => {
-	if (
-		typeof path !== 'string' ||
-		!path.startsWith('/mnt/uploads/') ||
-		path.length > 1024
-	)
+	if (typeof path !== 'string' || !path.startsWith('/mnt/uploads/') || path.length > 1024)
 		return false;
 	if (/\p{Cc}/u.test(path)) return false;
 	const parts = path.split('/');
@@ -67,9 +63,7 @@ export const mergeWorkspaceOutputFiles = (
 export const normalizeWorkspaceOutputFiles = (value: unknown): WorkspaceOutputFile[] =>
 	mergeWorkspaceOutputFiles(
 		[],
-		(Array.isArray(value) ? value : []).map((item) =>
-			createWorkspaceOutputFile(item?.path, item)
-		)
+		(Array.isArray(value) ? value : []).map((item) => createWorkspaceOutputFile(item?.path, item))
 	);
 
 export const isKnownWorkspaceOutputPath = (files: WorkspaceOutputFile[], path: unknown) =>
@@ -77,16 +71,9 @@ export const isKnownWorkspaceOutputPath = (files: WorkspaceOutputFile[], path: u
 
 export const resolveWorkspaceOutputFile = (
 	files: WorkspaceOutputFile[],
-	path: unknown,
-	_runtime?: { kind: string }
+	path: unknown
 ): WorkspaceOutputFile | null =>
 	typeof path === 'string' ? (files.find((file) => file.path === path) ?? null) : null;
-
-export const createRuntimeWorkspaceOutputFile = (
-	path: unknown,
-	runtime: { kind: string }
-): WorkspaceOutputFile | null =>
-	runtime.kind === 'pyodide' ? createWorkspaceOutputFile(path) : null;
 
 type PersistMutation = (
 	chatId: string,

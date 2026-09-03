@@ -17,15 +17,18 @@
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import Refresh from '$lib/components/icons/Refresh.svelte';
 	import type { WebPreviewArtifact, WebPreviewFile } from './webPreview';
-	import { composeWebPreviewHtml, mergeLocalWebPreviewDraft, getWebPreviewExportPath } from './webPreview';
+	import {
+		composeWebPreviewHtml,
+		mergeLocalWebPreviewDraft,
+		getWebPreviewExportPath
+	} from './webPreview';
 	import { buildWebPreviewSandbox, resolveWebPreviewCsp } from './webPreviewSandbox';
-	import { resolveWorkspaceRuntime } from './workspace';
 	import { createSerializedSaveQueue, registerWorkspaceSaveBarrier } from './serializedSaveQueue';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	export let artifact: WebPreviewArtifact;
 	export let chatId = '';
-	export let codeInterpreterEnabled = false;
+	export let pyodideFilesAvailable = false;
 	export let iframeCsp = '';
 	export let sandboxAllowForms = false;
 	export let sandboxAllowScripts = true;
@@ -63,8 +66,6 @@
 		: files[entrypoint].mime !== 'text/html'
 			? $i18n.t('The preview entrypoint must be an HTML file')
 			: '';
-	$: workspaceRuntime = resolveWorkspaceRuntime(codeInterpreterEnabled);
-	$: filesAvailable = workspaceRuntime.writable;
 
 	$: if (artifact !== lastArtifact && (artifact.updatedAt ?? 0) >= lastUpdatedAt && !dirty) {
 		lastArtifact = artifact;
@@ -173,7 +174,8 @@
 						: item
 				)
 			);
-			if (snapshot.notifyExport) toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
+			if (snapshot.notifyExport)
+				toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
 		} catch (error: any) {
 			console.error('Unable to save Web Preview', error);
 			dirty = true;
@@ -216,11 +218,11 @@
 						)
 					);
 					saveFailed = false;
-					} catch (refreshError) {
-						console.error('Unable to reload conflicted Web Preview', refreshError);
-						toast.error($i18n.t('Preview changed elsewhere and could not be reloaded.'));
-						return;
-					}
+				} catch (refreshError) {
+					console.error('Unable to reload conflicted Web Preview', refreshError);
+					toast.error($i18n.t('Preview changed elsewhere and could not be reloaded.'));
+					return;
+				}
 				toast.warning($i18n.t('Preview changed elsewhere. The latest version was loaded.'));
 				return;
 			}
@@ -285,7 +287,12 @@
 	};
 
 	const exportToPyodide = async () => {
-		const base = getWebPreviewExportPath('/mnt/uploads', artifact.previewId, projectSlug(), exportedRuntime === 'pyodide' ? exportedPath : '');
+		const base = getWebPreviewExportPath(
+			'/mnt/uploads',
+			artifact.previewId,
+			projectSlug(),
+			exportedRuntime === 'pyodide' ? exportedPath : ''
+		);
 		await sendWorkerMessage({ type: 'fs:mkdir', path: '/mnt/uploads/previews' });
 		await sendWorkerMessage({ type: 'fs:mkdir', path: base });
 		const directories = new Set<string>();
@@ -310,7 +317,7 @@
 	};
 
 	const exportToFiles = async () => {
-		if (!filesAvailable || exporting) return;
+		if (!pyodideFilesAvailable || exporting) return;
 		exporting = true;
 		try {
 			const path = await exportToPyodide();
@@ -410,7 +417,7 @@
 				<Refresh className="size-4" />
 			</button>
 		</Tooltip>
-		{#if filesAvailable}
+		{#if pyodideFilesAvailable}
 			<Tooltip
 				content={exportedPath ? $i18n.t('Apply changes to Files') : $i18n.t('Save to Files')}
 			>

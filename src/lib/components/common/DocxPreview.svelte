@@ -4,7 +4,7 @@
 	import type { Readable } from 'svelte/store';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import { hardenDocumentLinks, validateDocxArchive } from './documentSecurity';
-	import DocumentZoomToolbar from './DocumentZoomToolbar.svelte';
+	import DocumentZoomControls from './DocumentZoomControls.svelte';
 	import {
 		clampDocumentZoom,
 		DOCUMENT_ZOOM_BUTTON_STEP,
@@ -267,16 +267,20 @@
 
 	{#if !loading && !error && data && !fallbackHtml}
 		<div class="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
-			<DocumentZoomToolbar
-				percent={zoomPercent}
-				maximum={DOCUMENT_ZOOM_MAX}
-				zoomOutLabel={$i18n.t('Zoom out')}
-				resetLabel={$i18n.t('Reset zoom')}
-				zoomInLabel={$i18n.t('Zoom in')}
-				onZoomOut={() => setZoom(zoomPercent - DOCUMENT_ZOOM_BUTTON_STEP)}
-				onReset={resetView}
-				onZoomIn={() => setZoom(zoomPercent + DOCUMENT_ZOOM_BUTTON_STEP)}
-			/>
+			<div
+				class="flex items-center gap-0.5 rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-gray-700/80 dark:bg-gray-850/95"
+			>
+				<DocumentZoomControls
+					percent={zoomPercent}
+					maximum={DOCUMENT_ZOOM_MAX}
+					zoomOutLabel={$i18n.t('Zoom out')}
+					resetLabel={$i18n.t('Reset zoom')}
+					zoomInLabel={$i18n.t('Zoom in')}
+					onZoomOut={() => setZoom(zoomPercent - DOCUMENT_ZOOM_BUTTON_STEP)}
+					onReset={resetView}
+					onZoomIn={() => setZoom(zoomPercent + DOCUMENT_ZOOM_BUTTON_STEP)}
+				/>
+			</div>
 		</div>
 	{/if}
 </div>

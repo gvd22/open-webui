@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
 import {
-	createRuntimeWorkspaceOutputFile,
 	createWorkspaceOutputCatalog,
 	createWorkspaceOutputFile,
 	isKnownWorkspaceOutputPath,
@@ -51,15 +50,11 @@ describe('chat-scoped Pyodide output catalog', () => {
 		]);
 	});
 
-	it('resolves only catalogued paths in the active Pyodide runtime', () => {
+	it('resolves only catalogued paths', () => {
 		const output = createWorkspaceOutputFile('/mnt/uploads/report.pdf')!;
 		expect(isKnownWorkspaceOutputPath([output], output.path)).toBe(true);
-		expect(resolveWorkspaceOutputFile([output], output.path, { kind: 'pyodide' })).toBe(output);
+		expect(resolveWorkspaceOutputFile([output], output.path)).toBe(output);
 		expect(resolveWorkspaceOutputFile([output], '/mnt/uploads/missing.pdf')).toBeNull();
-		expect(
-			createRuntimeWorkspaceOutputFile('/mnt/uploads/legacy.pptx', { kind: 'pyodide' })
-		).toEqual(expect.objectContaining({ source: 'pyodide' }));
-		expect(createRuntimeWorkspaceOutputFile('/workspace/legacy.pptx', { kind: 'none' })).toBeNull();
 	});
 
 	it('persists records and deletes while updating the UI optimistically', async () => {

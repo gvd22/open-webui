@@ -4,7 +4,6 @@
 	export let overlay = false;
 	export let history: Record<string, any> | null = null;
 	export let showFiles = false;
-	export let codeInterpreterEnabled = false;
 </script>
 
-<WorkspaceHost {overlay} {history} {showFiles} {codeInterpreterEnabled} on:close />
+<WorkspaceHost {overlay} {history} {showFiles} on:close />

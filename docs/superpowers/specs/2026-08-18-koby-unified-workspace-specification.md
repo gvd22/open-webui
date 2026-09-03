@@ -18,9 +18,8 @@ aber nicht zur aktuellen Abnahme. Der zuvor implementierte Terminal-Stand ist au
 ### Upgrade-Vertrag fuer Open WebUI 0.11.3
 
 Die Grundlage ist der exakte Upstream-Tag `v0.11.3`, nicht ein beweglicher `main`-Stand.
-Der zugehoerige Konfigurations- und Abnahmebericht ist
-[Workspace 0.11.3 Upgrade Acceptance](2026-09-01-workspace-v0113-upgrade-acceptance.md).
-Dieser Bericht unterscheidet nachgewiesenes Verhalten von noch offenen Abnahmen.
+Nachgewiesenes Verhalten wird durch die automatisierten Unit-, Viewer- und Workspace-Tests
+belegt; offene manuelle Abnahmen werden nicht als bestanden dokumentiert.
 
 - Native Tool-Freigaben und `ask_user` werden verwendet. Wenn Tool Permissions aktiv sind,
   verwenden neue Chats ohne explizite Wahl `ask`; bestehende explizite Entscheidungen und
@@ -56,17 +55,11 @@ Diese Spezifikation fasst die Entscheidungen fuer Canvas, Web Preview, Files, Te
 Browser, Dokumentanzeige und kuenftige Connector-Oberflaechen in einer gemeinsamen
 KOBY-Arbeitsflaeche zusammen.
 
-Sie ist bei Widerspruechen die massgebliche Quelle und ersetzt die ueberschneidenden
-Produktentscheidungen aus diesen frueheren Dokumenten:
-
-- `2026-08-03-koby-canvas-product-spec.md`
-- `2026-08-04-koby-unified-work-surface.md`
-- `2026-08-16-koby-document-viewer-support.md`
-- `2026-08-16-koby-document-viewer-production-readiness.md`
-- aeltere Canvas-Integrations-, Akzeptanz- und Arbeitsflaechenentwuerfe
-
-Die alten Dokumente bleiben als Entscheidungsverlauf erhalten. Neue Implementierungen,
-Reviews und Abnahmen muessen sich jedoch an diesem Dokument orientieren.
+Sie ist bei Widerspruechen die massgebliche Quelle und ersetzt aeltere Canvas-Integrations-,
+Akzeptanz-, Upgrade- und Arbeitsflaechenentwuerfe. Deren Entscheidungsverlauf bleibt in der
+Git-Historie erhalten. Die beiden Dokument-Viewer-Spezifikationen bleiben als vertiefende
+technische Vertraege bestehen; neue Implementierungen, Reviews und Abnahmen muessen sich an
+diesem Dokument orientieren.
 
 ## 2. Produktmodell
 

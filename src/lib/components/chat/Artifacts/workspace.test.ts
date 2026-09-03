@@ -18,7 +18,6 @@ import {
 	limitWorkspaceFileContents,
 	moveWorkspaceContent,
 	orderWorkspaceContents,
-	resolveWorkspaceRuntime,
 	shouldResetWorkspaceForChatChange,
 	shouldShowWorkspaceTabs,
 	upsertWorkspaceFileContent,
@@ -27,17 +26,7 @@ import {
 } from './workspace';
 
 describe('Pyodide workspace', () => {
-	it('exposes only Pyodide Files when the interpreter is available', () => {
-		expect(resolveWorkspaceRuntime(true)).toEqual({
-			kind: 'pyodide',
-			files: true,
-			writable: true
-		});
-		expect(resolveWorkspaceRuntime(false)).toEqual({
-			kind: 'none',
-			files: false,
-			writable: false
-		});
+	it('uses Files as the only runtime-backed workspace entry', () => {
 		expect(getDefaultWorkspaceContentId()).toBe(WORKSPACE_FILES_ID);
 		expect(buildWorkspaceFilesContent()).toMatchObject({
 			type: 'workspace-files',
@@ -168,11 +157,9 @@ describe('Pyodide workspace', () => {
 			files,
 			preview
 		]);
-		expect(moveWorkspaceContent([files, canvas, preview], WORKSPACE_FILES_ID, 'preview-1')).toEqual([
-			canvas,
-			preview,
-			files
-		]);
+		expect(moveWorkspaceContent([files, canvas, preview], WORKSPACE_FILES_ID, 'preview-1')).toEqual(
+			[canvas, preview, files]
+		);
 		expect(getVisibleWorkspaceContents([canvas, preview], new Set(['canvas-1']))).toEqual([
 			preview
 		]);

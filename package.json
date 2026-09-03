@@ -20,7 +20,7 @@
 		"cy:open": "cypress open",
 		"test:frontend": "vitest --passWithNoTests --exclude '{tests,scripts,.tmp}/**'",
 		"test:workspace:e2e": "playwright test --config playwright.workspace.config.ts",
-		"test:viewer": "vitest --run src/lib/components/chat/Artifacts/DocumentViewer src/lib/components/chat/Artifacts/workspace.test.ts src/lib/components/chat/Artifacts/workspaceDocumentViewerAccessibility.test.ts src/lib/components/common/pdfViewerAccessibility.test.ts src/lib/components/common/pdfViewerHelpers.test.ts src/lib/components/common/pdfViewerLifecycle.test.ts src/lib/pyodide/workspace.test.ts",
+		"test:viewer": "vitest --run src/lib/components/chat/Artifacts/DocumentViewer src/lib/components/chat/Artifacts/workspace.test.ts src/lib/components/chat/Artifacts/workspaceOutputs.test.ts src/lib/components/common/documentZoom.test.ts src/lib/pyodide/workspace.test.ts",
 		"test:viewer:e2e": "playwright test --project=chromium",
 		"test:viewer:e2e:matrix": "playwright test --project=chromium --project=firefox --project=webkit",
 		"test:viewer:build": "npm run test:viewer && npm run build",

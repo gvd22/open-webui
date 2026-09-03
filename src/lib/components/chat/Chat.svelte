@@ -70,7 +70,7 @@
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import {
 		createWorkspaceOutputCatalog,
-		createRuntimeWorkspaceOutputFile,
+		createWorkspaceOutputFile,
 		isKnownWorkspaceOutputPath,
 		resolveWorkspaceOutputFile,
 		WORKSPACE_OPEN_OUTPUT_EVENT
@@ -130,7 +130,6 @@
 	import {
 		getDefaultWorkspaceContentId,
 		getWorkspaceModelFocus,
-		resolveWorkspaceRuntime,
 		type WorkspaceModelFocus
 	} from './Artifacts/workspace';
 	import { flushWorkspaceSaveBarrier } from './Artifacts/serializedSaveQueue';
@@ -354,9 +353,8 @@
 		}) &&
 		Boolean($config?.features?.enable_code_interpreter) &&
 		($user?.role === 'admin' || Boolean($user?.permissions?.features?.code_interpreter));
-	$: workspaceRuntime = resolveWorkspaceRuntime(
-		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
-	);
+	$: pyodideFilesAvailable =
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter';
 	$: workspaceDefaultContentId = getDefaultWorkspaceContentId();
 	let webSearchActive = false;
 	let showWebSearchConfirm = false;
@@ -456,10 +454,7 @@
 	const syncWorkspaceOutputCatalog = (id: string) =>
 		workspaceOutputCatalog.sync(id, chat?.chat?._workspace_outputs);
 
-	const recordWorkspaceOutput = (
-		path: unknown,
-		options: { page?: number | null } = {}
-	) => {
+	const recordWorkspaceOutput = (path: unknown, options: { page?: number | null } = {}) => {
 		workspaceOutputCatalog.record($chatId ?? '', path, options);
 	};
 
@@ -1028,7 +1023,7 @@
 	};
 
 	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
-		if (workspaceRuntime.kind !== 'pyodide') {
+		if (!pyodideFilesAvailable) {
 			toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
 			return;
 		}
@@ -1038,8 +1033,8 @@
 	const handleWorkspaceOutputOpenRequest = (event: Event) => {
 		const path = (event as CustomEvent)?.detail?.path;
 		const file =
-			resolveWorkspaceOutputFile(get(workspaceOutputFiles), path, workspaceRuntime) ??
-			createRuntimeWorkspaceOutputFile(path, workspaceRuntime);
+			resolveWorkspaceOutputFile(get(workspaceOutputFiles), path) ??
+			(pyodideFilesAvailable ? createWorkspaceOutputFile(path) : null);
 		if (file && !isKnownWorkspaceOutputPath(get(workspaceOutputFiles), file.path)) {
 			recordWorkspaceOutput(file.path, { page: file.page });
 		}
@@ -1139,7 +1134,6 @@
 						webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
 					}
 				}
-
 			}
 		} finally {
 			settingDefaults = false;

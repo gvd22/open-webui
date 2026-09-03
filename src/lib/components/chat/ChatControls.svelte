@@ -14,11 +14,7 @@
 	import ResizableSidePanel from '../common/ResizableSidePanel.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
-	import {
-		getDefaultWorkspaceContentId,
-		resolveWorkspaceRuntime,
-		WORKSPACE_FILES_ID
-	} from './Artifacts/workspace';
+	import { getDefaultWorkspaceContentId, WORKSPACE_FILES_ID } from './Artifacts/workspace';
 
 	export let history: Record<string, any> | null = null;
 	export let models: any[] = [];
@@ -37,9 +33,8 @@
 	let largeScreen = false;
 	let resizing = false;
 	let controlsWidth = 600;
-	$: workspaceRuntime = resolveWorkspaceRuntime(
-		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter'
-	);
+	$: pyodideFilesAvailable =
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter';
 
 	const openWorkspaceItem = (id: string) => {
 		artifactCode.set(id);
@@ -61,30 +56,33 @@
 
 	onMount(() => {
 		const mediaQuery = window.matchMedia('(min-width: 1024px)');
-		const update = () => { largeScreen = mediaQuery.matches; };
+		const update = () => {
+			largeScreen = mediaQuery.matches;
+		};
 		mediaQuery.addEventListener('change', update);
 		update();
 		return () => {
 			mediaQuery.removeEventListener('change', update);
 		};
 	});
-
 </script>
 
 {#snippet content()}
 	<div class="relative h-full min-h-0 overflow-hidden" id="controls-container">
 		{#if $showCallOverlay}
 			<CallOverlay
-				bind:files {submitPrompt} {stopResponse} {modelId} {chatId} {eventTarget}
+				bind:files
+				{submitPrompt}
+				{stopResponse}
+				{modelId}
+				{chatId}
+				{eventTarget}
 				on:close={closeHandler}
 			/>
 		{:else if $showEmbeds}
 			<Embeds overlay={resizing} />
 		{:else}
-			<Artifacts
-				{history} overlay={resizing} showFiles={workspaceRuntime.files}
-				{codeInterpreterEnabled}
-			/>
+			<Artifacts {history} overlay={resizing} showFiles={pyodideFilesAvailable} />
 		{/if}
 	</div>
 {/snippet}
@@ -92,7 +90,8 @@
 {#if !largeScreen}
 	{#if $showControls}
 		<Drawer
-			show={$showControls} onClose={closeHandler}
+			show={$showControls}
+			onClose={closeHandler}
 			className="min-h-[100dvh] !bg-white dark:!bg-gray-850"
 		>
 			<div class="h-[100dvh]">{@render content()}</div>
@@ -100,10 +99,15 @@
 	{/if}
 {:else}
 	<ResizableSidePanel
-		open={$showControls} bind:width={controlsWidth} bind:isResizing={resizing}
+		open={$showControls}
+		bind:width={controlsWidth}
+		bind:isResizing={resizing}
 		side="right"
-		minWidth={350} minSiblingWidth={360} closeOnDragBelowMinWidth
-		onClose={closeHandler} storageKey="chatControlsSize"
+		minWidth={350}
+		minSiblingWidth={360}
+		closeOnDragBelowMinWidth
+		onClose={closeHandler}
+		storageKey="chatControlsSize"
 		className="h-full z-10 bg-white dark:bg-gray-900"
 	>
 		{@render content()}
