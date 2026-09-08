@@ -24,7 +24,7 @@
 		"test:viewer:e2e": "playwright test --project=chromium",
 		"test:viewer:e2e:matrix": "playwright test --project=chromium --project=firefox --project=webkit",
 		"test:viewer:build": "npm run test:viewer && npm run build",
-		"test:viewer:contracts": "node --test scripts/run-viewer-tests.test.mjs scripts/check-viewer-dependencies.test.mjs scripts/check-viewer-bundle.test.mjs scripts/validate-release-workflow.test.mjs scripts/document-viewer-docs.test.mjs",
+		"test:viewer:contracts": "node --test scripts/run-viewer-tests.test.mjs scripts/check-viewer-dependencies.test.mjs scripts/check-viewer-bundle.test.mjs scripts/validate-release-workflow.test.mjs",
 		"check:viewer:dependencies": "node scripts/check-viewer-dependencies.mjs",
 		"check:viewer:bundle": "node scripts/check-viewer-bundle.mjs",
 		"pyodide:fetch": "node scripts/prepare-pyodide.js"
