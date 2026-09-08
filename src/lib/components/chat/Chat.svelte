@@ -71,7 +71,7 @@
 	import {
 		createWorkspaceOutputCatalog,
 		createWorkspaceOutputFile,
-		isKnownWorkspaceOutputPath,
+		reassignWorkspaceOutputMessageFiles,
 		resolveWorkspaceOutputFile,
 		WORKSPACE_OPEN_OUTPUT_EVENT
 	} from './Artifacts/workspaceOutputs';
@@ -116,6 +116,10 @@
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
+	import {
+		createWorkspaceOutputPersistence,
+		type UploadedWorkspaceFile
+	} from './Artifacts/workspaceOutputPersistence';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { updateWorkspaceOutputs } from '$lib/apis/artifacts';
 	import { getFunctions } from '$lib/apis/functions';
@@ -129,6 +133,7 @@
 	import ChatControls from './ChatControls.svelte';
 	import {
 		getDefaultWorkspaceContentId,
+		getWorkspaceDocumentFormat,
 		getWorkspaceModelFocus,
 		type WorkspaceModelFocus
 	} from './Artifacts/workspace';
@@ -232,7 +237,7 @@
 
 	$: {
 		const modelSearchParam =
-			$page.url.searchParams.get('models') || $page.url.searchParams.get('model');
+			$page?.url?.searchParams.get('models') || $page?.url?.searchParams.get('model');
 
 		if (
 			chatIdProp === '' &&
@@ -454,14 +459,45 @@
 	const syncWorkspaceOutputCatalog = (id: string) =>
 		workspaceOutputCatalog.sync(id, chat?.chat?._workspace_outputs);
 
-	const recordWorkspaceOutput = (path: unknown, options: { page?: number | null } = {}) => {
-		workspaceOutputCatalog.record($chatId ?? '', path, options);
+	const addOutputFileReference = (
+		file: WorkspaceOutputFile,
+		uploadedFile: UploadedWorkspaceFile
+	) => {
+		const messageId = file.messageId;
+		const reference = {
+			type: 'file',
+			id: uploadedFile.id,
+			url: uploadedFile.id,
+			name: file.name,
+			content_type: file.contentType,
+			size: file.size,
+			status: 'uploaded',
+			source: 'workspace-output',
+			workspace_path: file.path,
+			origin_chat_id: file.originChatId,
+			...(messageId ? { origin_message_id: messageId } : {})
+		};
+		chatFiles = [
+			...chatFiles.filter(
+				(item) => item?.source !== 'workspace-output' || item?.workspace_path !== file.path
+			),
+			reference
+		];
+		history = {
+			...history,
+			messages: reassignWorkspaceOutputMessageFiles(
+				history.messages,
+				file.path,
+				messageId,
+				reference
+			)
+		};
 	};
 
-	const handlePyodideFilesChanged = (event: Event) => {
-		const detail = (event as CustomEvent)?.detail ?? {};
-		workspaceOutputCatalog.applyPyodideChange($chatId ?? '', detail);
-	};
+	const { schedule: schedulePyodideOutputSnapshot, handleChange: handlePyodideFilesChanged } =
+		createWorkspaceOutputPersistence(workspaceOutputCatalog, addOutputFileReference, () =>
+			toast.error($i18n.t('Output could not be saved. It remains available in Files.'))
+		);
 
 	let taskIds = null;
 
@@ -1023,20 +1059,45 @@
 	};
 
 	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
-		if (!pyodideFilesAvailable) {
+		const viewerEnabled = $config?.features?.enable_document_viewer === true;
+		if ((!viewerEnabled || !getWorkspaceDocumentFormat(file.path)) && file.fileId) {
+			window.open(
+				`${WEBUI_API_BASE_URL}/files/${encodeURIComponent(file.fileId)}/content`,
+				'_blank',
+				'noopener,noreferrer'
+			);
+			return;
+		}
+		if (!file.fileId && !pyodideFilesAvailable) {
 			toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
 			return;
 		}
-		displayFileHandler(file.path, { showControls, showFileNavPath }, { page: file.page });
+		displayFileHandler(
+			file.path,
+			{ showControls, showFileNavPath, showArtifacts },
+			{ page: file.page, fileId: file.fileId, chatId: $chatId }
+		);
 	};
 
 	const handleWorkspaceOutputOpenRequest = (event: Event) => {
-		const path = (event as CustomEvent)?.detail?.path;
+		const detail = (event as CustomEvent)?.detail;
+		const path = detail?.path;
+		const knownFile = resolveWorkspaceOutputFile(get(workspaceOutputFiles), path);
 		const file =
-			resolveWorkspaceOutputFile(get(workspaceOutputFiles), path) ??
-			(pyodideFilesAvailable ? createWorkspaceOutputFile(path) : null);
-		if (file && !isKnownWorkspaceOutputPath(get(workspaceOutputFiles), file.path)) {
-			recordWorkspaceOutput(file.path, { page: file.page });
+			createWorkspaceOutputFile(path, {
+				...knownFile,
+				fileId: detail?.fileId ?? knownFile?.fileId,
+				contentType: detail?.contentType ?? knownFile?.contentType,
+				size: detail?.size ?? knownFile?.size
+			}) ?? (pyodideFilesAvailable ? createWorkspaceOutputFile(path) : null);
+		if (
+			file &&
+			!file.fileId &&
+			$chatId &&
+			!isTemporaryChatId($chatId) &&
+			($user?.role === 'admin' || ($user?.permissions?.chat?.file_upload ?? true))
+		) {
+			schedulePyodideOutputSnapshot($chatId, file.path);
 		}
 		if (file) openWorkspaceOutputFile(file);
 	};
@@ -2036,6 +2097,7 @@
 
 	const initNewChat = async () => {
 		console.log('initNewChat');
+		const pageUrl = $page?.url ?? new URL(window.location.href);
 		resetWebSearchConfirmation();
 		knownWebPreviewIds = new Set();
 		workspaceHydrationKey = '';
@@ -2087,10 +2149,10 @@
 			}
 		};
 
-		if ($page.url.searchParams.get('models') || $page.url.searchParams.get('model')) {
+		if (pageUrl.searchParams.get('models') || pageUrl.searchParams.get('model')) {
 			const urlModels = (
-				$page.url.searchParams.get('models') ||
-				$page.url.searchParams.get('model') ||
+				pageUrl.searchParams.get('models') ||
+				pageUrl.searchParams.get('model') ||
 				''
 			)?.split(',');
 
@@ -2160,7 +2222,7 @@
 		await showCallOverlay.set(false);
 		await showArtifacts.set(false);
 
-		if (!embedded && $page.url.pathname.includes('/c/')) {
+		if (!embedded && pageUrl.pathname.includes('/c/')) {
 			window.history.replaceState(history.state, '', `/`);
 		}
 
@@ -2183,30 +2245,30 @@
 		taskIds = null;
 		chatTasks = [];
 
-		if ($page.url.searchParams.get('youtube')) {
-			await uploadWeb(`https://www.youtube.com/watch?v=${$page.url.searchParams.get('youtube')}`);
+		if (pageUrl.searchParams.get('youtube')) {
+			await uploadWeb(`https://www.youtube.com/watch?v=${pageUrl.searchParams.get('youtube')}`);
 		}
 
-		if ($page.url.searchParams.get('load-url')) {
-			await uploadWeb($page.url.searchParams.get('load-url'));
+		if (pageUrl.searchParams.get('load-url')) {
+			await uploadWeb(pageUrl.searchParams.get('load-url'));
 		}
 
-		if ($page.url.searchParams.get('web-search') === 'true') {
+		if (pageUrl.searchParams.get('web-search') === 'true') {
 			webSearchEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('image-generation') === 'true') {
+		if (pageUrl.searchParams.get('image-generation') === 'true') {
 			imageGenerationEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('tools')) {
-			selectedToolIds = $page.url.searchParams
+		if (pageUrl.searchParams.get('tools')) {
+			selectedToolIds = pageUrl.searchParams
 				.get('tools')
 				?.split(',')
 				.map((id) => id.trim())
 				.filter((id) => id);
-		} else if ($page.url.searchParams.get('tool-ids')) {
-			selectedToolIds = $page.url.searchParams
+		} else if (pageUrl.searchParams.get('tool-ids')) {
+			selectedToolIds = pageUrl.searchParams
 				.get('tool-ids')
 				?.split(',')
 				.map((id) => id.trim())
@@ -2222,7 +2284,7 @@
 			}
 		}
 
-		if ($page.url.searchParams.get('call') === 'true') {
+		if (pageUrl.searchParams.get('call') === 'true') {
 			openCallOverlay();
 		}
 
@@ -2259,12 +2321,12 @@
 					submitHandler(query || '');
 				}
 			}
-		} else if ($page.url.searchParams.get('q')) {
-			const q = $page.url.searchParams.get('q') ?? '';
+		} else if (pageUrl.searchParams.get('q')) {
+			const q = pageUrl.searchParams.get('q') ?? '';
 			messageInput?.setText(q);
 
 			if (q) {
-				if (($page.url.searchParams.get('submit') ?? 'true') === 'true') {
+				if ((pageUrl.searchParams.get('submit') ?? 'true') === 'true') {
 					await tick();
 					submitHandler(q);
 				}
@@ -2933,7 +2995,9 @@
 		inputFiles,
 		workspaceFocus: WorkspaceModelFocus | undefined = getCurrentWorkspaceFocus()
 	) => {
-		const workspaceSaved = await flushWorkspaceSaveBarrier(workspaceFocus);
+		const workspaceSaved = await flushWorkspaceSaveBarrier(
+			workspaceFocus && $chatId ? { chatId: $chatId, ...workspaceFocus } : undefined
+		);
 		if (!workspaceSaved) {
 			toast.warning(
 				$i18n.t('The open workspace item changed elsewhere. Review it before sending.')
@@ -3514,6 +3578,7 @@
 
 		// Filter chatFiles to only include files that are in the chatMessageFiles
 		chatFiles = chatFiles.filter((item) => {
+			if (item?.source === 'workspace-output') return true;
 			const fileExists = chatMessageFiles.some((messageFile) => messageFile.id === item.id);
 			return fileExists;
 		});
@@ -4723,22 +4788,11 @@
 				{#if !embedded}
 					<ChatControls
 						bind:history
-						bind:chatFiles
-						bind:params
 						bind:files
 						chatId={$chatId}
-						chatUser={chatOwner}
 						modelId={selectedModelIds?.at(0) ?? null}
-						models={selectedModelIds.reduce((a, e, i, arr) => {
-							const model = $models.find((m) => m.id === e);
-							if (model) {
-								return [...a, model];
-							}
-							return a;
-						}, [])}
 						submitPrompt={submitHandler}
 						{stopResponse}
-						{showMessage}
 						{eventTarget}
 						{codeInterpreterEnabled}
 					/>

@@ -6,21 +6,28 @@ import {
 	normalizePyodideReadError,
 	readPyodideWorkerFile
 } from './pyodideFileRead';
+import { PYODIDE_QUEUE_TIMEOUT_MS } from '$lib/pyodide/runtimeTimeouts';
 
 const createWorker = () => {
-	const listeners = new Set<(event: MessageEvent) => void>();
+	const listeners = {
+		message: new Set<(event: MessageEvent) => void>(),
+		error: new Set<(event: ErrorEvent) => void>()
+	};
 	const worker = {
-		addEventListener: vi.fn((_type: 'message', listener: (event: MessageEvent) => void) => {
-			listeners.add(listener);
+		addEventListener: vi.fn((type: 'message' | 'error', listener: (event: any) => void) => {
+			listeners[type].add(listener);
 		}),
-		removeEventListener: vi.fn((_type: 'message', listener: (event: MessageEvent) => void) => {
-			listeners.delete(listener);
+		removeEventListener: vi.fn((type: 'message' | 'error', listener: (event: any) => void) => {
+			listeners[type].delete(listener);
 		}),
 		postMessage: vi.fn()
 	};
 	return {
 		worker,
-		emit: (data: unknown) => listeners.forEach((listener) => listener({ data } as MessageEvent))
+		emit: (data: unknown) =>
+			listeners.message.forEach((listener) => listener({ data } as MessageEvent)),
+		fail: (message: string) =>
+			listeners.error.forEach((listener) => listener({ message } as ErrorEvent))
 	};
 };
 
@@ -39,10 +46,10 @@ describe('readPyodideWorkerFile', () => {
 		controller.abort();
 
 		await expect(read).rejects.toMatchObject({ name: 'AbortError' });
-		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 		expect(vi.getTimerCount()).toBe(0);
 		emit({ id, data: new ArrayBuffer(8) });
-		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 	});
 
 	it('cleans up only once when a worker reply wins the race', async () => {
@@ -54,12 +61,48 @@ describe('readPyodideWorkerFile', () => {
 
 		const data = new ArrayBuffer(3);
 		emit({ id, data });
-		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 
 		await expect(read).resolves.toBe(data);
 		controller.abort();
-		vi.advanceTimersByTime(30000);
-		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(PYODIDE_QUEUE_TIMEOUT_MS);
+		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
+	});
+
+	it('rejects immediately and cleans up when the worker crashes', async () => {
+		vi.useFakeTimers();
+		const { worker, fail } = createWorker();
+		const read = readPyodideWorkerFile(
+			worker,
+			'/workspace/deck.pptx',
+			1024,
+			new AbortController().signal
+		);
+
+		fail('Worker crashed');
+
+		await expect(read).rejects.toThrow('Worker crashed');
+		expect(vi.getTimerCount()).toBe(0);
+		expect(worker.removeEventListener).toHaveBeenCalledWith('message', expect.any(Function));
+		expect(worker.removeEventListener).toHaveBeenCalledWith('error', expect.any(Function));
+	});
+
+	it('ignores worker progress until the file response arrives', async () => {
+		const { worker, emit } = createWorker();
+		const read = readPyodideWorkerFile(
+			worker,
+			'/workspace/deck.pptx',
+			1024,
+			new AbortController().signal
+		);
+		const [[{ id }]] = worker.postMessage.mock.calls;
+
+		emit({ id, type: 'pyodide:progress', stage: 'request-started' });
+		expect(worker.removeEventListener).not.toHaveBeenCalled();
+
+		const data = new ArrayBuffer(3);
+		emit({ id, type: 'fs:read', data });
+		await expect(read).resolves.toBe(data);
 	});
 
 	it('cleans up a timed-out read and rejects it once', async () => {
@@ -72,10 +115,10 @@ describe('readPyodideWorkerFile', () => {
 			new AbortController().signal
 		);
 
-		vi.advanceTimersByTime(30000);
+		vi.advanceTimersByTime(PYODIDE_QUEUE_TIMEOUT_MS);
 
 		await expect(read).rejects.toThrow('File request timed out');
-		expect(worker.removeEventListener).toHaveBeenCalledTimes(1);
+		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 	});
 
 	it('normalizes the worker size-limit error to the viewer error code', () => {

@@ -116,31 +116,43 @@
 	};
 
 	const saveTransientCanvas = async (nextSave: {
+		targetChatId: string;
+		targetCanvasId: string;
 		title: string;
 		content: string;
 		titleEdited: boolean;
 		expectedUpdatedAt?: number;
 		expectedContentHash?: string;
 	}) => {
-		if (!chatId || !canvasId) {
+		if (!nextSave.targetChatId || !nextSave.targetCanvasId) {
 			return;
 		}
 
 		try {
 			const document = await runWorkspaceOptimisticSave(
-				{ kind: 'canvas', id: canvasId },
+				{
+					chatId: nextSave.targetChatId,
+					kind: 'canvas',
+					id: nextSave.targetCanvasId
+				},
 				{ updatedAt: nextSave.expectedUpdatedAt, contentHash: nextSave.expectedContentHash },
 				async (version) => {
-					const saved = await updateTransientCanvasDocument(localStorage.token, chatId, canvasId, {
-						title: nextSave.title || generateCanvasTitle(nextSave.content, title),
-						content: nextSave.content,
-						title_edited: nextSave.titleEdited,
-						expected_updated_at: version.updatedAt ?? null,
-						expected_content_hash: version.contentHash ?? null
-					});
+					const saved = await updateTransientCanvasDocument(
+						localStorage.token,
+						nextSave.targetChatId,
+						nextSave.targetCanvasId,
+						{
+							title: nextSave.title || generateCanvasTitle(nextSave.content, title),
+							content: nextSave.content,
+							title_edited: nextSave.titleEdited,
+							expected_updated_at: version.updatedAt ?? null,
+							expected_content_hash: version.contentHash ?? null
+						}
+					);
 					return { ...saved, updatedAt: saved.updated_at };
 				}
 			);
+			if (chatId !== nextSave.targetChatId || canvasId !== nextSave.targetCanvasId) return;
 			updateCanvasState({
 				updatedAt: document.updated_at,
 				contentHash: document.contentHash,
@@ -148,6 +160,7 @@
 			});
 			transientSaveError = false;
 		} catch (error: any) {
+			if (chatId !== nextSave.targetChatId || canvasId !== nextSave.targetCanvasId) return;
 			transientSaveError = true;
 			if (error?.status === 409) {
 				try {
@@ -168,15 +181,15 @@
 						contentHash: document.contentHash
 					});
 					resetWorkspaceSaveVersion(
-						{ kind: 'canvas', id: canvasId },
+						{ chatId: nextSave.targetChatId, kind: 'canvas', id: nextSave.targetCanvasId },
 						{ updatedAt: document.updated_at, contentHash: document.contentHash }
 					);
 					transientSaveError = false;
-					} catch (refreshError) {
-						console.error('Unable to reload conflicted Canvas', refreshError);
-						toast.error($i18n.t('Canvas changed elsewhere and could not be reloaded.'));
-						return;
-					}
+				} catch (refreshError) {
+					console.error('Unable to reload conflicted Canvas', refreshError);
+					toast.error($i18n.t('Canvas changed elsewhere and could not be reloaded.'));
+					return;
+				}
 				toast.warning($i18n.t('Canvas changed elsewhere. The latest version was loaded.'));
 				return;
 			}
@@ -193,6 +206,8 @@
 			(item) => item?.canvasId === canvasId
 		);
 		transientSaveQueue.enqueue({
+			targetChatId: chatId,
+			targetCanvasId: canvasId,
 			title: nextTitle,
 			content: nextContent,
 			titleEdited,
@@ -203,7 +218,7 @@
 
 	onMount(() => {
 		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: canvasId },
+			{ chatId, kind: 'canvas', id: canvasId },
 			async () => {
 				await transientSaveQueue.flush();
 				return !transientSaveError;

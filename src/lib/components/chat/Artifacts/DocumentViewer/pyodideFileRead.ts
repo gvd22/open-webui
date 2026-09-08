@@ -1,6 +1,8 @@
+import { getPyodideRequestTimeout } from '$lib/pyodide/runtimeTimeouts';
+
 type PyodideFileWorker = {
-	addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void;
-	removeEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void;
+	addEventListener: (type: 'message' | 'error', listener: (event: any) => void) => void;
+	removeEventListener: (type: 'message' | 'error', listener: (event: any) => void) => void;
 	postMessage: (message: { type: 'fs:read'; path: string; id: string; maxBytes: number }) => void;
 };
 
@@ -35,11 +37,18 @@ export const readPyodideWorkerFile = (
 
 		let settled = false;
 		let timeout: ReturnType<typeof setTimeout> | null = null;
+		const armTimeout = (milliseconds: number) => {
+			if (timeout !== null) globalThis.clearTimeout(timeout);
+			timeout = globalThis.setTimeout(() => {
+				if (cleanup()) reject(new Error('File request timed out'));
+			}, milliseconds);
+		};
 		const cleanup = () => {
 			if (settled) return false;
 			settled = true;
 			if (timeout !== null) globalThis.clearTimeout(timeout);
 			worker.removeEventListener('message', handler);
+			worker.removeEventListener('error', workerError);
 			signal.removeEventListener('abort', abort);
 			return true;
 		};
@@ -47,7 +56,12 @@ export const readPyodideWorkerFile = (
 			if (cleanup()) reject(createAbortError());
 		};
 		const handler = (event: MessageEvent) => {
-			if (event.data?.id !== id || !cleanup()) return;
+			if (event.data?.id !== id) return;
+			if (event.data?.type === 'pyodide:progress') {
+				armTimeout(getPyodideRequestTimeout(event.data.stage));
+				return;
+			}
+			if (!cleanup()) return;
 			if (event.data?.error) {
 				reject(normalizePyodideReadError(event.data.error));
 				return;
@@ -60,12 +74,14 @@ export const readPyodideWorkerFile = (
 				);
 			} else reject(new Error('File data was not returned'));
 		};
+		const workerError = (event: ErrorEvent) => {
+			if (cleanup()) reject(event.error || new Error(event.message || 'Pyodide worker failed'));
+		};
 
 		worker.addEventListener('message', handler);
+		worker.addEventListener('error', workerError);
 		signal.addEventListener('abort', abort, { once: true });
-		timeout = globalThis.setTimeout(() => {
-			if (cleanup()) reject(new Error('File request timed out'));
-		}, 30000);
+		armTimeout(getPyodideRequestTimeout('request-queued'));
 		try {
 			worker.postMessage({ type: 'fs:read', path, id, maxBytes });
 		} catch (cause) {

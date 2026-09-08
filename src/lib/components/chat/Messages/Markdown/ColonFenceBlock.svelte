@@ -9,6 +9,8 @@
 	import DocumentDuplicate from '$lib/components/icons/DocumentDuplicate.svelte';
 
 	export let id: string = '';
+	export let chatId = '';
+	export let messageId = '';
 	export let token: any;
 	export let tokenIdx: number = 0;
 
@@ -78,6 +80,8 @@
 	<div class="prose-sm" dir="auto">
 		<MarkdownTokens
 			id={`${id}-${tokenIdx}-cf`}
+			{chatId}
+			{messageId}
 			tokens={token.tokens}
 			{done}
 			{editCodeBlock}

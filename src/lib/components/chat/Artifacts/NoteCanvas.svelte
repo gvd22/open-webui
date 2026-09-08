@@ -91,19 +91,24 @@
 	};
 
 	const saveCanvasContext = async (documentToSave: {
+		targetChatId: string;
 		canvasId: string;
 		title: string;
 		content: string;
 		expectedUpdatedAt?: number;
 		expectedContentHash?: string;
 	}) => {
-		if (!chatId || !documentToSave.canvasId) {
+		if (!documentToSave.targetChatId || !documentToSave.canvasId) {
 			return;
 		}
 
 		try {
 			const document = await runWorkspaceOptimisticSave(
-				{ kind: 'canvas', id: documentToSave.canvasId },
+				{
+					chatId: documentToSave.targetChatId,
+					kind: 'canvas',
+					id: documentToSave.canvasId
+				},
 				{
 					updatedAt: documentToSave.expectedUpdatedAt,
 					contentHash: documentToSave.expectedContentHash
@@ -111,7 +116,7 @@
 				async (version) => {
 					const saved = await updateTransientCanvasDocument(
 						localStorage.token,
-						chatId,
+						documentToSave.targetChatId,
 						documentToSave.canvasId,
 						{
 							title: documentToSave.title,
@@ -124,6 +129,7 @@
 					return { ...saved, updatedAt: saved.updated_at };
 				}
 			);
+			if (chatId !== documentToSave.targetChatId || canvasId !== documentToSave.canvasId) return;
 			(artifactContents as any).update((items: any[]) =>
 				(items ?? []).map((item) =>
 					item?.canvasId === documentToSave.canvasId
@@ -140,12 +146,13 @@
 			);
 			saveConflict = false;
 		} catch (error: any) {
+			if (chatId !== documentToSave.targetChatId || canvasId !== documentToSave.canvasId) return;
 			saveConflict = true;
 			if (error?.status === 409) {
 				try {
 					const document = await selectTransientCanvasDocument(
 						localStorage.token,
-						chatId,
+						documentToSave.targetChatId,
 						documentToSave.canvasId
 					);
 					linkedTitle = document.title ?? linkedTitle;
@@ -164,7 +171,11 @@
 						)
 					);
 					resetWorkspaceSaveVersion(
-						{ kind: 'canvas', id: documentToSave.canvasId },
+						{
+							chatId: documentToSave.targetChatId,
+							kind: 'canvas',
+							id: documentToSave.canvasId
+						},
 						{ updatedAt: document.updated_at, contentHash: document.contentHash }
 					);
 					saveConflict = false;
@@ -187,6 +198,7 @@
 			(item) => item?.canvasId === canvasId
 		);
 		workspaceSaveQueue.enqueue({
+			targetChatId: chatId,
 			canvasId,
 			title: linkedTitle,
 			content: linkedContent,
@@ -233,7 +245,7 @@
 
 	onMount(() => {
 		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: canvasId },
+			{ chatId, kind: 'canvas', id: canvasId },
 			async () => {
 				await workspaceSaveQueue.flush();
 				return !saveConflict;

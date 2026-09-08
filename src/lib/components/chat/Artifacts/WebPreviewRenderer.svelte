@@ -7,6 +7,7 @@
 
 	import { selectTransientWebPreview, updateTransientWebPreview } from '$lib/apis/chats';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
 	import { artifactContents, pyodideWorker } from '$lib/stores';
 	import { injectCsp } from '$lib/utils/csp';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -81,6 +82,8 @@
 	}
 
 	type PreviewSaveSnapshot = {
+		targetChatId: string;
+		targetPreviewId: string;
 		title: string;
 		entrypoint: string;
 		files: Record<string, WebPreviewFile>;
@@ -106,6 +109,8 @@
 		path: string;
 		runtime: string;
 	}): PreviewSaveSnapshot => ({
+		targetChatId: chatId,
+		targetPreviewId: artifact.previewId,
 		title,
 		entrypoint,
 		files: structuredClone(files),
@@ -118,7 +123,7 @@
 	});
 
 	const saveSnapshot = async (snapshot: PreviewSaveSnapshot) => {
-		if (!chatId) return;
+		if (!snapshot.targetChatId || !snapshot.targetPreviewId) return;
 		saving = true;
 		try {
 			const expectedUpdatedAt =
@@ -131,8 +136,8 @@
 					: snapshot.expectedContentHash;
 			const updated = await updateTransientWebPreview(
 				localStorage.token,
-				chatId,
-				artifact.previewId,
+				snapshot.targetChatId,
+				snapshot.targetPreviewId,
 				{
 					title: snapshot.title,
 					entrypoint: snapshot.entrypoint,
@@ -143,6 +148,8 @@
 					expected_content_hash: expectedContentHash ?? null
 				}
 			);
+			if (chatId !== snapshot.targetChatId || artifact.previewId !== snapshot.targetPreviewId)
+				return;
 			lastSaveBaseVersion = expectedUpdatedAt;
 			lastSavedVersion = updated.updated_at;
 			lastSaveBaseHash = expectedContentHash;
@@ -177,6 +184,8 @@
 			if (snapshot.notifyExport)
 				toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
 		} catch (error: any) {
+			if (chatId !== snapshot.targetChatId || artifact.previewId !== snapshot.targetPreviewId)
+				return;
 			console.error('Unable to save Web Preview', error);
 			dirty = true;
 			saveFailed = true;
@@ -184,8 +193,8 @@
 				try {
 					const document = await selectTransientWebPreview(
 						localStorage.token,
-						chatId,
-						artifact.previewId
+						snapshot.targetChatId,
+						snapshot.targetPreviewId
 					);
 					title = document.title;
 					entrypoint = document.entrypoint;
@@ -271,18 +280,49 @@
 		}
 		const id = `preview-export-${++workerRequestId}`;
 		return new Promise<any>((resolve, reject) => {
-			const handler = (event: MessageEvent) => {
-				if (event.data?.id !== id) return;
+			let timeout: ReturnType<typeof setTimeout>;
+			const armTimeout = (milliseconds: number) => {
+				clearTimeout(timeout);
+				timeout = setTimeout(() => {
+					cleanup();
+					if (worker && $pyodideWorker === worker) {
+						terminatePyodideWorker(worker, 'Pyodide stopped after a Web Preview export timed out');
+						pyodideWorker.set(null);
+					}
+					reject(new Error('Pyodide timed out'));
+				}, milliseconds);
+			};
+			const cleanup = () => {
 				clearTimeout(timeout);
 				worker?.removeEventListener('message', handler);
-				resolve(event.data);
+				worker?.removeEventListener('error', errorHandler);
 			};
-			const timeout = setTimeout(() => {
-				worker?.removeEventListener('message', handler);
-				reject(new Error('Pyodide timed out'));
-			}, 30000);
+			const handler = (event: MessageEvent) => {
+				if (event.data?.id !== id) return;
+				if (event.data?.type === 'pyodide:progress') {
+					armTimeout(getPyodideRequestTimeout(event.data.stage));
+					return;
+				}
+				cleanup();
+				if (event.data?.error || event.data?.stderr) {
+					reject(new Error(event.data.error || event.data.stderr));
+				} else {
+					resolve(event.data);
+				}
+			};
+			const errorHandler = (event: ErrorEvent) => {
+				cleanup();
+				reject(event.error || new Error(event.message));
+			};
 			worker?.addEventListener('message', handler);
-			worker?.postMessage({ ...message, id });
+			worker?.addEventListener('error', errorHandler);
+			armTimeout(getPyodideRequestTimeout('request-queued'));
+			try {
+				worker?.postMessage({ ...message, id });
+			} catch (error) {
+				cleanup();
+				reject(error);
+			}
 		});
 	};
 
@@ -337,8 +377,11 @@
 			const anchor = document.createElement('a');
 			anchor.href = url;
 			anchor.download = filename;
+			anchor.hidden = true;
+			document.body.appendChild(anchor);
 			anchor.click();
-			URL.revokeObjectURL(url);
+			anchor.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
 		};
 		if (Object.keys(files).length === 1) {
 			const [path, file] = Object.entries(files)[0];
@@ -355,7 +398,7 @@
 
 	onMount(() => {
 		unregisterSaveBarrier = registerWorkspaceSaveBarrier(
-			{ kind: 'web_preview', id: artifact.previewId },
+			{ chatId, kind: 'web_preview', id: artifact.previewId },
 			async () => {
 				await previewSaveQueue.flush();
 				return !saveFailed;

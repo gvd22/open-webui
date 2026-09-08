@@ -38,6 +38,7 @@ export const createSerializedSaveQueue = <T>(save: (value: T) => Promise<void>, 
 };
 
 export type WorkspaceSaveTarget = {
+	chatId: string;
 	kind: 'canvas' | 'web_preview';
 	id: string;
 };
@@ -45,7 +46,7 @@ export type WorkspaceSaveTarget = {
 type WorkspaceSaveBarrier = () => Promise<boolean>;
 
 const workspaceSaveBarriers = new Map<string, WorkspaceSaveBarrier>();
-const workspaceSaveKey = ({ kind, id }: WorkspaceSaveTarget) => `${kind}:${id}`;
+const workspaceSaveKey = ({ chatId, kind, id }: WorkspaceSaveTarget) => `${chatId}:${kind}:${id}`;
 
 export type WorkspaceSaveVersion = {
 	updatedAt?: number;

@@ -6,7 +6,8 @@ import { expect, test, type Page } from '@playwright/test';
 const paths = {
 	pdf: '/mnt/uploads/basic.pdf',
 	docx: '/mnt/uploads/basic.docx',
-	pptx: '/mnt/uploads/basic.pptx'
+	pptx: '/mnt/uploads/basic.pptx',
+	csv: '/mnt/uploads/basic.csv'
 };
 
 let blockedRequests: string[] = [];
@@ -119,6 +120,13 @@ test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page
 	expect((await secondSlide.boundingBox())?.width).toBeGreaterThan(20);
 });
 
+test('renders CSV data in the shared spreadsheet viewer', async ({ page }) => {
+	await page.goto('/?format=csv');
+	await expect(page.getByTestId('document-file-viewer')).toBeVisible();
+	await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
+	await expect(page.getByRole('cell', { name: 'Bern', exact: true })).toBeVisible();
+});
+
 test('opens requested workspace document pages without changing default zoom', async ({ page }) => {
 	await page.goto('/?format=pdf&targetPage=2');
 	await expect(page.getByText('2 / 2')).toBeVisible();
@@ -167,7 +175,7 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 
 		for (let index = 0; index < 8; index += 1) await page.getByLabel('Zoom in').click();
 		await expect(resetZoom).toHaveText('202%');
-		const beforePan = await viewer.viewport().locator('img[alt^="Slide "]').count()
+		const beforePan = (await viewer.viewport().locator('img[alt^="Slide "]').count())
 			? await viewer.viewport().locator('img[alt^="Slide "]').boundingBox()
 			: null;
 		await viewer.viewport().hover();
@@ -177,9 +185,7 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 				.poll(async () => {
 					const afterPan = await viewer.viewport().locator('img[alt^="Slide "]').boundingBox();
 					return Boolean(
-						beforePan &&
-							afterPan &&
-							(afterPan.x !== beforePan.x || afterPan.y !== beforePan.y)
+						beforePan && afterPan && (afterPan.x !== beforePan.x || afterPan.y !== beforePan.y)
 					);
 				})
 				.toBe(true);
@@ -262,6 +268,8 @@ test('workspace document panels have one active owner and restore tab focus on c
 	const panels = page.locator('[role="tabpanel"]');
 	await expect(page.getByTestId('files-fallback-state')).toBeVisible();
 	await expect(tabs).toHaveCount(2);
+	await expect(tabs.nth(0).locator('[data-workspace-icon="pdf-logo"]')).toBeVisible();
+	await expect(tabs.nth(1).locator('[data-workspace-icon="docx-logo"]')).toBeVisible();
 	await expect(panels).toHaveCount(2);
 	await expect(page.getByTestId('document-file-viewer')).toHaveCount(1);
 	await expect(page.getByTestId('document-file-viewer')).toContainText('KOBY-BASIC-PDF-2-PAGES');
@@ -369,7 +377,7 @@ test('commits only the latest delayed refresh candidate for rendering and downlo
 test('keeps unsupported office and data formats in the visible Files fallback', async ({
 	page
 }) => {
-	for (const extension of ['csv', 'odt', 'ods', 'odp', 'doc', 'ppt']) {
+	for (const extension of ['odt', 'ods', 'odp', 'doc', 'ppt']) {
 		await page.goto(`/?unsupported=${extension}`);
 		await expect(page.getByTestId('files-fallback-state')).toHaveAttribute(
 			'data-file-open-target',
@@ -381,9 +389,7 @@ test('keeps unsupported office and data formats in the visible Files fallback', 
 	}
 });
 
-test('rejects an oversized Pyodide response from its header before rendering', async ({
-	page
-}) => {
+test('rejects an oversized Pyodide response from its header before rendering', async ({ page }) => {
 	await setRuntime(page, paths.pdf, { mode: 'oversized' });
 	const oversizedResponse = viewerResponse(page, paths.pdf, 1);
 	await page.goto('/?format=pdf');

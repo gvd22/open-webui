@@ -18,6 +18,7 @@
 			{#if selectedContentId === getWorkspaceContentId(content, index)}
 				<DocumentFileViewer
 					path={content.path}
+					fileId={content.fileId ?? null}
 					format={content.fileFormat}
 					targetPage={content.targetPage ?? null}
 				/>

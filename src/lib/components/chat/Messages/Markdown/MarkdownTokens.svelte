@@ -194,6 +194,8 @@
 		{#if token.raw.includes('```')}
 			<CodeBlock
 				id={`${id}-${tokenIdx}`}
+				{chatId}
+				{messageId}
 				collapsed={$settings?.collapseCodeBlocks ?? false}
 				{token}
 				lang={token?.lang ?? ''}
@@ -625,6 +627,8 @@
 	{:else if token.type === 'colonFence'}
 		<ColonFenceBlock
 			id={`${id}-${tokenIdx}`}
+			{chatId}
+			{messageId}
 			{token}
 			{tokenIdx}
 			{done}

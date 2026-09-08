@@ -63,17 +63,17 @@ describe('createSerializedSaveQueue', () => {
 		const canvas = vi.fn(async () => true);
 		const preview = vi.fn(async () => true);
 		const unregisterCanvas = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: 'canvas-1' },
+			{ chatId: 'chat-1', kind: 'canvas', id: 'canvas-1' },
 			canvas
 		);
 		const unregisterPreview = registerWorkspaceSaveBarrier(
-			{ kind: 'web_preview', id: 'preview-1' },
+			{ chatId: 'chat-1', kind: 'web_preview', id: 'preview-1' },
 			preview
 		);
 
-		await expect(flushWorkspaceSaveBarrier({ kind: 'web_preview', id: 'preview-1' })).resolves.toBe(
-			true
-		);
+		await expect(
+			flushWorkspaceSaveBarrier({ chatId: 'chat-1', kind: 'web_preview', id: 'preview-1' })
+		).resolves.toBe(true);
 		expect(preview).toHaveBeenCalledOnce();
 		expect(canvas).toHaveBeenCalledOnce();
 
@@ -84,7 +84,7 @@ describe('createSerializedSaveQueue', () => {
 	it('flushes pending editors after the workspace pane has closed', async () => {
 		const canvas = vi.fn(async () => true);
 		const unregister = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: 'canvas-closed' },
+			{ chatId: 'chat-1', kind: 'canvas', id: 'canvas-closed' },
 			canvas
 		);
 
@@ -98,24 +98,28 @@ describe('createSerializedSaveQueue', () => {
 		const oldBarrier = vi.fn(async () => true);
 		const currentBarrier = vi.fn(async () => false);
 		const unregisterOld = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: 'canvas-1' },
+			{ chatId: 'chat-1', kind: 'canvas', id: 'canvas-1' },
 			oldBarrier
 		);
 		const unregisterCurrent = registerWorkspaceSaveBarrier(
-			{ kind: 'canvas', id: 'canvas-1' },
+			{ chatId: 'chat-1', kind: 'canvas', id: 'canvas-1' },
 			currentBarrier
 		);
 
 		unregisterOld();
-		await expect(flushWorkspaceSaveBarrier({ kind: 'canvas', id: 'canvas-1' })).resolves.toBe(
-			false
-		);
+		await expect(
+			flushWorkspaceSaveBarrier({ chatId: 'chat-1', kind: 'canvas', id: 'canvas-1' })
+		).resolves.toBe(false);
 
 		unregisterCurrent();
 	});
 
 	it('serializes and advances optimistic versions across renderer remounts', async () => {
-		const target = { kind: 'web_preview' as const, id: 'preview-remount' };
+		const target = {
+			chatId: 'chat-1',
+			kind: 'web_preview' as const,
+			id: 'preview-remount'
+		};
 		const first = deferred();
 		const effectiveVersions: Array<{ updatedAt?: number; contentHash?: string }> = [];
 		let active = 0;
@@ -145,5 +149,30 @@ describe('createSerializedSaveQueue', () => {
 		]);
 		expect(maxActive).toBe(1);
 		resetWorkspaceSaveVersion(target);
+	});
+
+	it('keeps identical workspace object ids isolated between chats', async () => {
+		const first = deferred();
+		const effectiveVersions: number[] = [];
+		const save = (chatId: string, updatedAt: number) =>
+			runWorkspaceOptimisticSave(
+				{ chatId, kind: 'canvas', id: 'shared-canvas-id' },
+				{ updatedAt: 1 },
+				async (version) => {
+					effectiveVersions.push(version.updatedAt ?? 0);
+					if (chatId === 'chat-1') await first.promise;
+					return { updatedAt };
+				}
+			);
+
+		const firstSave = save('chat-1', 2);
+		const secondSave = save('chat-2', 10);
+		await secondSave;
+		first.resolve();
+		await firstSave;
+
+		expect(effectiveVersions).toEqual([1, 1]);
+		resetWorkspaceSaveVersion({ chatId: 'chat-1', kind: 'canvas', id: 'shared-canvas-id' });
+		resetWorkspaceSaveVersion({ chatId: 'chat-2', kind: 'canvas', id: 'shared-canvas-id' });
 	});
 });

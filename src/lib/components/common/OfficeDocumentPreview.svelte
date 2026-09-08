@@ -6,7 +6,7 @@
 	import Spinner from './Spinner.svelte';
 	import { validatePptxArchive, validateSpreadsheetArchive } from './documentSecurity';
 
-	type OfficeDocumentFormat = 'docx' | 'pptx' | 'xls' | 'xlsx';
+	type OfficeDocumentFormat = 'docx' | 'pptx' | 'xls' | 'xlsx' | 'csv';
 
 	type I18n = { t: (key: string, values?: Record<string, unknown>) => string };
 	const i18n = getContext<Readable<I18n>>('i18n');

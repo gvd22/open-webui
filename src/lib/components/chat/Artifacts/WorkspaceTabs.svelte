@@ -3,6 +3,8 @@
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 
+	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
+	import { fileIconName } from '$lib/components/chat/FileNav/fileIcon';
 	import CodeBracket from '$lib/components/icons/CodeBracket.svelte';
 	import Document from '$lib/components/icons/Document.svelte';
 	import Folder from '$lib/components/icons/Folder.svelte';
@@ -30,7 +32,7 @@
 
 	const iconKind = (kind: string) => {
 		if (kind === 'canvas-note') return 'document';
-		if (kind === 'workspace-file') return 'document';
+		if (kind === 'workspace-file') return 'file';
 		if (kind === 'web-preview') return 'browser';
 		if (kind.includes('browser')) return 'browser';
 		if (kind.includes('file')) return 'files';
@@ -38,6 +40,17 @@
 			return 'connector';
 		}
 		return 'code';
+	};
+
+	const fileIconTone = (name: string) => {
+		const extension = name.split('.').pop()?.toLowerCase() ?? '';
+		if (['doc', 'docx', 'odt'].includes(extension)) return 'text-blue-600 dark:text-blue-400';
+		if (['ppt', 'pptx'].includes(extension)) return 'text-orange-600 dark:text-orange-400';
+		if (['xls', 'xlsx', 'ods', 'csv', 'tsv'].includes(extension)) {
+			return 'text-emerald-600 dark:text-emerald-400';
+		}
+		if (extension === 'pdf') return 'text-red-600 dark:text-red-400';
+		return 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300';
 	};
 
 	// Select before the active editor can consume the pointer's final click.
@@ -168,9 +181,16 @@
 						on:keydown={(event) => void onTabKeydown(event, tab)}
 					>
 						<span
-							class="shrink-0 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300"
+							class="shrink-0 {iconKind(tab.kind) === 'file'
+								? fileIconTone(tab.title)
+								: 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}"
+							data-workspace-icon={iconKind(tab.kind) === 'file'
+								? fileIconName(tab.title)
+								: iconKind(tab.kind)}
 						>
-							{#if iconKind(tab.kind) === 'document'}
+							{#if iconKind(tab.kind) === 'file'}
+								<Icon name={fileIconName(tab.title)} size={16} strokeWidth={1.5} />
+							{:else if iconKind(tab.kind) === 'document'}
 								<Document className="size-4" />
 							{:else if iconKind(tab.kind) === 'files'}
 								<Folder className="size-4" />

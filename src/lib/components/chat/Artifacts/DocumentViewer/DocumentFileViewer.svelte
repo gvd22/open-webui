@@ -3,6 +3,7 @@
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getFileContentById } from '$lib/apis/files';
 	import { pyodideWorker, workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
 	import OfficeDocumentPreview from '$lib/components/common/OfficeDocumentPreview.svelte';
@@ -23,6 +24,7 @@
 	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let path: string;
+	export let fileId: string | null = null;
 	export let format: WorkspaceDocumentFormat;
 	export let targetPage: number | null = null;
 
@@ -43,6 +45,7 @@
 	let pdfData: ArrayBuffer | null = null;
 	let pendingPyodideRefresh = false;
 	let restoringAfterRenderFailure = false;
+	let loadedSourceKey = '';
 	$: if (format === 'pdf' && candidateData !== copiedPdfSource) {
 		copiedPdfSource = candidateData;
 		pdfData = candidateData?.slice(0) ?? null;
@@ -53,17 +56,26 @@
 		docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 		pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 		xls: 'application/vnd.ms-excel',
-		xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+		xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		csv: 'text/csv'
 	};
 	const maxDocumentBytes: Record<WorkspaceDocumentFormat, number> = {
 		pdf: 64 * 1024 * 1024,
 		docx: 48 * 1024 * 1024,
 		pptx: 64 * 1024 * 1024,
 		xls: 48 * 1024 * 1024,
-		xlsx: 48 * 1024 * 1024
+		xlsx: 48 * 1024 * 1024,
+		csv: 16 * 1024 * 1024
 	};
 
 	const readPyodideFile = (signal: AbortSignal): Promise<ArrayBuffer> => {
+		if (fileId) {
+			return getFileContentById(fileId).then((data) => {
+				if (signal.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+				if (!(data instanceof ArrayBuffer)) throw new Error('missing');
+				return data;
+			});
+		}
 		let worker = $pyodideWorker;
 		if (!worker) {
 			worker = createPyodideWorker();
@@ -186,6 +198,7 @@
 	};
 
 	const refreshPyodideFile = (event: Event) => {
+		if (fileId) return;
 		const detail = (
 			event as CustomEvent<{
 				paths?: string[];
@@ -254,6 +267,7 @@
 
 	onMount(() => {
 		mounted = true;
+		loadedSourceKey = `${path}:${fileId ?? 'runtime'}`;
 		const unsubscribeUpdate = workspaceFileUpdate.subscribe((update) => {
 			handleWorkspaceFileUpdate(update);
 		});
@@ -273,6 +287,11 @@
 	$: if (mounted && pendingPyodideRefresh && $workspaceActiveFile?.path === path) {
 		pendingPyodideRefresh = false;
 		scheduleLoad(true);
+	}
+
+	$: if (mounted && `${path}:${fileId ?? 'runtime'}` !== loadedSourceKey) {
+		loadedSourceKey = `${path}:${fileId ?? 'runtime'}`;
+		scheduleLoad(Boolean(displayedData));
 	}
 </script>
 

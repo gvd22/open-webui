@@ -41,6 +41,7 @@
 	export let onToggleExpand: (path: string) => void = () => {};
 	export let showDate: boolean = false;
 	export let parentWritable = true;
+	export let draggableEnabled = true;
 
 	$: entryPath =
 		fullPath ??
@@ -229,9 +230,9 @@
 		<button
 			type="button"
 			class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left"
-			draggable={canMutate}
+			draggable={canMutate && draggableEnabled}
 			on:dragstart={(e) => {
-				if (!canMutate) {
+				if (!canMutate || !draggableEnabled) {
 					e.preventDefault();
 					return;
 				}

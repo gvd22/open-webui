@@ -17,11 +17,12 @@ export type WorkspaceContent = {
 	updatedAt?: number;
 	source?: string;
 	path?: string;
+	fileId?: string;
 	fileFormat?: WorkspaceDocumentFormat;
 	targetPage?: number;
 };
 
-export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx' | 'xls' | 'xlsx';
+export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx' | 'xls' | 'xlsx' | 'csv';
 
 export type WorkspaceTab = {
 	id: string;
@@ -46,11 +47,16 @@ export const isKeyboardActivationClick = (detail: number) => detail === 0;
 export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: string) =>
 	Boolean(previousId && previousId !== nextId);
 
+export const isWorkspaceOpenRequestForChat = (
+	requestChatId: string | null | undefined,
+	currentChatId: string | null | undefined
+) => !requestChatId || requestChatId === currentChatId;
+
 export const getDefaultWorkspaceContentId = () => WORKSPACE_FILES_ID;
 
 export const getWorkspaceDocumentFormat = (path: string): WorkspaceDocumentFormat | null => {
 	const extension = path.split('.').pop()?.toLowerCase();
-	return extension && ['pdf', 'docx', 'pptx', 'xls', 'xlsx'].includes(extension)
+	return extension && ['pdf', 'docx', 'pptx', 'xls', 'xlsx', 'csv'].includes(extension)
 		? (extension as WorkspaceDocumentFormat)
 		: null;
 };
@@ -67,7 +73,11 @@ export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFor
 export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
 	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
 
-export const buildWorkspaceFileContent = (path: string, targetPage?: unknown): WorkspaceContent => {
+export const buildWorkspaceFileContent = (
+	path: string,
+	targetPage?: unknown,
+	fileId?: string | null
+): WorkspaceContent => {
 	const page = normalizeDocumentTargetPage(targetPage);
 	return {
 		type: 'workspace-file',
@@ -75,6 +85,7 @@ export const buildWorkspaceFileContent = (path: string, targetPage?: unknown): W
 		title: path.split('/').filter(Boolean).at(-1) || 'File',
 		content: '',
 		path,
+		...(fileId ? { fileId } : {}),
 		fileFormat: getWorkspaceDocumentFormat(path) ?? undefined,
 		...(page ? { targetPage: page } : {})
 	};
@@ -87,6 +98,18 @@ export const buildWorkspaceFilesContent = (): WorkspaceContent => ({
 	content: ''
 });
 
+export const buildWorkspaceSourceContents = (
+	showFiles: boolean,
+	filesOpened: boolean,
+	documentViewerEnabled: boolean,
+	artifactContents: WorkspaceContent[],
+	openedFileContents: WorkspaceContent[]
+): WorkspaceContent[] => [
+	...(showFiles && filesOpened ? [buildWorkspaceFilesContent()] : []),
+	...artifactContents,
+	...(documentViewerEnabled ? openedFileContents : [])
+];
+
 const fallbackTitle = (kind: string) => {
 	if (kind === 'canvas-note') return 'Document';
 	if (kind === 'web-preview') return 'Web Preview';
@@ -98,16 +121,23 @@ const fallbackTitle = (kind: string) => {
 export const upsertWorkspaceFileContent = (
 	contents: WorkspaceContent[],
 	path: string,
-	targetPage?: unknown
+	targetPage?: unknown,
+	fileId?: string | null
 ): WorkspaceContent[] => {
 	const id = getWorkspaceFileId(path);
 	const page = normalizeDocumentTargetPage(targetPage);
 	const existing = contents.find((content, index) => getWorkspaceContentId(content, index) === id);
-	if (!existing) return [...contents, buildWorkspaceFileContent(path, page)];
-	if ((existing.targetPage ?? null) === page) return contents;
+	if (!existing) return [...contents, buildWorkspaceFileContent(path, page, fileId)];
+	if ((existing.targetPage ?? null) === page && (existing.fileId ?? null) === (fileId ?? null)) {
+		return contents;
+	}
 	return contents.map((content, index) =>
 		getWorkspaceContentId(content, index) === id
-			? { ...content, ...(page ? { targetPage: page } : { targetPage: undefined }) }
+			? {
+					...content,
+					...(page ? { targetPage: page } : { targetPage: undefined }),
+					...(fileId ? { fileId } : { fileId: undefined })
+				}
 			: content
 	);
 };
@@ -221,7 +251,7 @@ export const buildWorkspaceTabs = (contents: WorkspaceContent[]): WorkspaceTab[]
 		index,
 		title: content.title?.trim() || fallbackTitle(content.type),
 		kind: content.type,
-		closable: true
+		closable: getWorkspaceContentId(content, index) !== WORKSPACE_FILES_ID
 	}));
 
 export const getVisibleWorkspaceContents = (

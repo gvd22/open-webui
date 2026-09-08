@@ -1,15 +1,46 @@
-const WORKSPACE_STATE_VERSION = 1;
+import { isWorkspaceDocumentPath } from './workspace';
+
+const WORKSPACE_STATE_VERSION = 2;
+const MAX_WORKSPACE_ID_CHARS = 2048;
+const MAX_WORKSPACE_PATH_CHARS = 1024;
+const MAX_FILE_ID_CHARS = 256;
+
+export type PersistedWorkspaceFile = { path: string; fileId?: string };
+
+const isBoundedText = (value: unknown, maximum: number): value is string =>
+	typeof value === 'string' &&
+	value.length > 0 &&
+	value.length <= maximum &&
+	!/\p{Cc}/u.test(value);
+
+const normalizeIds = (value: unknown) =>
+	Array.isArray(value)
+		? [...new Set(value.filter((item) => isBoundedText(item, MAX_WORKSPACE_ID_CHARS)))].slice(
+				0,
+				100
+			)
+		: [];
+
+const normalizeOpenedFile = (item: unknown): PersistedWorkspaceFile | null => {
+	const path = typeof item === 'string' ? item : (item as { path?: unknown } | null)?.path;
+	if (!isBoundedText(path, MAX_WORKSPACE_PATH_CHARS) || !isWorkspaceDocumentPath(path)) return null;
+	const fileId = typeof item === 'object' && item ? (item as { fileId?: unknown }).fileId : null;
+	return {
+		path,
+		...(isBoundedText(fileId, MAX_FILE_ID_CHARS) ? { fileId } : {})
+	};
+};
 
 export type PersistedWorkspaceState = {
 	version: number;
 	order: string[];
 	closed: string[];
 	filesOpened: boolean;
-	openedFiles: string[];
+	openedFiles: PersistedWorkspaceFile[];
 };
 
-const workspaceStateKey = (chatId: string) =>
-	`open-webui.workspace.tabs.v${WORKSPACE_STATE_VERSION}:${chatId}`;
+const workspaceStateKey = (chatId: string, version = WORKSPACE_STATE_VERSION) =>
+	`open-webui.workspace.tabs.v${version}:${chatId}`;
 
 export const readWorkspaceState = (
 	chatId: string,
@@ -18,21 +49,25 @@ export const readWorkspaceState = (
 	if (!chatId) return null;
 
 	try {
-		const value = JSON.parse(storage.getItem(workspaceStateKey(chatId)) ?? 'null');
-		if (!value || value.version !== WORKSPACE_STATE_VERSION) return null;
+		const raw =
+			storage.getItem(workspaceStateKey(chatId)) ?? storage.getItem(workspaceStateKey(chatId, 1));
+		const value = JSON.parse(raw ?? 'null');
+		if (!value || ![1, WORKSPACE_STATE_VERSION].includes(value.version)) return null;
+		const openedFiles = Array.isArray(value.openedFiles)
+			? value.openedFiles
+					.flatMap((item: unknown) => {
+						const file = normalizeOpenedFile(item);
+						return file ? [file] : [];
+					})
+					.slice(-4)
+			: [];
 
 		return {
 			version: WORKSPACE_STATE_VERSION,
-			order: Array.isArray(value.order)
-				? value.order.filter((item: unknown) => typeof item === 'string').slice(0, 100)
-				: [],
-			closed: Array.isArray(value.closed)
-				? value.closed.filter((item: unknown) => typeof item === 'string').slice(0, 100)
-				: [],
-			filesOpened: Boolean(value.filesOpened),
-			openedFiles: Array.isArray(value.openedFiles)
-				? value.openedFiles.filter((item: unknown) => typeof item === 'string').slice(-4)
-				: []
+			order: normalizeIds(value.order),
+			closed: normalizeIds(value.closed),
+			filesOpened: value.filesOpened === true,
+			openedFiles
 		};
 	} catch (error) {
 		console.warn('Unable to restore workspace tab state', error);

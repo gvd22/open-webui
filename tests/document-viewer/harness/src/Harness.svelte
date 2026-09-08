@@ -27,15 +27,18 @@
 		localStorage.getItem('viewer-runtime-session') ?? `viewer-browser-test-${crypto.randomUUID()}`;
 	localStorage.setItem('viewer-runtime-session', runtimeSessionId);
 	const unsupportedExtension = new URLSearchParams(window.location.search).get('unsupported');
-	const documents: Record<string, { path: string; format: 'pdf' | 'docx' | 'pptx' }> = {
+	const documents: Record<string, { path: string; format: 'pdf' | 'docx' | 'pptx' | 'csv' }> = {
 		pdf: { path: '/mnt/uploads/basic.pdf', format: 'pdf' },
 		docx: { path: '/mnt/uploads/basic.docx', format: 'docx' },
-		pptx: { path: '/mnt/uploads/basic.pptx', format: 'pptx' }
+		pptx: { path: '/mnt/uploads/basic.pptx', format: 'pptx' },
+		csv: { path: '/mnt/uploads/basic.csv', format: 'csv' }
 	};
 	const document = documents[format];
 	const workspacePanels = new URLSearchParams(window.location.search).has('workspace-panels');
 	const workspaceLru = new URLSearchParams(window.location.search).has('workspace-lru');
-	const unsupportedPath = unsupportedExtension ? `/mnt/uploads/example.${unsupportedExtension}` : '';
+	const unsupportedPath = unsupportedExtension
+		? `/mnt/uploads/example.${unsupportedExtension}`
+		: '';
 	const unsupportedFileOpenTarget = unsupportedPath
 		? getWorkspaceFileOpenTarget(unsupportedPath)
 		: null;
@@ -159,10 +162,7 @@
 		/>
 	{/if}
 	<div class="workspace">
-		<WorkspaceDocumentPanels
-			contents={workspaceContents}
-			{selectedContentId}
-		/>
+		<WorkspaceDocumentPanels contents={workspaceContents} {selectedContentId} />
 	</div>
 </main>
 

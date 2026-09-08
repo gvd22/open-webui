@@ -26,6 +26,25 @@ export const requirePyodideWorkspacePath = (path: string) => {
 	return normalized;
 };
 
+export const isValidPyodideEntryName = (name: string) =>
+	name.length > 0 &&
+	name.length <= 255 &&
+	name !== '.' &&
+	name !== '..' &&
+	!name.includes('/') &&
+	!name.includes('\\') &&
+	!/[\u0000-\u001f\u007f]/.test(name);
+
+export const getWorkspaceFileChanges = (
+	before: Map<string, string>,
+	after: Map<string, string>
+) => ({
+	changed: [...after].flatMap(([path, signature]) =>
+		before.get(path) === signature ? [] : [path]
+	),
+	deleted: [...before.keys()].filter((path) => !after.has(path))
+});
+
 export const asPyodideWorkspaceDirectory = (path: string) =>
 	`${getPyodideWorkspacePath(path) ?? PYODIDE_WORKSPACE_ROOT}/`;
 

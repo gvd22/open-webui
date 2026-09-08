@@ -14,18 +14,17 @@
 	import ResizableSidePanel from '../common/ResizableSidePanel.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
-	import { getDefaultWorkspaceContentId, WORKSPACE_FILES_ID } from './Artifacts/workspace';
+	import {
+		getDefaultWorkspaceContentId,
+		isWorkspaceOpenRequestForChat,
+		WORKSPACE_FILES_ID
+	} from './Artifacts/workspace';
 
 	export let history: Record<string, any> | null = null;
-	export let models: any[] = [];
 	export let chatId: string | null = null;
-	export let chatUser: any = null;
-	export let chatFiles: any[] = [];
-	export let params: Record<string, any> = {};
 	export let eventTarget: EventTarget;
 	export let submitPrompt: Function;
 	export let stopResponse: Function;
-	export let showMessage: Function;
 	export let files: any[] = [];
 	export let modelId: string | null = null;
 	export let codeInterpreterEnabled = false;
@@ -42,10 +41,28 @@
 		showControls.set(true);
 	};
 
-	$: if ($showControls && !$showCallOverlay && !$showEmbeds && !$showArtifacts) {
+	$: if (
+		$showControls &&
+		!$showCallOverlay &&
+		!$showEmbeds &&
+		!$showArtifacts &&
+		!$showFileNavPath
+	) {
 		openWorkspaceItem(getDefaultWorkspaceContentId());
 	}
-	$: if ($showFileNavPath) openWorkspaceItem(WORKSPACE_FILES_ID);
+	$: if ($showFileNavPath) {
+		if (
+			typeof $showFileNavPath === 'object' &&
+			!isWorkspaceOpenRequestForChat($showFileNavPath.chatId, chatId)
+		) {
+			showFileNavPath.set(null);
+		} else if (typeof $showFileNavPath === 'object' && $showFileNavPath.fileId) {
+			showArtifacts.set(true);
+			showControls.set(true);
+		} else {
+			openWorkspaceItem(WORKSPACE_FILES_ID);
+		}
+	}
 
 	const closeHandler = () => {
 		showControls.set(false);

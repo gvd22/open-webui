@@ -30,7 +30,7 @@ describe('workspace session persistence', () => {
 					order: ['workspace:files'],
 					closed: [],
 					filesOpened: true,
-					openedFiles: ['/report.pdf']
+					openedFiles: [{ path: '/report.pdf', fileId: 'file-1' }]
 				},
 				target
 			)
@@ -38,8 +38,22 @@ describe('workspace session persistence', () => {
 
 		expect(readWorkspaceState('chat-1', target)).toMatchObject({
 			filesOpened: true,
-			openedFiles: ['/report.pdf']
+			openedFiles: [{ path: '/report.pdf', fileId: 'file-1' }]
 		});
+	});
+
+	it('migrates legacy path-only state', () => {
+		const target = storage({
+			'open-webui.workspace.tabs.v1:chat-1': JSON.stringify({
+				version: 1,
+				order: [],
+				closed: [],
+				filesOpened: true,
+				openedFiles: ['/report.pdf']
+			})
+		});
+
+		expect(readWorkspaceState('chat-1', target)?.openedFiles).toEqual([{ path: '/report.pdf' }]);
 	});
 
 	it('reports inaccessible storage and falls back to no restored state', () => {
@@ -53,5 +67,30 @@ describe('workspace session persistence', () => {
 		expect(readWorkspaceState('chat-1', blocked)).toBeNull();
 		expect(warning).toHaveBeenCalledWith('Unable to restore workspace tab state', error);
 		warning.mockRestore();
+	});
+
+	it('drops malformed and unbounded persisted values', () => {
+		const target = storage({
+			'open-webui.workspace.tabs.v2:chat-1': JSON.stringify({
+				version: 2,
+				order: ['workspace:files', 'workspace:files', `workspace:${'x'.repeat(3_000)}`, 'bad\n'],
+				closed: ['canvas:one', 42],
+				filesOpened: 'true',
+				openedFiles: [
+					{ path: '/report.pdf', fileId: 'file-1' },
+					{ path: `/${'x'.repeat(2_000)}.pdf` },
+					{ path: '/bad\n.pdf' },
+					{ path: '/unsupported.odt', fileId: 'file-odt' },
+					{ path: '/other.pdf', fileId: 'x'.repeat(300) }
+				]
+			})
+		});
+
+		expect(readWorkspaceState('chat-1', target)).toMatchObject({
+			order: ['workspace:files'],
+			closed: ['canvas:one'],
+			filesOpened: false,
+			openedFiles: [{ path: '/report.pdf', fileId: 'file-1' }, { path: '/other.pdf' }]
+		});
 	});
 });

@@ -14,6 +14,12 @@ export type WorkspaceOutputFile = {
 	path: string;
 	name: string;
 	source: 'pyodide';
+	fileId?: string;
+	messageId?: string;
+	originChatId?: string;
+	contentType?: string;
+	size?: number;
+	persistedAt?: number;
 	page?: number | null;
 	updatedAt: number;
 };

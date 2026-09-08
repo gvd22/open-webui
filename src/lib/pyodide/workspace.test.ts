@@ -1,14 +1,42 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
 	asPyodideWorkspaceDirectory,
 	getPyodideWorkspaceBreadcrumbs,
 	getPyodideWorkspacePath,
+	getWorkspaceFileChanges,
+	isValidPyodideEntryName,
 	PYODIDE_WORKSPACE_DIRECTORY,
 	requirePyodideWorkspacePath
 } from './workspace';
+import {
+	getPyodideRequestTimeout,
+	PYODIDE_EXECUTION_TIMEOUT_MS,
+	PYODIDE_PREPARE_TIMEOUT_MS,
+	PYODIDE_QUEUE_TIMEOUT_MS,
+	terminatePyodideWorker
+} from './runtimeTimeouts';
 
 describe('Pyodide workspace root', () => {
+	it('allows queued and cold-start work more time than executing code', () => {
+		expect(getPyodideRequestTimeout('request-queued')).toBe(PYODIDE_QUEUE_TIMEOUT_MS);
+		expect(getPyodideRequestTimeout('loading-runtime')).toBe(PYODIDE_PREPARE_TIMEOUT_MS);
+		expect(getPyodideRequestTimeout('executing-code')).toBe(PYODIDE_EXECUTION_TIMEOUT_MS);
+	});
+
+	it('notifies pending requests before terminating a shared worker', () => {
+		const target = new EventTarget();
+		const terminate = vi.fn();
+		const worker = Object.assign(target, { terminate }) as unknown as Worker;
+		const errors: Event[] = [];
+		worker.addEventListener('error', (event) => errors.push(event));
+
+		terminatePyodideWorker(worker, 'timed out');
+
+		expect(terminate).toHaveBeenCalledOnce();
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({ message: 'timed out', pyodideTerminating: true });
+	});
 	it('treats uploads as Home and hides its parent directories', () => {
 		expect(getPyodideWorkspaceBreadcrumbs('/mnt/uploads/')).toEqual([
 			{ label: 'Home', path: PYODIDE_WORKSPACE_DIRECTORY }
@@ -34,5 +62,38 @@ describe('Pyodide workspace root', () => {
 
 	it('falls back to uploads for invalid navigation targets', () => {
 		expect(asPyodideWorkspaceDirectory('/tmp')).toBe(PYODIDE_WORKSPACE_DIRECTORY);
+	});
+
+	it('accepts ordinary entry names and rejects path-like names', () => {
+		expect(isValidPyodideEntryName('Quarterly report 2026.docx')).toBe(true);
+		for (const name of [
+			'',
+			'.',
+			'..',
+			'../report.pdf',
+			'folder/file.pdf',
+			'folder\\file.pdf',
+			'bad\nname'
+		]) {
+			expect(isValidPyodideEntryName(name)).toBe(false);
+		}
+	});
+
+	it('reports changed and deleted workspace outputs independently', () => {
+		expect(
+			getWorkspaceFileChanges(
+				new Map([
+					['/mnt/uploads/stable.pdf', '1'],
+					['/mnt/uploads/deleted.docx', '2']
+				]),
+				new Map([
+					['/mnt/uploads/stable.pdf', '1'],
+					['/mnt/uploads/new.pptx', '3']
+				])
+			)
+		).toEqual({
+			changed: ['/mnt/uploads/new.pptx'],
+			deleted: ['/mnt/uploads/deleted.docx']
+		});
 	});
 });

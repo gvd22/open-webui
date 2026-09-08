@@ -12,6 +12,9 @@ const fixtureByPath: Record<string, string> = {
 	'/mnt/uploads/basic.docx': 'docx/basic.docx',
 	'/mnt/uploads/basic.pptx': 'pptx/basic.pptx'
 };
+const inlineFixtureByPath: Record<string, Buffer> = {
+	'/mnt/uploads/basic.csv': Buffer.from('city,value\nBasel,1\nBern,2\n')
+};
 type RuntimeMode = 'valid' | 'corrupt' | 'missing' | 'unavailable' | 'oversized';
 type RuntimeState = { mode: RuntimeMode; revision?: 'a' | 'b'; delayMs?: number };
 const state = new Map<string, RuntimeState>();
@@ -28,7 +31,7 @@ const nextRequestCount = (sessionId: string, filePath: string) => {
 
 const getFixture = (filePath: string) =>
 	fixtureByPath[filePath] ??
-		(/^\/mnt\/uploads\/sequence-\d+\.pdf$/.test(filePath) ? 'pdf/basic.pdf' : undefined);
+	(/^\/mnt\/uploads\/sequence-\d+\.pdf$/.test(filePath) ? 'pdf/basic.pdf' : undefined);
 
 const withRevision = (bytes: Buffer, revision?: RuntimeState['revision']) => {
 	if (!revision) return bytes;
@@ -79,7 +82,12 @@ const viewerRuntime = (): Plugin => ({
 			const runtimeState = state.get(runtimeStateKey(sessionId, filePath)) ?? {
 				mode: 'valid' as const
 			};
-			if (!fixture || runtimeState.mode === 'missing' || runtimeState.mode === 'unavailable') {
+			const inlineFixture = inlineFixtureByPath[filePath];
+			if (
+				(!fixture && !inlineFixture) ||
+				runtimeState.mode === 'missing' ||
+				runtimeState.mode === 'unavailable'
+			) {
 				response.statusCode = runtimeState.mode === 'missing' ? 404 : 503;
 				response.end();
 				return;
@@ -98,7 +106,7 @@ const viewerRuntime = (): Plugin => ({
 			const source =
 				runtimeState.mode === 'corrupt'
 					? Buffer.from('not a document')
-					: await readFile(path.join(fixturesRoot, fixture));
+					: (inlineFixture ?? (await readFile(path.join(fixturesRoot, fixture!))));
 			const bytes = withRevision(source, runtimeState.revision);
 			if (runtimeState.delayMs)
 				await new Promise((resolve) => setTimeout(resolve, runtimeState.delayMs));
@@ -120,10 +128,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			'$lib/pyodide/createPyodideWorker': path.join(
-				harnessRoot,
-				'src/pyodide-worker.ts'
-			),
+			'$lib/pyodide/createPyodideWorker': path.join(harnessRoot, 'src/pyodide-worker.ts'),
 			$lib: path.join(repositoryRoot, 'src/lib'),
 			'$app/environment': path.join(harnessRoot, 'src/app-environment.ts')
 		}

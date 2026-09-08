@@ -10,6 +10,7 @@ const PREVIEW_BETA = 'workspace-e2e-preview-beta';
 type SeededWorkspace = {
 	chatId: string;
 	token: string;
+	title: string;
 };
 
 const textPart = (value: object) => ({
@@ -185,16 +186,17 @@ const seedWorkspaceChat = async (request: APIRequestContext): Promise<SeededWork
 	expect(response.ok()).toBeTruthy();
 	const created = await response.json();
 	expect(created.id).toEqual(expect.any(String));
-	return { chatId: created.id, token };
+	return { chatId: created.id, token, title };
 };
 
 const createUploadChat = async (request: APIRequestContext): Promise<SeededWorkspace> => {
 	const token = await signInForNoAuth(request);
+	const title = `Workspace upload E2E ${Date.now()}`;
 	const response = await request.post('/api/v1/chats/new', {
 		headers: authHeaders(token),
 		data: {
 			chat: {
-				title: `Workspace upload E2E ${Date.now()}`,
+				title,
 				history: { currentId: null, messages: {} }
 			},
 			folder_id: null
@@ -203,7 +205,7 @@ const createUploadChat = async (request: APIRequestContext): Promise<SeededWorks
 	expect(response.ok()).toBeTruthy();
 	const created = await response.json();
 	expect(created.id).toEqual(expect.any(String));
-	return { chatId: created.id, token };
+	return { chatId: created.id, token, title };
 };
 
 const readChat = async (request: APIRequestContext, seeded: SeededWorkspace) => {
@@ -363,6 +365,33 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect(page.getByRole('tab', { name: /^Terminal(?: \d+)?$/ })).toHaveCount(0);
 		await expect(page.getByRole('tab', { name: /^Browser(?: \d+)?$/ })).toHaveCount(0);
 	});
+
+	test('saves an edit to its original chat during an immediate chat switch', async ({ page }) => {
+		const otherChat = await seedWorkspaceChat(page.request);
+		try {
+			await openSeededWorkspace(page, seeded);
+			await page.getByRole('tab', { name: 'E2E Canvas Alpha', exact: true }).click();
+			await page.locator('#artifacts-container').getByLabel('Title').fill('Only chat A changed');
+
+			await page.getByRole('button', { name: 'Open Sidebar', exact: true }).click();
+			await page.getByText(otherChat.title, { exact: true }).click();
+			await page.waitForURL(`/c/${otherChat.chatId}`);
+			await dismissReleaseNotes(page);
+
+			await expect
+				.poll(async () => {
+					const chat = await readChat(page.request, seeded);
+					return chat.chat._canvas_documents[CANVAS_ALPHA].title;
+				})
+				.toBe('Only chat A changed');
+			const untouched = await readChat(page.request, otherChat);
+			expect(untouched.chat._canvas_documents[CANVAS_ALPHA].title).toBe('E2E Canvas Alpha');
+		} finally {
+			await page.request.delete(`/api/v1/chats/${otherChat.chatId}`, {
+				headers: authHeaders(otherChat.token)
+			});
+		}
+	});
 });
 
 test('uploads a CSV through the visible composer chooser without a managed Terminal', async ({
@@ -413,5 +442,122 @@ test('uploads a CSV through the visible composer chooser without a managed Termi
 		await page.request.delete(`/api/v1/chats/${uploadChat.chatId}`, {
 			headers: authHeaders(uploadChat.token)
 		});
+	}
+});
+
+test('opens and reopens Files in a new session without a page reload', async ({ page }) => {
+	const token = await signInForNoAuth(page.request);
+	await page.addInitScript((value) => localStorage.setItem('token', value), token);
+	await page.goto('/');
+	await dismissReleaseNotes(page);
+	await page.evaluate(() => ((window as any).__workspacePageSentinel = crypto.randomUUID()));
+	const sentinel = await page.evaluate(() => (window as any).__workspacePageSentinel);
+
+	await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+	await expect(page.getByRole('tab', { name: 'Files', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Close: Files', exact: true })).toHaveCount(0);
+	await expect
+		.poll(() => page.evaluate(() => (window as any).__workspacePageSentinel))
+		.toBe(sentinel);
+
+	await page
+		.getByTestId('workspace-tabs')
+		.getByRole('button', { name: 'Close', exact: true })
+		.click();
+	await expect(page.getByTestId('workspace-tabs')).toHaveCount(0);
+	await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+	await expect(page.getByRole('tab', { name: 'Files', exact: true })).toBeVisible();
+	await expect
+		.poll(() => page.evaluate(() => (window as any).__workspacePageSentinel))
+		.toBe(sentinel);
+});
+
+test('reopens a durable output card after its Pyodide file is no longer catalogued', async ({
+	page
+}) => {
+	const token = await signInForNoAuth(page.request);
+	const name = `durable-output-${Date.now()}.csv`;
+	const workspacePath = `/mnt/uploads/${name}`;
+	let chatId: string | null = null;
+	let fileId: string | null = null;
+
+	try {
+		const upload = await page.request.post('/api/v1/files/', {
+			headers: authHeaders(token),
+			multipart: {
+				file: {
+					name,
+					mimeType: 'text/csv',
+					buffer: Buffer.from('x\n1\n')
+				}
+			}
+		});
+		expect(upload.ok()).toBeTruthy();
+		fileId = (await upload.json()).id;
+
+		const userId = crypto.randomUUID();
+		const assistantId = crypto.randomUUID();
+		const created = await page.request.post('/api/v1/chats/new', {
+			headers: authHeaders(token),
+			data: {
+				chat: {
+					title: `Durable output E2E ${Date.now()}`,
+					history: {
+						currentId: assistantId,
+						messages: {
+							[userId]: {
+								id: userId,
+								parentId: null,
+								childrenIds: [assistantId],
+								role: 'user',
+								content: 'Create a CSV.',
+								timestamp: Date.now()
+							},
+							[assistantId]: {
+								id: assistantId,
+								parentId: userId,
+								childrenIds: [],
+								role: 'assistant',
+								content: 'Created the requested CSV.',
+								done: true,
+								timestamp: Date.now(),
+								files: [
+									{
+										type: 'file',
+										id: fileId,
+										url: fileId,
+										name,
+										content_type: 'text/csv',
+										size: 4,
+										status: 'uploaded',
+										source: 'workspace-output',
+										workspace_path: workspacePath
+									}
+								]
+							}
+						}
+					},
+					_workspace_outputs: []
+				},
+				folder_id: null
+			}
+		});
+		expect(created.ok()).toBeTruthy();
+		chatId = (await created.json()).id;
+
+		await page.addInitScript((value) => localStorage.setItem('token', value), token);
+		await page.goto(`/c/${chatId}`);
+		await dismissReleaseNotes(page);
+		await page.getByRole('button', { name: `Open: ${name}`, exact: true }).click();
+
+		await expect(page.getByRole('tab', { name, exact: true })).toBeVisible();
+		await expect(page.getByRole('tabpanel', { name })).toContainText('x');
+	} finally {
+		if (chatId) {
+			await page.request.delete(`/api/v1/chats/${chatId}`, { headers: authHeaders(token) });
+		}
+		if (fileId) {
+			await page.request.delete(`/api/v1/files/${fileId}`, { headers: authHeaders(token) });
+		}
 	}
 });

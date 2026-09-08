@@ -210,7 +210,7 @@
 	function openInFiles() {
 		if (unavailable || !path) return;
 		showControls.set(true);
-		showFileNavPath.set(targetPage ? { path, page: targetPage } : path);
+		showFileNavPath.set({ path, page: targetPage, chatId: chatId || null });
 	}
 
 	async function downloadFile() {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	buildWorkspaceFileContent,
+	buildWorkspaceSourceContents,
 	buildWorkspaceFilesContent,
 	buildWorkspaceTabs,
 	getDefaultWorkspaceContentId,
@@ -14,6 +15,7 @@ import {
 	getWorkspaceFileUpdateAction,
 	getWorkspaceModelFocus,
 	isKeyboardActivationClick,
+	isWorkspaceOpenRequestForChat,
 	isWorkspaceDocumentPath,
 	limitWorkspaceFileContents,
 	moveWorkspaceContent,
@@ -32,6 +34,22 @@ describe('Pyodide workspace', () => {
 			type: 'workspace-files',
 			workspaceId: WORKSPACE_FILES_ID
 		});
+	});
+
+	it('scopes transient file-open requests to their originating chat', () => {
+		expect(isWorkspaceOpenRequestForChat(undefined, 'chat-2')).toBe(true);
+		expect(isWorkspaceOpenRequestForChat('chat-1', 'chat-1')).toBe(true);
+		expect(isWorkspaceOpenRequestForChat('chat-1', 'chat-2')).toBe(false);
+		expect(isWorkspaceOpenRequestForChat('chat-1', '')).toBe(false);
+	});
+
+	it('keeps durable document tabs independent from the Pyodide Files runtime', () => {
+		const document = buildWorkspaceFileContent('/mnt/uploads/report.pdf', null, 'file-1');
+
+		expect(buildWorkspaceSourceContents(false, false, true, [], [document])).toEqual([document]);
+		expect(buildWorkspaceSourceContents(true, true, false, [], [document])).toEqual([
+			expect.objectContaining({ type: 'workspace-files' })
+		]);
 	});
 
 	it('keeps model focus limited to the visible Canvas or Web Preview', () => {
@@ -54,20 +72,28 @@ describe('Pyodide workspace', () => {
 
 	it('builds stable tabs and legacy renderer ids', () => {
 		const contents = [
+			{ type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID, title: 'Files' },
 			{ type: 'canvas-note', content: '# Breakfast', canvasId: 'canvas-1', title: 'Breakfast' },
 			{ type: 'iframe', content: '<main></main>' }
 		];
 		const tabs = buildWorkspaceTabs(contents);
 		expect(tabs[0]).toEqual({
-			id: 'canvas-1',
+			id: WORKSPACE_FILES_ID,
 			index: 0,
+			title: 'Files',
+			kind: 'workspace-files',
+			closable: false
+		});
+		expect(tabs[1]).toEqual({
+			id: 'canvas-1',
+			index: 1,
 			title: 'Breakfast',
 			kind: 'canvas-note',
 			closable: true
 		});
-		const legacyId = getWorkspaceContentId(contents[1], 1);
+		const legacyId = getWorkspaceContentId(contents[2], 2);
 		expect(legacyId).toMatch(/^iframe:[a-z0-9]+$/);
-		expect(getWorkspaceContentId(contents[1], 99)).toBe(legacyId);
+		expect(getWorkspaceContentId(contents[2], 99)).toBe(legacyId);
 	});
 
 	it('keeps workspace state and tabs stable', () => {
@@ -135,14 +161,15 @@ describe('Pyodide workspace', () => {
 			'/mnt/uploads/report.docx',
 			'/mnt/uploads/deck.pptx',
 			'/mnt/uploads/table.xlsx',
-			'/mnt/uploads/legacy.xls'
+			'/mnt/uploads/legacy.xls',
+			'/mnt/uploads/data.csv'
 		]) {
 			expect(getWorkspaceDocumentFormat(path)).not.toBeNull();
 			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBe(
 				getWorkspaceDocumentFormat(path)
 			);
 		}
-		for (const path of ['/mnt/uploads/data.csv', '/mnt/uploads/report.odt']) {
+		for (const path of ['/mnt/uploads/report.odt']) {
 			expect(isWorkspaceDocumentPath(path)).toBe(false);
 			expect(getWorkspaceFileOpenTarget(path)).toBe('files');
 		}

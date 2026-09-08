@@ -2,9 +2,10 @@
 	import hljs from 'highlight.js';
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount, tick, onDestroy } from 'svelte';
-	import { config, pyodideWorker as pyodideWorkerStore } from '$lib/stores';
+	import { chatId as activeChatId, config, pyodideWorker as pyodideWorkerStore } from '$lib/stores';
 
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
 	import { executeCode } from '$lib/apis/utils';
 	import {
 		copyToClipboard,
@@ -29,6 +30,8 @@
 	const i18n = getContext('i18n');
 
 	export let id = '';
+	export let chatId = '';
+	export let messageId = '';
 	export let edit = true;
 
 	export let onSave = (e) => {};
@@ -72,6 +75,31 @@
 	let stderr = null;
 	let result = null;
 	let files = null;
+	$: hasResult = result !== null && result !== undefined;
+
+	const collectImageOutput = (value: unknown) => {
+		if (typeof value !== 'string') return value;
+		const remaining: string[] = [];
+		for (const line of value.split('\n')) {
+			if (line.startsWith('data:image/png;base64')) {
+				files = [...(files ?? []), { type: 'image/png', data: line }];
+			} else {
+				remaining.push(line);
+			}
+		}
+		return remaining.join('\n');
+	};
+
+	const applyExecutionOutput = (output: Record<string, unknown>) => {
+		if (output.stdout !== undefined && output.stdout !== null) {
+			stdout = collectImageOutput(String(output.stdout));
+		}
+		if (output.result !== undefined && output.result !== null) {
+			result = collectImageOutput(output.result);
+		}
+		if (output.stderr !== undefined && output.stderr !== null) stderr = String(output.stderr);
+		if (output.error !== undefined && output.error !== null) stderr = String(output.error);
+	};
 
 	let copied = false;
 	let saved = false;
@@ -143,6 +171,7 @@
 		result = null;
 		stdout = null;
 		stderr = null;
+		files = null;
 
 		executing = true;
 
@@ -152,67 +181,7 @@
 				return null;
 			});
 
-			if (output) {
-				if (output['stdout']) {
-					stdout = output['stdout'];
-					const stdoutLines = stdout.split('\n');
-
-					for (const [idx, line] of stdoutLines.entries()) {
-						if (line.startsWith('data:image/png;base64')) {
-							if (files) {
-								files.push({
-									type: 'image/png',
-									data: line
-								});
-							} else {
-								files = [
-									{
-										type: 'image/png',
-										data: line
-									}
-								];
-							}
-
-							if (stdout.includes(`${line}\n`)) {
-								stdout = stdout.replace(`${line}\n`, ``);
-							} else if (stdout.includes(`${line}`)) {
-								stdout = stdout.replace(`${line}`, ``);
-							}
-						}
-					}
-				}
-
-				if (output['result']) {
-					result = output['result'];
-					const resultLines = result.split('\n');
-
-					for (const [idx, line] of resultLines.entries()) {
-						if (line.startsWith('data:image/png;base64')) {
-							if (files) {
-								files.push({
-									type: 'image/png',
-									data: line
-								});
-							} else {
-								files = [
-									{
-										type: 'image/png',
-										data: line
-									}
-								];
-							}
-
-							if (result.includes(`${line}\n`)) {
-								result = result.replace(`${line}\n`, ``);
-							} else if (result.includes(`${line}`)) {
-								result = result.replace(`${line}`, ``);
-							}
-						}
-					}
-				}
-
-				output['stderr'] && (stderr = output['stderr']);
-			}
+			if (output) applyExecutionOutput(output);
 
 			executing = false;
 		} else {
@@ -230,8 +199,6 @@
 			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sklearn\b|\bfrom\s+sklearn\b/.test(code) ? 'scikit-learn' : null,
 			/\bimport\s+scipy\b|\bfrom\s+scipy\b/.test(code) ? 'scipy' : null,
-			/\bimport\s+re\b|\bfrom\s+re\b/.test(code) ? 'regex' : null,
-			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
@@ -245,100 +212,48 @@
 		const sharedWorker = $pyodideWorkerStore;
 		const isShared = !!sharedWorker;
 		const worker = sharedWorker ?? createPyodideWorker();
+		const executionChatId = chatId || $activeChatId || '';
+		const executionMessageId = messageId || undefined;
 
 		if (!isShared) {
 			localPyodideWorker = worker;
 		}
 
-		worker.postMessage({
-			id: id,
-			code: code,
-			packages: packages
-		});
-
-		const timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
-				if (!isShared) {
-					worker.terminate();
-					localPyodideWorker = null;
+		let timeoutId: ReturnType<typeof setTimeout>;
+		const armTimeout = (milliseconds: number) => {
+			clearTimeout(timeoutId);
+			timeoutId = setTimeout(() => {
+				if (executing) {
+					executing = false;
+					stderr = 'Execution Time Limit Exceeded';
+					worker.removeEventListener('message', handler);
+					worker.removeEventListener('error', onError);
+					terminatePyodideWorker(worker, 'Pyodide stopped after another request timed out');
+					if (isShared && $pyodideWorkerStore === worker) pyodideWorkerStore.set(null);
+					else localPyodideWorker = null;
+					window.dispatchEvent(new CustomEvent('pyodide:files', { detail: { paths: undefined } }));
 				}
-			}
-		}, 60000);
+			}, milliseconds);
+		};
 
 		const handler = (event) => {
 			// Ignore messages from other requests on the shared worker
 			if (event.data?.id !== id) return;
+			if (event.data?.type === 'pyodide:progress') {
+				armTimeout(getPyodideRequestTimeout(event.data.stage));
+				return;
+			}
 
 			console.log('pyodideWorker.onmessage', event);
 			const { id: _id, ...data } = event.data;
 
 			console.log(_id, data);
 
-			if (data['stdout']) {
-				stdout = data['stdout'];
-				const stdoutLines = stdout.split('\n');
-
-				for (const [idx, line] of stdoutLines.entries()) {
-					if (line.startsWith('data:image/png;base64')) {
-						if (files) {
-							files.push({
-								type: 'image/png',
-								data: line
-							});
-						} else {
-							files = [
-								{
-									type: 'image/png',
-									data: line
-								}
-							];
-						}
-
-						if (stdout.includes(`${line}\n`)) {
-							stdout = stdout.replace(`${line}\n`, ``);
-						} else if (stdout.includes(`${line}`)) {
-							stdout = stdout.replace(`${line}`, ``);
-						}
-					}
-				}
-			}
-
-			if (data['result']) {
-				result = data['result'];
-				const resultLines = result.split('\n');
-
-				for (const [idx, line] of resultLines.entries()) {
-					if (line.startsWith('data:image/png;base64')) {
-						if (files) {
-							files.push({
-								type: 'image/png',
-								data: line
-							});
-						} else {
-							files = [
-								{
-									type: 'image/png',
-									data: line
-								}
-							];
-						}
-
-						if (result.startsWith(`${line}\n`)) {
-							result = result.replace(`${line}\n`, ``);
-						} else if (result.startsWith(`${line}`)) {
-							result = result.replace(`${line}`, ``);
-						}
-					}
-				}
-			}
-
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
+			applyExecutionOutput(data);
 
 			clearTimeout(timeoutId);
 			worker.removeEventListener('message', handler);
+			worker.removeEventListener('error', onError);
 			executing = false;
 
 			// Refresh Files and expose generated office documents in the chat output catalog.
@@ -346,20 +261,48 @@
 				new CustomEvent('pyodide:files', {
 					detail: {
 						paths: Array.isArray(data.workspaceFiles) ? data.workspaceFiles : [],
-						kind: 'changed'
+						snapshots: Array.isArray(data.workspaceFileSnapshots)
+							? data.workspaceFileSnapshots
+							: [],
+						kind: 'changed',
+						chatId: executionChatId,
+						messageId: executionMessageId
 					}
 				})
 			);
+			if (Array.isArray(data.workspaceDeletedFiles) && data.workspaceDeletedFiles.length > 0) {
+				window.dispatchEvent(
+					new CustomEvent('pyodide:files', {
+						detail: {
+							paths: data.workspaceDeletedFiles,
+							kind: 'deleted',
+							chatId: executionChatId,
+							messageId: executionMessageId
+						}
+					})
+				);
+			}
 		};
 
-		worker.addEventListener('message', handler);
-
-		worker.onerror = (event) => {
+		const onError = (event: ErrorEvent) => {
 			console.log('pyodideWorker.onerror', event);
 			clearTimeout(timeoutId);
 			worker.removeEventListener('message', handler);
+			worker.removeEventListener('error', onError);
+			stderr = event.message || 'Pyodide worker failed';
+			if (isShared && $pyodideWorkerStore === worker) pyodideWorkerStore.set(null);
+			else if (!isShared) localPyodideWorker = null;
 			executing = false;
 		};
+
+		worker.addEventListener('message', handler);
+		worker.addEventListener('error', onError);
+		armTimeout(getPyodideRequestTimeout('request-queued'));
+		try {
+			worker.postMessage({ id, code, packages });
+		} catch (error) {
+			onError({ message: error instanceof Error ? error.message : String(error) } as ErrorEvent);
+		}
 	};
 
 	let mermaid = null;
@@ -595,7 +538,7 @@
 					class="bg-gray-50 dark:bg-black dark:text-white max-w-full overflow-x-auto scrollbar-hidden"
 				/>
 
-				{#if executing || stdout || stderr || result || files}
+				{#if executing || stdout || stderr || hasResult || files}
 					<div
 						class="bg-gray-50 dark:bg-black dark:text-white rounded-b-2xl! pt-2 pb-3 px-3.5 flex flex-col gap-2"
 					>
@@ -617,10 +560,10 @@
 									</div>
 								</div>
 							{/if}
-							{#if result || files}
+							{#if hasResult || files}
 								<div class=" ">
 									<div class=" text-gray-500 text-xs mb-1">{$i18n.t('RESULT')}</div>
-									{#if result}
+									{#if hasResult}
 										<div class="text-sm">{`${JSON.stringify(result)}`}</div>
 									{/if}
 									{#if files}

@@ -17,33 +17,34 @@
 		workspaceChatContextId,
 		workspaceOpenRequestId,
 		workspaceActiveFile,
-		workspaceOpenFilePaths
+		workspaceOpenFilePaths,
+		showFileNavPath
 	} from '$lib/stores';
-	import { copyToClipboard, createMessagesList } from '$lib/utils';
+	import { copyToClipboard } from '$lib/utils';
 	import { injectCsp } from '$lib/utils/csp';
 
 	import XMark from '../../icons/XMark.svelte';
 	import ArrowsPointingOut from '../../icons/ArrowsPointingOut.svelte';
 	import Tooltip from '../../common/Tooltip.svelte';
 	import SvgPanZoom from '../../common/SVGPanZoom.svelte';
-	import ArrowLeft from '../../icons/ArrowLeft.svelte';
 	import Download from '../../icons/Download.svelte';
 	import NoteCanvas from './NoteCanvas.svelte';
 	import PyodideFileNav from '../PyodideFileNav.svelte';
 	import WorkspaceTabs from './WorkspaceTabs.svelte';
 	import WebPreviewRenderer from './WebPreviewRenderer.svelte';
 	import WorkspaceDocumentPanels from './WorkspaceDocumentPanels.svelte';
-	import { getCanvasNoteArtifactsFromHistory, mergePersistedCanvasArtifact } from './canvas';
+	import { getCanvasNoteArtifactsFromHistory } from './canvas';
 	import { getWebPreviewsFromHistory } from './webPreview';
 	import { readWorkspaceState, writeWorkspaceState } from './workspaceSession';
-	import { selectTransientCanvasDocument } from '$lib/apis/chats';
+	import { selectWorkspaceArtifact } from '../Messages/workspaceArtifactOpen';
 	import {
 		buildWorkspaceTabs,
 		buildWorkspaceFileContent,
-		buildWorkspaceFilesContent,
+		buildWorkspaceSourceContents,
 		upsertWorkspaceFileContent,
 		limitWorkspaceFileContents,
 		getWorkspaceDocumentFormatForViewer,
+		isWorkspaceOpenRequestForChat,
 		getWorkspaceContentId,
 		getVisibleWorkspaceContents,
 		moveWorkspaceContent,
@@ -68,20 +69,25 @@
 	let selectedContentIdx = 0;
 	let closedWorkspaceContentIds = new Set<string>();
 	let activeFileContextKey = '';
-	let openedFileRuntimeKey = '';
 	let openedFileRecency: string[] = [];
 	let activeOpenedFileId = '';
 	let queuedFileFocusId = '';
 	let fileFocusQueued = false;
 	let workspacePersistenceWarningShown = false;
+	let workspaceStateRestored = false;
+	let workspaceFocusQueue = Promise.resolve();
 
 	const persistWorkspaceState = (id = $chatId) => {
 		if (!id) return;
 		const saved = writeWorkspaceState(id, {
 			order: workspaceContentOrder,
-			closed: [...closedWorkspaceContentIds],
-			filesOpened,
-			openedFiles: openedFileContents.map((content) => content.path).filter(Boolean) as string[]
+			closed: [...closedWorkspaceContentIds].filter((item) => item !== WORKSPACE_FILES_ID),
+			filesOpened: showFiles || filesOpened,
+			openedFiles: openedFileContents.flatMap((content) =>
+				content.path
+					? [{ path: content.path, ...(content.fileId ? { fileId: content.fileId } : {}) }]
+					: []
+			)
 		});
 		if (!saved && !workspacePersistenceWarningShown) {
 			workspacePersistenceWarningShown = true;
@@ -92,9 +98,12 @@
 	const restoreWorkspaceState = (id: string) => {
 		const state = readWorkspaceState(id);
 		closedWorkspaceContentIds = new Set(state?.closed ?? []);
+		closedWorkspaceContentIds.delete(WORKSPACE_FILES_ID);
 		workspaceContentOrder = state?.order ?? [];
-		filesOpened = state?.filesOpened ?? false;
-		openedFileContents = (state?.openedFiles ?? []).map(buildWorkspaceFileContent);
+		filesOpened = showFiles || (state?.filesOpened ?? false);
+		openedFileContents = (state?.openedFiles ?? []).map((file) =>
+			buildWorkspaceFileContent(file.path, null, file.fileId)
+		);
 		openedFileRecency = openedFileContents.map((content, index) =>
 			getWorkspaceContentId(content, index)
 		);
@@ -106,31 +115,19 @@
 	$: workspacePanelId = `workspace-panel-${selectedContentIdx}`;
 	$: selectedIsCanvasNote = selectedContent?.type === 'canvas-note';
 	$: selectedHasArtifactActions = ['iframe', 'svg'].includes(selectedContent?.type);
-	$: workspaceTabs = buildWorkspaceTabs(contents);
 	$: hasWorkspaceTabs = shouldShowWorkspaceTabs(contents);
 
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
 	const MAX_OPEN_DOCUMENTS = 4;
-	$: if (showFiles && !filesOpened && !closedWorkspaceContentIds.has(WORKSPACE_FILES_ID)) {
+	$: if (
+		workspaceStateRestored &&
+		showFiles &&
+		(!filesOpened || closedWorkspaceContentIds.has(WORKSPACE_FILES_ID))
+	) {
 		openWorkspaceFiles();
 	}
 	$: documentViewerEnabled = $config?.features?.enable_document_viewer === true;
-	$: {
-		const nextRuntimeKey = showFiles ? 'pyodide' : 'none';
-		if (nextRuntimeKey !== openedFileRuntimeKey) {
-			const previousRuntimeKey = openedFileRuntimeKey;
-			openedFileRuntimeKey = nextRuntimeKey;
-			if (previousRuntimeKey && openedFileContents.length > 0) {
-				const previousFileIds = openedFileContents.map((content, index) =>
-					getWorkspaceContentId(content, index)
-				);
-				openedFileContents = [];
-				openedFileRecency = [];
-				workspaceContentOrder = workspaceContentOrder.filter((id) => !previousFileIds.includes(id));
-			}
-		}
-	}
 	$: {
 		const activePath =
 			selectedContent?.type === 'workspace-file' ? (selectedContent.path ?? '') : '';
@@ -146,14 +143,25 @@
 		}
 	}
 
-	function navigateContent(direction: 'prev' | 'next') {
-		selectedContentIdx =
-			direction === 'prev'
-				? Math.max(selectedContentIdx - 1, 0)
-				: Math.min(selectedContentIdx + 1, contents.length - 1);
+	function queueWorkspaceFocus(content: WorkspaceContent, targetChatId: string) {
+		workspaceFocusQueue = workspaceFocusQueue
+			.catch(() => {})
+			.then(async () => {
+				await selectWorkspaceArtifact(content, targetChatId);
+			})
+			.catch((error) => {
+				if ($chatId !== targetChatId) return;
+				if (content.type === 'web-preview') {
+					console.error('Web Preview focus could not be saved', error);
+					toast.error($i18n.t('Web Preview focus could not be saved'));
+				} else {
+					console.error('Canvas focus could not be saved', error);
+					toast.error($i18n.t('Canvas focus could not be saved'));
+				}
+			});
 	}
 
-	async function selectWorkspaceContent(index: number) {
+	function selectWorkspaceContent(index: number) {
 		const content = contents[index];
 		const targetChatId = $chatId;
 		if (!content) return;
@@ -161,29 +169,7 @@
 		selectedContentIdx = index;
 		artifactCode.set(getWorkspaceContentId(content, index));
 
-		if (targetChatId && content.canvasId) {
-			try {
-				const document = await selectTransientCanvasDocument(
-					localStorage.token,
-					targetChatId,
-					content.canvasId
-				);
-				if ($chatId !== targetChatId) return;
-				(artifactContents as any).update((items: any[]) =>
-					(items ?? []).map((item) =>
-						item?.canvasId === content.canvasId
-							? mergePersistedCanvasArtifact(item, {
-									...document,
-									content_hash: document.contentHash
-								})
-							: item
-					)
-				);
-			} catch (error) {
-				console.error('Canvas focus could not be saved', error);
-				toast.error($i18n.t('Canvas focus could not be saved'));
-			}
-		}
+		if (targetChatId) queueWorkspaceFocus(content, targetChatId);
 	}
 
 	function syncVisibleWorkspaceContents() {
@@ -223,12 +209,17 @@
 		] as WorkspaceContent[];
 	}
 
-	function rebuildWorkspaceContents() {
-		const nextSourceContents = [
-			...(showFiles && filesOpened ? [buildWorkspaceFilesContent()] : []),
-			...artifactSourceContents,
-			...(showFiles ? openedFileContents : [])
-		];
+	function rebuildWorkspaceContents(
+		filesVisible = showFiles,
+		viewerEnabled = documentViewerEnabled
+	) {
+		const nextSourceContents = buildWorkspaceSourceContents(
+			filesVisible,
+			filesOpened,
+			viewerEnabled,
+			artifactSourceContents,
+			openedFileContents
+		);
 		sourceContents = orderWorkspaceContents(nextSourceContents, workspaceContentOrder);
 		const sourceIds = sourceContents.map((content, index) => getWorkspaceContentId(content, index));
 		// History arrives after the restored utilities during a chat reload. Keep IDs that are
@@ -258,12 +249,23 @@
 		selectWorkspaceFiles();
 	}
 
-	function openWorkspaceFile(path: string, options: { page?: number | null } = {}): boolean {
-		if (!showFiles || !getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)) {
+	function openWorkspaceFile(
+		path: string,
+		options: { page?: number | null; fileId?: string | null } = {}
+	): boolean {
+		if (
+			(!showFiles && !options.fileId) ||
+			!getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)
+		) {
 			return false;
 		}
 		const id = `workspace:file:${path}`;
-		const nextContents = upsertWorkspaceFileContent(openedFileContents, path, options.page);
+		const nextContents = upsertWorkspaceFileContent(
+			openedFileContents,
+			path,
+			options.page,
+			options.fileId
+		);
 		const nextRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
 		const limited = limitWorkspaceFileContents(
 			nextContents,
@@ -310,6 +312,25 @@
 		});
 	}
 
+	function openDurableFileRequest(
+		request: {
+			path: string;
+			page?: number | null;
+			fileId?: string | null;
+			chatId?: string | null;
+		} | null
+	) {
+		if (!isWorkspaceOpenRequestForChat(request?.chatId, $chatId)) {
+			showFileNavPath.set(null);
+			return;
+		}
+		if (!request?.fileId || $config === undefined) return;
+		showFileNavPath.set(null);
+		if (!openWorkspaceFile(request.path, request)) {
+			toast.error($i18n.t('This document cannot be opened in the workspace.'));
+		}
+	}
+
 	function reorderWorkspaceTabs(sourceId: string, targetId: string) {
 		sourceContents = moveWorkspaceContent(sourceContents, sourceId, targetId);
 		workspaceContentOrder = sourceContents.map((content, index) =>
@@ -320,9 +341,7 @@
 	}
 
 	function closeWorkspaceTab(tab: WorkspaceTab) {
-		if (tab.id === WORKSPACE_FILES_ID) {
-			filesOpened = false;
-		}
+		if (tab.id === WORKSPACE_FILES_ID) return;
 		const selectedId = selectedContent
 			? getWorkspaceContentId(selectedContent, selectedContentIdx)
 			: '';
@@ -341,8 +360,7 @@
 		);
 		selectedContentIdx =
 			selectedIdx !== -1 ? selectedIdx : Math.min(tab.index, contents.length - 1);
-		const nextContent = contents[selectedContentIdx];
-		artifactCode.set(getWorkspaceContentId(nextContent, selectedContentIdx));
+		selectWorkspaceContent(selectedContentIdx);
 		persistWorkspaceState();
 	}
 
@@ -412,6 +430,7 @@
 
 	onMount(() => {
 		restoreWorkspaceState($chatId ?? '');
+		workspaceStateRestored = true;
 		rebuildWorkspaceContents();
 
 		const unsubscribeArtifactCode = artifactCode.subscribe((value) => {
@@ -420,16 +439,16 @@
 				selectWorkspaceFiles();
 				return;
 			}
-			if (contents.length > 0) {
+			if (value && contents.length > 0) {
 				const codeIdx = contents.findIndex(
 					(content, index) =>
 						getWorkspaceContentId(content, index) === value ||
 						content.previewId === value ||
 						content.canvasId === value ||
 						content.noteId === value ||
-						content.content.includes(value!)
+						content.content === value
 				);
-				selectedContentIdx = codeIdx !== -1 ? codeIdx : 0;
+				if (codeIdx !== -1) selectedContentIdx = codeIdx;
 			}
 		});
 
@@ -481,9 +500,10 @@
 		if (selectedContent?.type === 'workspace-file') touchOpenedFile(selectedContentId);
 	}
 
-	$: {
-		showFiles;
-		rebuildWorkspaceContents();
+	$: rebuildWorkspaceContents(showFiles, documentViewerEnabled);
+
+	$: if (workspaceStateRestored && $config !== undefined && typeof $showFileNavPath === 'object') {
+		openDurableFileRequest($showFileNavPath);
 	}
 </script>
 
@@ -494,7 +514,7 @@
 	<div class="w-full h-full flex flex-col flex-1 relative">
 		{#if hasWorkspaceTabs}
 			<WorkspaceTabs
-				tabs={workspaceTabs}
+				tabs={buildWorkspaceTabs(contents)}
 				bind:selectedIndex={selectedContentIdx}
 				onSelect={(tab) => selectWorkspaceContent(tab.index)}
 				onReorder={reorderWorkspaceTabs}
@@ -524,63 +544,6 @@
 				class="pointer-events-auto z-20 flex justify-between items-center border-b border-gray-100 p-2.5 font-primar text-gray-900 dark:border-gray-850 dark:text-white"
 			>
 				<div class="flex-1 flex items-center justify-between pr-1">
-					{#if !hasWorkspaceTabs}
-						<div class="flex items-center space-x-2">
-							<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
-								<button
-									aria-label={$i18n.t('Previous version')}
-									class="self-center p-1 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-white hover:text-black rounded-md transition disabled:cursor-not-allowed"
-									on:click={() => navigateContent('prev')}
-									disabled={contents.length <= 1}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										stroke-width="2.5"
-										class="size-3.5"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											d="M15.75 19.5 8.25 12l7.5-7.5"
-										/>
-									</svg>
-								</button>
-
-								<div class="text-xs self-center dark:text-gray-100 min-w-fit">
-									{$i18n.t('Version {{selectedVersion}} of {{totalVersions}}', {
-										selectedVersion: selectedContentIdx + 1,
-										totalVersions: contents.length
-									})}
-								</div>
-
-								<button
-									aria-label={$i18n.t('Next version')}
-									class="self-center p-1 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-white hover:text-black rounded-md transition disabled:cursor-not-allowed"
-									on:click={() => navigateContent('next')}
-									disabled={contents.length <= 1}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										stroke-width="2.5"
-										class="size-3.5"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											d="m8.25 4.5 7.5 7.5-7.5 7.5"
-										/>
-									</svg>
-								</button>
-							</div>
-						</div>
-					{/if}
-
 					<div class="flex items-center gap-1.5">
 						<button
 							class="copy-code-button bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md px-1.5 py-0.5"
@@ -615,15 +578,6 @@
 						{/if}
 					</div>
 				</div>
-
-				{#if !hasWorkspaceTabs}
-					<button
-						class="self-center pointer-events-auto p-1 rounded-full bg-white dark:bg-gray-850"
-						on:click={closeWorkspace}
-					>
-						<XMark className="size-3.5 text-gray-900 dark:text-white" />
-					</button>
-				{/if}
 			</div>
 		{/if}
 
@@ -637,7 +591,19 @@
 					<div class="relative max-w-full w-full h-full">
 						<WorkspaceDocumentPanels {contents} {selectedContentId} />
 						{#each contents as content, index (getWorkspaceContentId(content, index))}
-							{#if content.type !== 'workspace-file' && index !== selectedContentIdx}
+							{#if content.type === 'workspace-files'}
+								<div
+									id={`workspace-panel-${index}`}
+									role="tabpanel"
+									aria-labelledby={`workspace-tab-${index}`}
+									hidden={index !== selectedContentIdx}
+									class="absolute inset-0"
+								>
+									{#if showFiles}
+										<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
+									{/if}
+								</div>
+							{:else if content.type !== 'workspace-file' && index !== selectedContentIdx}
 								<div
 									id={`workspace-panel-${index}`}
 									role="tabpanel"
@@ -646,7 +612,7 @@
 								></div>
 							{/if}
 						{/each}
-						{#if contents[selectedContentIdx].type !== 'workspace-file'}
+						{#if !['workspace-file', 'workspace-files'].includes(contents[selectedContentIdx].type)}
 							<div
 								id={workspacePanelId}
 								role="tabpanel"
@@ -679,19 +645,21 @@
 										svg={contents[selectedContentIdx].content}
 									/>
 								{:else if contents[selectedContentIdx].type === 'canvas-note'}
-									<NoteCanvas
-										chatId={$chatId}
-										canvasId={contents[selectedContentIdx].canvasId ?? ''}
-										noteId={contents[selectedContentIdx].noteId ?? ''}
-										title={contents[selectedContentIdx].title ?? ''}
-										content={contents[selectedContentIdx].content}
-										titleEdited={contents[selectedContentIdx].titleEdited ?? false}
-										canUndoAiUpdate={contents[selectedContentIdx].canUndoAiUpdate ?? false}
-										showClose={!hasWorkspaceTabs}
-										on:close={closeWorkspace}
-									/>
+									{#key `${$chatId}:${contents[selectedContentIdx].canvasId ?? ''}`}
+										<NoteCanvas
+											chatId={$chatId}
+											canvasId={contents[selectedContentIdx].canvasId ?? ''}
+											noteId={contents[selectedContentIdx].noteId ?? ''}
+											title={contents[selectedContentIdx].title ?? ''}
+											content={contents[selectedContentIdx].content}
+											titleEdited={contents[selectedContentIdx].titleEdited ?? false}
+											canUndoAiUpdate={contents[selectedContentIdx].canUndoAiUpdate ?? false}
+											showClose={!hasWorkspaceTabs}
+											on:close={closeWorkspace}
+										/>
+									{/key}
 								{:else if contents[selectedContentIdx].type === 'web-preview'}
-									{#key contents[selectedContentIdx].previewId}
+									{#key `${$chatId}:${contents[selectedContentIdx].previewId ?? ''}`}
 										<WebPreviewRenderer
 											artifact={contents[selectedContentIdx] as any}
 											chatId={$chatId ?? ''}
@@ -703,10 +671,6 @@
 											sandboxAllowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
 										/>
 									{/key}
-								{:else if contents[selectedContentIdx].type === 'workspace-files'}
-									{#if showFiles}
-										<PyodideFileNav {overlay} onOpenFile={openWorkspaceFile} />
-									{/if}
 								{/if}
 							</div>
 						{/if}

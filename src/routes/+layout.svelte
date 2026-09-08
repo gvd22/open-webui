@@ -2,6 +2,7 @@
 	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
 	import { decodeRuntimeText, readWorkspaceText } from '$lib/pyodide/readWorkspaceText';
 	import { Toaster, toast } from 'svelte-sonner';
 
@@ -35,6 +36,7 @@
 		channelId,
 		terminalServers,
 		showControls,
+		showArtifacts,
 		showFileNavPath,
 		showFileNavDir,
 		workspaceFileUpdate,
@@ -315,7 +317,7 @@
 	/** @param {unknown} value */
 	const isString = (value) => typeof value === 'string';
 
-	const executePythonAsWorker = async (id, code, cb, files = [], chatId = '') => {
+	const executePythonAsWorker = async (id, code, cb, files = [], chatId = '', messageId = '') => {
 		let result = null;
 		let stdout = null;
 		let stderr = null;
@@ -330,8 +332,6 @@
 			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sklearn\b|\bfrom\s+sklearn\b/.test(code) ? 'scikit-learn' : null,
 			/\bimport\s+scipy\b|\bfrom\s+scipy\b/.test(code) ? 'scipy' : null,
-			/\bimport\s+re\b|\bfrom\s+re\b/.test(code) ? 'regex' : null,
-			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
@@ -358,47 +358,42 @@
 			}
 		}
 
-		worker.postMessage({
-			type: 'execute',
-			id: id,
-			code: code,
-			packages: packages,
-			files: filePayloads.length > 0 ? filePayloads : undefined
-		});
+		let timeoutId;
+		const armTimeout = (milliseconds) => {
+			clearTimeout(timeoutId);
+			timeoutId = setTimeout(() => {
+				if (executing) {
+					executing = false;
+					stderr = 'Execution Time Limit Exceeded';
 
-		// Timeout for this specific execution (not the worker itself)
-		let timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
+					worker.removeEventListener('message', onMessage);
+					worker.removeEventListener('error', onError);
+					terminatePyodideWorker(worker, 'Pyodide stopped after another request timed out');
+					if ($pyodideWorker === worker) pyodideWorker.set(null);
+					invalidatePyodideWorkspaceFiles();
 
-				// Terminate and recreate the worker on timeout
-				worker.terminate();
-				pyodideWorker.set(null);
-				invalidatePyodideWorkspaceFiles();
-
-				if (cb) {
-					cb(
-						JSON.parse(
-							JSON.stringify(
-								{
-									stdout: stdout,
-									stderr: stderr,
-									result: result
-								},
-								(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
+					if (cb) {
+						cb(
+							JSON.parse(
+								JSON.stringify({ stdout, stderr, result }, (_key, value) =>
+									typeof value === 'bigint' ? value.toString() : value
+								)
 							)
-						)
-					);
+						);
+					}
 				}
-			}
-		}, 60000);
+			}, milliseconds);
+		};
 
 		// Use addEventListener so multiple concurrent executions don't clobber each other
 		const onMessage = (event) => {
 			const { id: eventId, ...data } = event.data;
 			// Only handle responses for this execution ID
 			if (eventId !== id) return;
+			if (data.type === 'pyodide:progress') {
+				armTimeout(getPyodideRequestTimeout(data.stage));
+				return;
+			}
 			// Ignore FS responses (they use a type field)
 			if (data.type && data.type.startsWith('fs:')) return;
 
@@ -407,16 +402,36 @@
 			worker.removeEventListener('message', onMessage);
 			worker.removeEventListener('error', onError);
 
-			data['stdout'] && (stdout = data['stdout']);
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
+			if (data.stdout !== undefined && data.stdout !== null) stdout = data.stdout;
+			if (data.stderr !== undefined && data.stderr !== null) stderr = data.stderr;
+			if (data.error !== undefined && data.error !== null) stderr = data.error;
+			if (data.result !== undefined && data.result !== null) result = data.result;
 			const workspaceFiles = Array.isArray(data.workspaceFiles)
 				? data.workspaceFiles.filter(isString)
 				: [];
-			if (workspaceFiles.length > 0) {
+			const workspaceDeletedFiles = Array.isArray(data.workspaceDeletedFiles)
+				? data.workspaceDeletedFiles.filter(isString)
+				: [];
+			const workspaceFileSnapshots = Array.isArray(data.workspaceFileSnapshots)
+				? data.workspaceFileSnapshots.filter(
+						(snapshot) => isString(snapshot?.path) && snapshot?.data instanceof ArrayBuffer
+					)
+				: [];
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: {
+						paths: workspaceFiles,
+						snapshots: workspaceFileSnapshots,
+						kind: 'changed',
+						chatId,
+						messageId: messageId || undefined
+					}
+				})
+			);
+			if (workspaceDeletedFiles.length > 0) {
 				window.dispatchEvent(
 					new CustomEvent('pyodide:files', {
-						detail: { paths: workspaceFiles, chatId }
+						detail: { paths: workspaceDeletedFiles, kind: 'deleted', chatId }
 					})
 				);
 			}
@@ -437,7 +452,6 @@
 			}
 
 			executing = false;
-			invalidatePyodideWorkspaceFiles();
 		};
 
 		const onError = (event) => {
@@ -446,6 +460,10 @@
 			worker.removeEventListener('message', onMessage);
 			worker.removeEventListener('error', onError);
 
+			stderr = event?.message || 'Pyodide worker failed';
+			if (!event?.pyodideTerminating) worker.terminate();
+			if ($pyodideWorker === worker) pyodideWorker.set(null);
+			invalidatePyodideWorkspaceFiles();
 			if (cb) {
 				cb(
 					JSON.parse(
@@ -461,11 +479,22 @@
 				);
 			}
 			executing = false;
-			invalidatePyodideWorkspaceFiles();
 		};
 
 		worker.addEventListener('message', onMessage);
 		worker.addEventListener('error', onError);
+		armTimeout(getPyodideRequestTimeout('request-queued'));
+		try {
+			worker.postMessage({
+				type: 'execute',
+				id,
+				code,
+				packages,
+				files: filePayloads.length > 0 ? filePayloads : undefined
+			});
+		} catch (error) {
+			onError({ message: error instanceof Error ? error.message : String(error) });
+		}
 	};
 
 	const resolveToolServer = (serverUrl) => {
@@ -557,8 +586,8 @@
 				if (result?.exists !== false) {
 					displayFileHandler(
 						params.path,
-						{ showControls, showFileNavPath },
-						{ page: params?.page }
+						{ showControls, showFileNavPath, showArtifacts },
+						{ page: params?.page, chatId }
 					);
 				}
 			}
@@ -594,11 +623,16 @@
 		if (data?.session_id && data.session_id === socketId) {
 			if (type === 'execute:python') {
 				console.log('execute:python', data);
-				void executePythonAsWorker(data.id, data.code, cb, data.files || [], event.chat_id).catch(
-					(error) => {
-						cb?.({ error: error instanceof Error ? error.message : String(error) });
-					}
-				);
+				void executePythonAsWorker(
+					data.id,
+					data.code,
+					cb,
+					data.files || [],
+					event.chat_id,
+					event.message_id ?? data.message_id ?? ''
+				).catch((error) => {
+					cb?.({ error: error instanceof Error ? error.message : String(error) });
+				});
 				return;
 			} else if (type === 'workspace:read_runtime_file') {
 				try {

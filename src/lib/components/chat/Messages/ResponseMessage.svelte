@@ -56,6 +56,7 @@
 	import ContentRenderer from './ContentRenderer.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
+	import WorkspaceOutputCard from './WorkspaceOutputCard.svelte';
 	import FollowUps from './ResponseMessage/FollowUps.svelte';
 	import { fade } from 'svelte/transition';
 	import { flyAndScale } from '$lib/utils/transitions';
@@ -71,7 +72,15 @@
 		model: string;
 		content: string;
 		output?: OutputItem[];
-		files?: { type: string; url: string }[];
+		files?: {
+			type: string;
+			url: string;
+			name?: string;
+			content_type?: string;
+			size?: number;
+			source?: string;
+			workspace_path?: string;
+		}[];
 		timestamp: number;
 		role: string;
 		statusHistory?: {
@@ -724,6 +733,8 @@
 									<div>
 										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											<Image src={file.url} alt={file.name || $i18n.t('Generated Image')} />
+										{:else if file.source === 'workspace-output' && file.workspace_path}
+											<WorkspaceOutputCard {file} />
 										{:else}
 											<FileItem
 												item={file}
