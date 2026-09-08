@@ -79,11 +79,17 @@ willkuerlich den Chat.
   oder explizit angezeigt hat.
 - Ein Eintrag oeffnet beziehungsweise fokussiert das vorhandene Objekt. Er erzeugt weder eine
   Kopie noch einen zweiten Tab fuer dieselbe stabile ID oder denselben Pfad.
-- Das Output-Verzeichnis ist nur ein Index. Canvas und Preview bleiben im Chat autoritativ;
-  Runtime-Dateien bleiben in ihrer Runtime autoritativ. Ein nicht mehr vorhandener Runtime-Pfad
-  wird als nicht verfuegbar behandelt und nicht aus einem veralteten Chat-Abbild rekonstruiert.
-- Nach dem Loeschen eines Chats werden dessen lokale Output-Verweise entfernt. Runtime-Dateien
-  werden dadurch nicht geloescht.
+- Canvas und Preview bleiben im Chat autoritativ. Bei relevanten Runtime-Dateien bleibt der
+  Pyodide-Pfad die Arbeitskopie; nach jeder erkannten Modell-Aenderung wird zusaetzlich ein
+  serverseitiger Datei-Snapshot wie bei einem Chat-Upload gespeichert. Das Output-Verzeichnis
+  verweist auf den neuesten Snapshot und kann ihn auch ohne laufende Runtime wieder oeffnen.
+- Jeder Snapshot traegt serverseitig validierte Herkunftsmetadaten fuer Chat, optional
+  Ursprungsnachricht und Runtime-Pfad. Eine neue Version ersetzt den aktiven Katalogeintrag fuer
+  denselben Pfad, ohne einen zweiten Eintrag zu erzeugen.
+- Ein Persistenzfehler ist sichtbar; bis zur erfolgreichen Speicherung bleibt der Runtime-Pfad als
+  temporaerer Eintrag nutzbar. Ein fremder Datei-Identifier darf nie an den Chat gebunden werden.
+- Chat-Loeschung und Datei-Aufbewahrung folgen den Regeln normaler Chat-Uploads. Das Loeschen des
+  Chats loescht weiterhin keine unabhaengige browserlokale Pyodide-Arbeitskopie.
 
 ## 3. Darstellung im Chat
 
@@ -298,8 +304,12 @@ erscheint in der seitlichen Arbeitsflaeche automatisch `Dateien` als normaler Fi
   und Browser-Neustart im selben Browserprofil wiederhergestellt. Ist sie aus, gelten nur die
   Lebensdauer des aktuellen Workers beziehungsweise der Seite.
 - Chatwechsel, Tab-Schliessen und Workspace-Schliessen loeschen keine Pyodide-Dateien.
-- Ein gespeicherter Chat behaelt nur seine Output-Pfadverweise. Ein ungespeicherter Chat erhaelt
-  keinen dauerhaften Output-Katalog.
+- Ein gespeicherter Chat behaelt fuer relevante Modell-Outputs den Runtime-Pfad und den neuesten
+  serverseitigen Datei-Snapshot. Ein ungespeicherter Chat erhaelt weder Snapshot noch dauerhaften
+  Output-Katalog.
+- Nur Snapshots des aktuellen Chats werden als priorisierte Output-Dateien in den Modellkontext
+  aufgenommen. Andere Dateien im gemeinsam genutzten Pyodide-Dateisystem werden nicht aufgelistet
+  und gelten ohne explizite Auswahl nicht als Kontext dieses Chats.
 - Chat-Loeschung entfernt die chatbezogenen Verweise, nicht die browserlokalen Dateien. Das
   Zuruecksetzen persistierter Dateien bleibt eine ausdrueckliche Benutzeraktion.
 

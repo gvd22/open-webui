@@ -128,11 +128,13 @@ Nicht als Rahmen oder Modus anzuzeigen sind `Workspace`, `Artifact`, `Draft`, `R
   Zustand bleibt nur dieses Icon sichtbar; es entsteht keine zweite dauerhafte Seitenleiste.
 - Das Menue katalogisiert Canvas, Web Previews und vom Modell erzeugte, bearbeitete oder explizit
   dargestellte PDF-, Word-, PowerPoint-, Excel- und CSV-Dateien.
-- Canvas und Preview werden ueber ihre stabilen IDs erneut geoeffnet. Runtime-Dateien werden ueber
-  ihren Pfad in der zugeordneten Runtime geoeffnet. Identische IDs oder Pfade werden nicht
-  dupliziert.
-- Das Verzeichnis ist kein Datenspeicher. Es verweist auf die autoritative Chat- oder Runtime-
-  Quelle und zeigt fehlende Runtime-Inhalte als nicht verfuegbar.
+- Canvas und Preview werden ueber ihre stabilen IDs erneut geoeffnet. Relevante Modell-Outputs
+  werden ueber den neuesten serverseitigen Datei-Snapshot geoeffnet; solange noch kein Snapshot
+  vorliegt, bleibt der Runtime-Pfad als temporaerer Fallback nutzbar. Identische IDs oder Pfade
+  werden nicht dupliziert.
+- Das Verzeichnis ist ein chatgebundener Index, kein eigener Blob-Speicher. Der Pyodide-Pfad ist
+  die Arbeitskopie, waehrend der letzte erfolgreiche Upload-Snapshot das dauerhafte Wiedereroeffnen
+  und die spaetere Modellreferenz ermoeglicht.
 
 ## 4. Gemeinsames Objekt- und Tabmodell
 
@@ -146,7 +148,7 @@ type WorkspaceItem = {
 	renderer: string;
 	closable: boolean;
 	source?: unknown;
-	persistence?: 'chat' | 'note' | 'runtime' | 'external';
+	persistence?: 'chat' | 'note' | 'runtime' | 'snapshot' | 'external';
 	dirty?: boolean;
 };
 ```
@@ -732,11 +734,16 @@ Terminal und Pyodide werden in dieser Produktumgebung nicht gleichzeitig als Fil
 - Das Pyodide-Dateisystem ist benutzer- und browserprofilgebunden, nicht chat- oder servergebunden.
   Bei aktivierter Dateipersistenz liegt es in IndexedDB und ueberlebt Reload sowie Browserneustart
   im selben Profil; ohne Persistenz endet es mit Worker beziehungsweise Seite.
-- Chat-, Tab- und Workspace-Wechsel loeschen keine Pyodide-Dateien. Gespeicherte Chats behalten
-  nur einen lokalen Katalog ihrer Output-Pfade. Ungespeicherte Chats erhalten keinen dauerhaften
-  Output-Katalog.
-- Das Loeschen eines Chats entfernt dessen Output-Verweise, aber nicht die browserlokalen Dateien.
-  Persistierte Pyodide-Dateien werden nur durch eine ausdrueckliche Reset-Aktion geloescht.
+- Chat-, Tab- und Workspace-Wechsel loeschen keine Pyodide-Dateien. Fuer relevante, vom Modell
+  erzeugte oder bearbeitete Office-, PDF- und CSV-Ausgaben speichert ein gespeicherter Chat
+  zusaetzlich den neuesten serverseitigen Datei-Snapshot samt Runtime-Pfad, Chat-ID und optionaler
+  Ursprungsnachricht. Ungespeicherte Chats erhalten keinen Snapshot und keinen dauerhaften Katalog.
+- Nur die Snapshot-Dateien des aktuellen Chats werden dem Modell als priorisierte Outputs
+  mitgeteilt. Nicht gelistete Dateien im gemeinsamen Browser-Dateisystem koennen aus anderen Chats
+  stammen und werden nicht implizit als aktueller Kontext behandelt.
+- Das Loeschen eines Chats und die Aufbewahrung seiner Snapshots folgen dem bestehenden Vertrag
+  fuer normale Chat-Uploads. Browserlokale Arbeitskopien werden weiterhin nur durch eine
+  ausdrueckliche Reset-Aktion geloescht.
 
 ## 10. Dateitabs und Dokumentanzeige
 
@@ -839,7 +846,8 @@ Nicht dediziert unterstuetzt sind insbesondere `.doc`, `.ppt`, `.xlsx`, `.xls`, 
 | Transienter Canvas          | Chat                   | vorhanden, nicht ungefragt offen | vorhanden                   | geloescht           |
 | Canvas in Notes             | Note plus Verknuepfung | vorhanden                        | vorhanden                   | Note bleibt         |
 | Web Preview                 | Chat                   | vorhanden, nicht ungefragt offen | vorhanden                   | geloescht           |
-| Exportierte Preview-Dateien | Runtime                | runtimeabhaengig                 | vorhanden                   | bleiben             |
+| Relevante Modell-Outputs    | Chat-Datei-Snapshot    | vorhanden                        | vorhanden                   | Upload-Vertrag      |
+| Exportierte Preview-Dateien | Runtime oder Snapshot  | bei Snapshot vorhanden           | vorhanden                   | Upload-Vertrag      |
 | Files                       | Aktive Runtime         | runtimeabhaengig                 | Runtime bleibt              | runtimeabhaengig    |
 | Terminal                    | Terminal-Service       | serviceabhaengig                 | Sitzung nach Servicevertrag | serviceabhaengig    |
 | Browser                     | Terminal-Port/App      | serviceabhaengig                 | App bleibt                  | serviceabhaengig    |
