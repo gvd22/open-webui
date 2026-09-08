@@ -1,5 +1,4 @@
 import pytest
-
 from open_webui.utils.workspace_outputs import merge_workspace_outputs
 
 
@@ -54,6 +53,47 @@ def test_workspace_outputs_normalize_untrusted_metadata():
     assert files[0]['updatedAt'] == 0
 
 
+def test_workspace_outputs_preserve_valid_snapshot_metadata():
+    files = merge_workspace_outputs(
+        [],
+        [
+            {
+                'path': '/mnt/uploads/report.pdf',
+                'fileId': 'file-1',
+                'messageId': 'message-1',
+                'originChatId': 'chat-1',
+                'contentType': 'application/pdf',
+                'size': 42,
+                'persistedAt': 20,
+                'updatedAt': 10,
+            }
+        ],
+        [],
+    )
+
+    assert files[0] == {
+        'path': '/mnt/uploads/report.pdf',
+        'name': 'report.pdf',
+        'source': 'pyodide',
+        'page': None,
+        'updatedAt': 10,
+        'fileId': 'file-1',
+        'messageId': 'message-1',
+        'originChatId': 'chat-1',
+        'contentType': 'application/pdf',
+        'size': 42,
+        'persistedAt': 20,
+    }
+
+    refreshed = merge_workspace_outputs(
+        files,
+        [{'path': '/mnt/uploads/report.pdf', 'updatedAt': 30}],
+        [],
+    )
+    assert refreshed[0]['fileId'] == 'file-1'
+    assert refreshed[0]['updatedAt'] == 30
+
+
 def test_workspace_outputs_merge_remove_and_limit():
     current = [
         {'path': '/mnt/uploads/old.pdf', 'updatedAt': 1},
@@ -71,10 +111,7 @@ def test_workspace_outputs_merge_remove_and_limit():
 
     many = merge_workspace_outputs(
         [],
-        [
-            {'path': f'/mnt/uploads/{index}.pdf', 'updatedAt': index}
-            for index in range(120)
-        ],
+        [{'path': f'/mnt/uploads/{index}.pdf', 'updatedAt': index} for index in range(120)],
         [],
     )
     assert len(many) == 100

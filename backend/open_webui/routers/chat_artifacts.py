@@ -6,6 +6,7 @@ from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_session
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
+from open_webui.models.files import File
 from open_webui.models.notes import Note, NoteForm, Notes
 from open_webui.socket.main import sio
 from open_webui.utils.access_control import has_permission
@@ -13,11 +14,10 @@ from open_webui.utils.auth import get_verified_user
 from open_webui.utils.canvas import (
     CANVAS_DOCUMENTS_KEY,
     CanvasConflictError,
-    build_canvas_note_content,
     build_canvas_document_update,
+    build_canvas_note_content,
     canvas_content_hash,
     canvas_timestamp,
-    generate_canvas_title,
     linked_canvas_note_exists,
     require_canvas_precondition,
     set_active_canvas_document,
@@ -35,6 +35,7 @@ from open_webui.utils.workspace_outputs import (
     merge_workspace_outputs,
 )
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,119 @@ class WorkspaceOutputMutationForm(BaseModel):
     remove: list[str] = Field(default_factory=list, max_length=100)
 
 
+async def _resolve_workspace_output_upserts(
+    candidates: list[dict], chat_id: str, user_id: str, db: AsyncSession
+) -> list[dict]:
+    resolved = []
+    for candidate in candidates:
+        item = dict(candidate)
+        file_id = item.get('fileId')
+        if file_id:
+            if not isinstance(file_id, str):
+                raise ValueError('Invalid workspace output file ID.')
+            result = await db.execute(select(File).filter_by(id=file_id, user_id=user_id))
+            file = result.scalars().first()
+            if file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail='Workspace output file not found.',
+                )
+            meta = file.meta or {}
+            raw_size = meta.get('size')
+            size = raw_size if isinstance(raw_size, int) and not isinstance(raw_size, bool) else 0
+            item.update(
+                {
+                    'fileId': file.id,
+                    'contentType': meta.get('content_type') or 'application/octet-stream',
+                    'size': max(0, size),
+                    'originChatId': chat_id,
+                }
+            )
+        resolved.append(item)
+    return resolved
+
+
+def _workspace_output_snapshot_ref(item: dict, chat_id: str) -> dict:
+    return {
+        'type': 'file',
+        'id': item['fileId'],
+        'url': item['fileId'],
+        'name': item['name'],
+        'content_type': item.get('contentType'),
+        'size': item.get('size'),
+        'status': 'uploaded',
+        'source': 'workspace-output',
+        'workspace_path': item['path'],
+        'origin_chat_id': chat_id,
+        **({'origin_message_id': item['messageId']} if item.get('messageId') else {}),
+    }
+
+
+def _sync_workspace_output_file_refs(chat_data: dict, files: list[dict], chat_id: str):
+    output_paths = {item['path'] for item in files if item.get('fileId')}
+    message_by_path = {item['path']: item.get('messageId') for item in files if item.get('fileId')}
+    snapshot_refs = {
+        item['path']: _workspace_output_snapshot_ref(item, chat_id) for item in files if item.get('fileId')
+    }
+    raw_chat_files = chat_data.get('files')
+    existing_chat_files = [
+        item
+        for item in (raw_chat_files if isinstance(raw_chat_files, list) else [])
+        if not (
+            isinstance(item, dict)
+            and item.get('source') == 'workspace-output'
+            and item.get('workspace_path') not in output_paths
+        )
+    ]
+    by_workspace_path = {
+        item.get('workspace_path'): item
+        for item in existing_chat_files
+        if isinstance(item, dict) and item.get('source') == 'workspace-output'
+    }
+    by_workspace_path.update(snapshot_refs)
+    chat_data['files'] = [
+        item
+        for item in existing_chat_files
+        if not (isinstance(item, dict) and item.get('source') == 'workspace-output')
+    ] + list(by_workspace_path.values())
+
+    history = chat_data.get('history')
+    raw_history_messages = history.get('messages') if isinstance(history, dict) else None
+    history_messages = raw_history_messages if isinstance(raw_history_messages, dict) else {}
+    for message_id, message in history_messages.items():
+        if isinstance(message, dict):
+            raw_message_files = message.get('files')
+            message['files'] = [
+                existing
+                for existing in (raw_message_files if isinstance(raw_message_files, list) else [])
+                if not (
+                    isinstance(existing, dict)
+                    and existing.get('source') == 'workspace-output'
+                    and (
+                        existing.get('workspace_path') not in output_paths
+                        or message_by_path.get(existing.get('workspace_path')) != message_id
+                    )
+                )
+            ]
+    for item in files:
+        message_id = item.get('messageId')
+        ref = snapshot_refs.get(item['path'])
+        message = history_messages.get(message_id)
+        if not ref or not isinstance(message, dict):
+            continue
+        raw_message_files = message.get('files')
+        message_files = [
+            existing
+            for existing in (raw_message_files if isinstance(raw_message_files, list) else [])
+            if not (
+                isinstance(existing, dict)
+                and existing.get('source') == 'workspace-output'
+                and existing.get('workspace_path') == item['path']
+            )
+        ]
+        message['files'] = [*message_files, ref]
+
+
 @router.post('/{id}/workspace-outputs')
 async def update_workspace_outputs(
     id: str,
@@ -84,16 +198,18 @@ async def update_workspace_outputs(
 ):
     """Atomically update the output catalog stored with one chat."""
 
-    def mutate(chat_data: dict, _session: AsyncSession):
+    async def mutate(chat_data: dict, session: AsyncSession):
+        upsert = await _resolve_workspace_output_upserts(form_data.upsert, id, user.id, session)
         files = merge_workspace_outputs(
             chat_data.get(WORKSPACE_OUTPUTS_KEY),
-            form_data.upsert,
+            upsert,
             form_data.remove,
         )
         if files:
             chat_data[WORKSPACE_OUTPUTS_KEY] = files
         else:
             chat_data.pop(WORKSPACE_OUTPUTS_KEY, None)
+        _sync_workspace_output_file_refs(chat_data, files, id)
         return chat_data, files
 
     try:
@@ -114,6 +230,7 @@ async def update_transient_web_preview(
     db: AsyncSession = Depends(get_async_session),
 ):
     """Persist direct edits to a chat-scoped Web Preview."""
+
     def mutate(chat_data: dict, _session: AsyncSession):
         documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
         current = documents.get(preview_id)

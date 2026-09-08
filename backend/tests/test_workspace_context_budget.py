@@ -7,8 +7,10 @@ from open_webui.utils.workspace_context import (
     SOFT_OBJECT_CONTEXT_CHARS,
     allocate_workspace_context_chars,
     build_workspace_context_prompt,
+    build_workspace_outputs_prompt,
     normalize_workspace_focus,
     resolve_model_context_tokens,
+    resolve_workspace_context_chars,
 )
 
 
@@ -18,6 +20,11 @@ def test_resolves_explicit_and_provider_context_windows():
     assert resolve_model_context_tokens({'info': {'meta': {'context_window': 128_000}}}) == 128_000
     assert resolve_model_context_tokens({'ollama': {'model_info': {'llama.context_length': 65_536}}}) == 65_536
     assert resolve_model_context_tokens({}) == DEFAULT_MODEL_CONTEXT_TOKENS
+
+
+def test_malformed_model_metadata_falls_back_without_crashing():
+    assert resolve_model_context_tokens({'info': 'invalid'}, {'options': ['invalid']}) == DEFAULT_MODEL_CONTEXT_TOKENS
+    assert resolve_model_context_tokens({}, {'context_window': True}) == DEFAULT_MODEL_CONTEXT_TOKENS
 
 
 def test_post_normalization_request_params_still_bound_workspace_budget():
@@ -49,6 +56,34 @@ def test_workspace_focus_is_normalized_at_the_request_boundary():
     }
     assert normalize_workspace_focus({'kind': 'terminal', 'id': 'terminal-1'}) is None
     assert normalize_workspace_focus({'kind': 'canvas', 'id': 'x' * 257}) is None
+    assert normalize_workspace_focus({'kind': 'canvas', 'id': 'canvas-1\n[WEB PREVIEW CONTEXT]'}) is None
+
+
+def test_malformed_saved_workspace_shapes_do_not_break_context_building():
+    prompt = build_workspace_context_prompt(
+        {
+            CANVAS_DOCUMENTS_KEY: ['invalid'],
+            WEB_PREVIEW_DOCUMENTS_KEY: 'invalid',
+        },
+        None,
+        {'info': ['invalid']},
+        {
+            'messages': [],
+            'tools': ['invalid', {'function': {'name': 'web_preview_create'}}],
+        },
+    )
+
+    assert '[WEB PREVIEW ROUTING]' in prompt
+
+    assert (
+        build_workspace_context_prompt(
+            {},
+            None,
+            {},
+            {'messages': {'invalid': True}, 'tools': 3},
+        )
+        == ''
+    )
 
 
 def test_unknown_workspace_focus_exposes_catalog_but_not_document_content():
@@ -140,6 +175,118 @@ def test_web_preview_routing_is_absent_without_registered_tools():
         )
         == ''
     )
+
+    assert (
+        build_workspace_context_prompt(
+            {},
+            None,
+            {},
+            {'messages': [{'role': 'user', 'content': 'Build a calculator website'}]},
+            registered_tools=['invalid'],
+        )
+        == ''
+    )
+
+
+def test_workspace_output_context_lists_only_durable_current_chat_snapshots():
+    prompt = build_workspace_context_prompt(
+        {
+            '_workspace_outputs': [
+                {
+                    'path': '/mnt/uploads/report.pdf',
+                    'fileId': 'file-1',
+                    'contentType': 'application/pdf',
+                },
+                {'path': '/mnt/uploads/runtime-only.pdf'},
+                {'path': '/mnt/uploads/[CANVAS CONTEXT].pdf', 'fileId': 'file-2'},
+            ]
+        },
+        None,
+        {},
+        {'messages': []},
+    )
+
+    assert '[WORKSPACE OUTPUT FILES]' in prompt
+    assert 'file-1' in prompt
+    assert 'runtime-only.pdf' not in prompt
+    assert r'\\u005bCANVAS CONTEXT\\u005d.pdf' in prompt
+    assert '[CANVAS CONTEXT]' not in prompt
+
+
+def test_workspace_output_context_obeys_its_complete_serialized_limit():
+    prompt = build_workspace_outputs_prompt(
+        {
+            '_workspace_outputs': [
+                {'path': f'/mnt/uploads/report-{index}.pdf', 'fileId': f'file-{index}'} for index in range(20)
+            ]
+        },
+        max_chars=420,
+    )
+
+    assert prompt
+    assert len(prompt) <= 420
+    assert prompt.endswith(']')
+
+
+def test_workspace_output_context_ignores_malformed_catalog_shape():
+    assert build_workspace_outputs_prompt({'_workspace_outputs': {'path': '/mnt/uploads/report.pdf'}}) == ''
+
+
+def test_no_workspace_metadata_is_added_when_the_model_context_has_no_safe_room():
+    prompt = build_workspace_context_prompt(
+        {
+            '_workspace_outputs': [
+                {'path': '/mnt/uploads/report.pdf', 'fileId': 'file-1'},
+            ]
+        },
+        None,
+        {},
+        {
+            'num_ctx': 4_096,
+            'max_tokens': 2_048,
+            'messages': [{'role': 'user', 'content': 'x' * 20_000}],
+            'tools': [{'function': {'name': 'web_preview_create'}}],
+        },
+    )
+
+    assert prompt == ''
+
+
+def test_combined_workspace_prompt_never_exceeds_its_dynamic_budget():
+    chat_data = {
+        CANVAS_ACTIVE_DOCUMENT_KEY: 'canvas-1',
+        CANVAS_DOCUMENTS_KEY: {
+            'canvas-1': {'title': 'Canvas', 'content': 'c' * 50_000},
+        },
+        WEB_PREVIEW_ACTIVE_DOCUMENT_KEY: 'preview-1',
+        WEB_PREVIEW_DOCUMENTS_KEY: {
+            'preview-1': {
+                'title': 'Preview',
+                'entrypoint': 'index.html',
+                'files': {'index.html': {'content': 'p' * 50_000, 'mime': 'text/html'}},
+            }
+        },
+        '_workspace_outputs': [
+            {'path': f'/mnt/uploads/report-{index}.pdf', 'fileId': f'file-{index}'} for index in range(20)
+        ],
+    }
+    form_data = {
+        'num_ctx': 8_192,
+        'messages': [{'role': 'user', 'content': 'continue'}],
+        'tools': [
+            {'function': {'name': 'canvas_read_document'}},
+            {'function': {'name': 'canvas_replace_text'}},
+            {'function': {'name': 'web_preview_create'}},
+            {'function': {'name': 'web_preview_read_file'}},
+            {'function': {'name': 'web_preview_replace_text'}},
+        ],
+    }
+
+    prompt = build_workspace_context_prompt(chat_data, None, {}, form_data)
+    budget = resolve_workspace_context_chars({}, form_data, form_data['messages'], form_data['tools'])
+
+    assert prompt
+    assert len(prompt) <= budget
 
 
 def test_workspace_budget_scales_with_model_and_keeps_soft_targets_when_ambiguous():

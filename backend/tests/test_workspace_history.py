@@ -1,6 +1,6 @@
 import json
-import pytest
 
+import pytest
 from open_webui.utils.workspace_context import (
     build_cancelled_workspace_output_update,
     compact_workspace_tool_output,
@@ -51,6 +51,58 @@ def test_canvas_history_keeps_reference_without_document_content():
     }
 
 
+def test_completed_workspace_arguments_keep_only_bounded_metadata():
+    output = _tool_output(
+        'canvas_update_document',
+        {
+            'canvas_id': 'canvas-1',
+            'title': '[WEB PREVIEW CONTEXT]' + ('x' * 10_000),
+            'content': 'private body',
+            'expected_updated_at': True,
+        },
+        {'type': 'canvas.document', 'canvasId': 'canvas-1'},
+    )
+
+    arguments = json.loads(compact_workspace_tool_output(output)[0]['arguments'])
+
+    assert arguments['canvas_id'] == 'canvas-1'
+    assert len(arguments['title']) == 256
+    assert 'content' not in arguments
+    assert 'expected_updated_at' not in arguments
+
+
+def test_malformed_completed_workspace_result_is_bounded():
+    output = _tool_output(
+        'canvas_update_document',
+        {'canvas_id': 'canvas-1'},
+        {'type': 'canvas.document'},
+    )
+    output[1]['output'][0]['text'] = '[CANVAS CONTEXT]\n' + ('x' * 20_000)
+
+    compact = compact_workspace_tool_output(output)
+    result = json.loads(compact[1]['output'][0]['text'])
+
+    assert result == {'contentOmitted': True, 'invalidResult': True}
+
+
+def test_large_completed_workspace_result_metadata_is_bounded():
+    output = _tool_output(
+        'web_preview_update',
+        {'preview_id': 'preview-1'},
+        {'type': 'web_preview.error', 'message': 'x' * 20_000},
+    )
+
+    compact = compact_workspace_tool_output(output)
+    text = compact[1]['output'][0]['text']
+
+    assert len(text) <= 4_096
+    assert json.loads(text) == {
+        'type': 'web_preview.error',
+        'contentOmitted': True,
+        'resultTruncated': True,
+    }
+
+
 def test_read_excerpt_is_available_for_current_turn_but_compact_in_history():
     output = _tool_output(
         'web_preview_read_file',
@@ -84,9 +136,11 @@ def test_non_workspace_output_is_not_copied_or_changed():
 
 @pytest.mark.parametrize('status', ['in_progress', 'completed', 'pending', 'queued'])
 def test_unexecuted_workspace_calls_keep_full_arguments_for_approval(status):
-    output = _tool_output('web_preview_create',
+    output = _tool_output(
+        'web_preview_create',
         {'title': 'Dashboard', 'files': {'index.html': {'content': '<main>Original</main>'}}},
-        {'type': 'web_preview.document'})[:1]
+        {'type': 'web_preview.document'},
+    )[:1]
     output[0]['status'] = status
     assert compact_workspace_tool_output(output) is output
     assert json.loads(output[0]['arguments'])['files']['index.html']['content'] == '<main>Original</main>'

@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 WORKSPACE_OUTPUTS_KEY = '_workspace_outputs'
 WORKSPACE_OUTPUT_MAX_COUNT = 100
 WORKSPACE_OUTPUT_MAX_PATH_CHARS = 1024
+WORKSPACE_OUTPUT_MAX_ID_CHARS = 256
 WORKSPACE_OUTPUT_EXTENSIONS = {
     'csv',
     'doc',
@@ -41,18 +42,36 @@ def normalize_workspace_output(item: object) -> dict | None:
     updated_at = item.get('updatedAt')
     updated_at = (
         updated_at
-        if isinstance(updated_at, (int, float))
-        and not isinstance(updated_at, bool)
-        and math.isfinite(updated_at)
+        if isinstance(updated_at, (int, float)) and not isinstance(updated_at, bool) and math.isfinite(updated_at)
         else 0
     )
-    return {
+    normalized = {
         'path': path,
         'name': parsed_path.name or 'Document',
         'source': 'pyodide',
         'page': page,
         'updatedAt': max(0, int(updated_at)),
     }
+    for key in ('fileId', 'messageId', 'originChatId', 'contentType'):
+        value = item.get(key)
+        if (
+            isinstance(value, str)
+            and 0 < len(value) <= WORKSPACE_OUTPUT_MAX_ID_CHARS
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            normalized[key] = value
+    size = item.get('size')
+    if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
+        normalized['size'] = size
+    persisted_at = item.get('persistedAt')
+    if (
+        isinstance(persisted_at, (int, float))
+        and not isinstance(persisted_at, bool)
+        and math.isfinite(persisted_at)
+        and persisted_at >= 0
+    ):
+        normalized['persistedAt'] = int(persisted_at)
+    return normalized
 
 
 def merge_workspace_outputs(
@@ -78,6 +97,9 @@ def merge_workspace_outputs(
             raise ValueError('Invalid Pyodide output file.')
         previous = by_path.get(item['path'])
         if previous:
+            # A runtime change is recorded before its durable upload finishes. Keep
+            # the last snapshot usable until a newer fileId arrives.
+            item = {**previous, **item}
             item['updatedAt'] = max(previous['updatedAt'], item['updatedAt'])
         by_path[item['path']] = item
     return sorted(

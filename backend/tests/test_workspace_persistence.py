@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from open_webui.models.chats import Chat, Chats
 from open_webui.models.config import Config
+from open_webui.models.files import File
 from open_webui.models.notes import Note, NoteModel, Notes
 from open_webui.routers.chat_artifacts import (
     CanvasDocumentForm,
@@ -39,6 +40,7 @@ async def _database(tmp_path):
     async with engine.begin() as connection:
         await connection.run_sync(Chat.__table__.create)
         await connection.run_sync(Note.__table__.create)
+        await connection.run_sync(File.__table__.create)
     return engine, sessions
 
 
@@ -112,9 +114,7 @@ def test_workspace_outputs_are_persisted_with_the_chat(monkeypatch, tmp_path):
 
             result = await update_workspace_outputs(
                 'chat-1',
-                WorkspaceOutputMutationForm(
-                    upsert=[{'path': '/mnt/uploads/report.pdf', 'updatedAt': 10}]
-                ),
+                WorkspaceOutputMutationForm(upsert=[{'path': '/mnt/uploads/report.pdf', 'updatedAt': 10}]),
                 user=SimpleNamespace(id='user-1'),
                 db=None,
             )
@@ -123,6 +123,195 @@ def test_workspace_outputs_are_persisted_with_the_chat(monkeypatch, tmp_path):
             async with sessions() as session:
                 persisted = await session.get(Chat, 'chat-1')
                 assert persisted.chat['_workspace_outputs'] == result['files']
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_workspace_output_update_tolerates_malformed_saved_file_containers(monkeypatch, tmp_path):
+    async def run():
+        engine, sessions = await _database(tmp_path)
+        try:
+            await _insert_chat(
+                sessions,
+                {
+                    'title': 'Workspace',
+                    'files': {'invalid': True},
+                    'history': {'messages': ['invalid']},
+                },
+            )
+            _patch_chat_sessions(monkeypatch, sessions)
+
+            result = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(
+                    upsert=[{'path': '/mnt/uploads/report.pdf', 'updatedAt': 10}]
+                ),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+
+            assert result['files'][0]['path'] == '/mnt/uploads/report.pdf'
+            async with sessions() as session:
+                persisted = await session.get(Chat, 'chat-1')
+                assert persisted.chat['files'] == []
+                assert persisted.chat['history']['messages'] == ['invalid']
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_workspace_output_snapshot_is_owned_and_attached_to_chat(monkeypatch, tmp_path):
+    async def run():
+        engine, sessions = await _database(tmp_path)
+        try:
+            await _insert_chat(
+                sessions,
+                {
+                    'title': 'Workspace',
+                    'history': {
+                        'messages': {
+                            'assistant-1': {'id': 'assistant-1', 'role': 'assistant'},
+                            'assistant-2': {
+                                'id': 'assistant-2',
+                                'role': 'assistant',
+                                'files': {'invalid': True},
+                            },
+                            'malformed': 'not-a-message',
+                        }
+                    },
+                },
+            )
+            _patch_chat_sessions(monkeypatch, sessions)
+            async with sessions() as session:
+                session.add(
+                    File(
+                        id='file-1',
+                        user_id='user-1',
+                        filename='report.pdf',
+                        path='/storage/file-1_report.pdf',
+                        data={},
+                        meta={'content_type': 'application/pdf', 'size': 42},
+                        created_at=1,
+                        updated_at=1,
+                    ),
+                )
+                await session.commit()
+
+            result = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(
+                    upsert=[
+                        {
+                            'path': '/mnt/uploads/report.pdf',
+                            'fileId': 'file-1',
+                            'messageId': 'assistant-1',
+                            'updatedAt': 10,
+                        }
+                    ]
+                ),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+
+            assert result['files'][0]['originChatId'] == 'chat-1'
+            assert result['files'][0]['contentType'] == 'application/pdf'
+            async with sessions() as session:
+                persisted = await session.get(Chat, 'chat-1')
+                reference = persisted.chat['files'][0]
+                assert reference['id'] == 'file-1'
+                assert reference['source'] == 'workspace-output'
+                assert reference['origin_chat_id'] == 'chat-1'
+                assert persisted.chat['history']['messages']['assistant-1']['files'] == [reference]
+
+            reassigned = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(
+                    upsert=[
+                        {
+                            'path': '/mnt/uploads/report.pdf',
+                            'fileId': 'file-1',
+                            'messageId': 'assistant-2',
+                            'updatedAt': 11,
+                        }
+                    ]
+                ),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+            assert reassigned['files'][0]['messageId'] == 'assistant-2'
+            async with sessions() as session:
+                persisted = await session.get(Chat, 'chat-1')
+                assert persisted.chat['history']['messages']['assistant-1']['files'] == []
+                assert len(persisted.chat['history']['messages']['assistant-2']['files']) == 1
+
+            removed = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(remove=['/mnt/uploads/report.pdf']),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+            assert removed['files'] == []
+            async with sessions() as session:
+                persisted = await session.get(Chat, 'chat-1')
+                assert persisted.chat['files'] == []
+                assert persisted.chat['history']['messages']['assistant-1']['files'] == []
+                assert persisted.chat['history']['messages']['assistant-2']['files'] == []
+
+            with pytest.raises(HTTPException) as exc:
+                await update_workspace_outputs(
+                    'chat-1',
+                    WorkspaceOutputMutationForm(
+                        upsert=[
+                            {
+                                'path': '/mnt/uploads/stolen.pdf',
+                                'fileId': 'file-1',
+                            }
+                        ]
+                    ),
+                    user=SimpleNamespace(id='user-2'),
+                    db=None,
+                )
+            assert exc.value.status_code == 404
+
+            with pytest.raises(HTTPException) as invalid_id:
+                await update_workspace_outputs(
+                    'chat-1',
+                    WorkspaceOutputMutationForm(
+                        upsert=[
+                            {
+                                'path': '/mnt/uploads/invalid.pdf',
+                                'fileId': {'not': 'an-id'},
+                            }
+                        ]
+                    ),
+                    user=SimpleNamespace(id='user-1'),
+                    db=None,
+                )
+            assert invalid_id.value.status_code == 400
+
+            async with sessions() as session:
+                malformed_file = await session.get(File, 'file-1')
+                malformed_file.meta = {'content_type': 'application/pdf', 'size': 'unknown'}
+                await session.commit()
+
+            malformed_size = await update_workspace_outputs(
+                'chat-1',
+                WorkspaceOutputMutationForm(
+                    upsert=[
+                        {
+                            'path': '/mnt/uploads/report.pdf',
+                            'fileId': 'file-1',
+                            'updatedAt': 12,
+                        }
+                    ]
+                ),
+                user=SimpleNamespace(id='user-1'),
+                db=None,
+            )
+            assert malformed_size['files'][0]['size'] == 0
         finally:
             await engine.dispose()
 
