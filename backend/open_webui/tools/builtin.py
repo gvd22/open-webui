@@ -255,6 +255,7 @@ async def canvas_create_document(
     title: str = '',
     __chat_id__: str | None = None,
     __user__: dict | None = None,
+    __metadata__: dict | None = None,
 ) -> str:
     """Create a new editable Canvas document in this chat.
 
@@ -275,6 +276,9 @@ async def canvas_create_document(
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
 
+    focus = (__metadata__ or {}).get('workspace_focus')
+    if isinstance(focus, dict) and 'selection' in focus:
+        return _canvas_tool_error('A selection edit must use canvas_replace_text, not create a document.')
     now = canvas_timestamp()
     canvas_id = f'canvas-{uuid.uuid4()}'
     document = {
@@ -313,6 +317,7 @@ async def canvas_update_document(
     __request__: Request = None,
     __chat_id__: str | None = None,
     __user__: dict | None = None,
+    __metadata__: dict | None = None,
 ) -> str:
     """Replace the complete content of an existing Canvas document in this chat.
 
@@ -330,6 +335,10 @@ async def canvas_update_document(
     chat = await _get_artifact_chat(__chat_id__, __user__)
     if chat is None:
         return _canvas_tool_error('Canvas is available only in a saved chat.')
+
+    focus = (__metadata__ or {}).get('workspace_focus')
+    if isinstance(focus, dict) and 'selection' in focus:
+        return _canvas_tool_error('A selection edit must use canvas_replace_text, not replace the document.')
 
     async def mutate(chat_data: dict, session):
         documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})
@@ -500,6 +509,7 @@ async def canvas_replace_text(
     __request__: Request = None,
     __chat_id__: str | None = None,
     __user__: dict | None = None,
+    __metadata__: dict | None = None,
 ) -> str:
     """Replace one uniquely matching passage in a Canvas document.
 
@@ -519,6 +529,21 @@ async def canvas_replace_text(
         return _canvas_tool_error('Canvas is available only in a saved chat.')
     if not old_text:
         return _canvas_tool_error('old_text must not be empty.')
+
+    raw_focus = (__metadata__ or {}).get('workspace_focus')
+    if isinstance(raw_focus, dict) and 'selection' in raw_focus:
+        from open_webui.utils.workspace_context import normalize_workspace_focus
+
+        focus = normalize_workspace_focus(raw_focus)
+        if (
+            not focus
+            or focus['id'] != canvas_id
+            or focus['selection']['text'] != old_text
+            or focus['selection']['contentHash'] != expected_content_hash
+        ):
+            return _canvas_tool_error(
+                'Edit only the original selection using its original document ID and contentHash.'
+            )
 
     async def mutate(chat_data: dict, session):
         documents = dict(chat_data.get(CANVAS_DOCUMENTS_KEY) or {})

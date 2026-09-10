@@ -496,3 +496,68 @@ hat die ID `84e0be17-0104-4def-9505-79cd48b08436` in der lokalen Dev-Instanz.
 Pruefstand kamen keine neuen Diagnosegruppen hinzu; das ersetzt keine fehlerfreie
 Gesamtpruefung. Der reale Modellnachweis oben belegt die genannten Erstellungs-
 und Anzeigepfade, nicht pauschal saemtliche Modell-/Konfigurationskombinationen.
+
+### 11.2 Sichere Bearbeitung und Preview-Diagnose
+
+- Bei HTTP 409 behalten Canvas und Web Preview den lokalen Entwurf. Autosave
+  pausiert; `Compare`, `Recover draft` und `Discard draft` sind explizite Aktionen.
+  Wiederherstellen liest zuerst die aktuelle Serverversion und speichert weiterhin
+  mit Versionspruefung. Eine weitere konkurrierende Aenderung erzeugt erneut einen
+  Konflikt, keine erzwungene Ueberschreibung.
+- Konfliktentwuerfe sind nach Benutzer, Chat und Objekt getrennt im
+  `sessionStorage` desselben Browser-Tabs gesichert. Workspace-Tab schliessen und
+  Seiten-Reload behalten sie. Browserfenster schliessen ist keine zugesicherte
+  Wiederherstellung. Bei Speicherkontingent-/Browserfehlern bleibt die aktuelle
+  Kopie im Arbeitsspeicher und eine Warnung fordert zum Offenhalten des Tabs auf.
+  Noch laufende, nicht als Konflikt erkannte Saves bleiben von dieser Sicherung
+  ausgeschlossen. Es gibt keine neue Datenbankmigration.
+- Eine eindeutige Canvas-Textauswahl bis 8.000 Zeichen kann mit einer Anweisung
+  in den Chat uebernommen werden. Dies sendet noch keine Modellanfrage und
+  ersetzt keinen vorhandenen Composer-Entwurf. Der Composer zeigt das Ziel und
+  erlaubt `Cancel targeting`. Ein Tabwechsel veraendert den eingefrorenen
+  Dokumentbezug nicht. Die API bindet `canvas_replace_text` an Original-ID,
+  Originaltext und Originalhash; Erstellen/Vollersetzung sind fuer diesen Auftrag
+  gesperrt. Mehrdeutige oder nicht exakt im Markdown vorkommende formatierte
+  Auswahlen muessen verkleinert werden.
+- Canvas zeigt die bestehende letzte KI-Aenderung im Vergleich und behaelt sein
+  vorhandenes Undo. Web Preview vergleicht die letzte waehrend des geoeffneten
+  Editors eingegangene Inhaltsaenderung und kann diesen Stand mit normalem Autosave
+  zuruecknehmen. Mehrere Tool-Aufrufe sind einzelne Updates, keine atomare
+  Turn-Version. Manuelle Bearbeitung verwirft dieses Preview-Undo; Schliessen oder
+  Reload verwirft den Vergleich, nicht den gespeicherten Inhalt. Kein dauerhaftes
+  Versionsarchiv. Vergleichsausschnitte sind je Seite auf 12.000 Zeichen begrenzt.
+- Web Preview bietet Desktopbreite und 390-Pixel-Mobilbreite, begrenzt durch den
+  vorhandenen Platz. Im schmalen Codebereich ersetzt eine Dateiauswahl die
+  seitliche Dateiliste. Dies ist eine Breitenvorschau, keine Geraeteemulation.
+- JS-Fehler, unbehandelte Promise-Ablehnungen, Ressourcen-/CSP-Fehler und fehlende
+  virtuelle Fetch-Dateien werden innerhalb der bestehenden Sandbox gemeldet.
+  Maximal 20 unterschiedliche Meldungen pro Render, je 600 Zeichen Text und 200
+  Zeichen Dateibezeichnung; URL-Query und Fragment werden entfernt. Nur Nachrichten
+  des aktuellen iframe-Fensters mit aktuellem Render-Kanal werden angenommen.
+  Reload/Inhaltswechsel verwerfen alte Meldungen. Bei deaktivierten Scripts ist
+  auch die Script-Diagnose deaktiviert; statische Kompositionsfehler bleiben sichtbar.
+- `Ask AI to fix` uebernimmt die begrenzten Meldungen ausdruecklich als untrusted
+  JSON in einen noch abzusendenden Chatentwurf. Fehlertexte werden nie als HTML
+  gerendert oder automatisch ausgefuehrt. Die bestehende CSP und der Ausschluss
+  von `allow-same-origin` bleiben bestehen; keine zusaetzlichen Netzwerkrechte.
+
+Abnahme dieses Bearbeitungspakets am 10.09.2026:
+
+- 157 Frontend-Tests, 115 Backend-Tests und Node-22-Produktionsbuild bestanden.
+  Die globale Svelte-Pruefung bleibt beim oben dokumentierten Bestand von 7.660
+  Fehlern und 200 Warnungen; die neuen Editor-/Hilfsdateien melden keine Fehler.
+- 14 Full-App-Browserregressionen bestanden; sie pruefen echte 409-Konflikte, Reload, Wiederherstellen und
+  Verwerfen fuer beide Editoren, versionierte Auswahl nach Tabwechsel,
+  Vorschauvergleich/Undo, Fehleranzeige und schmale Code-Dateiauswahl.
+  Der isolierte Restricted-User-Test besteht weiterhin.
+- Reales Modell `GPT-5.5` im lokalen Testchat
+  `11f00669-f7a9-4c42-88c0-442d5cb9109e`: Canvas und Zwei-Dateien-Preview erstellt,
+  dieselbe Preview aktualisiert, beide Dateiaenderungen verglichen und per Undo
+  zurueckgenommen. Canvas-Satz ausgewaehlt, auf Preview gewechselt, Anfrage gesendet:
+  Nur der ausgewaehlte Satz aenderte sich; der Preview-Fokus blieb erhalten.
+  Canvas-Vergleich und Undo anschliessend ebenfalls erfolgreich.
+- Dabei gefundene Regressionen behoben: Inhaltsupdates trotz vorab gestreamtem
+  Hash erkennen; bei API-Hydrierung den gespeicherten Preview-Hash mitnehmen;
+  Canvas-Auswahl gegen gespeicherten Originaltext pruefen und nur aeussere
+  Auswahl-Leerzeichen entfernen. Konflikte bleiben explizit statt stiller Retries
+  mit neuerem Hash. Pruefprotokolle: `.tmp/artifact-edit-*.log`.

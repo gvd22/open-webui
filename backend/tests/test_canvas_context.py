@@ -21,6 +21,7 @@ from open_webui.routers.chat_artifacts import (
     update_transient_canvas_document,
 )
 from open_webui.tools.builtin import (
+    canvas_create_document,
     canvas_read_document,
     canvas_replace_text,
     canvas_select_document,
@@ -222,6 +223,28 @@ def test_canvas_prompt_keeps_valid_compact_catalog_under_small_budget():
     assert payload['document_count'] == 15
     assert payload['active_canvas_id'] == 'canvas-14'
     assert payload['catalog_truncated'] is True
+
+
+def test_selection_edit_cannot_retarget_or_upgrade_a_stale_hash(install_chat_mutator):
+    body = 'before target after'
+    chat = SimpleNamespace(id='9e2ea702-0b76-42b9-9e0e-4f804a4f8851', user_id='user-1', chat={
+        CANVAS_DOCUMENTS_KEY: {'canvas-1': {'canvas_id': 'canvas-1', 'title': 'Test', 'content': body, 'updated_at': 7}},
+    })
+    install_chat_mutator(chat)
+    content_hash = canvas_content_hash(body)
+    context = {'__chat_id__': chat.id, '__user__': {'id': 'user-1'}, '__metadata__': {
+        'workspace_focus': {'kind': 'canvas', 'id': 'canvas-1', 'selection': {'text': 'target', 'contentHash': content_hash}},
+    }}
+    for canvas_id, old, hash_value in [('other', 'target', content_hash), ('canvas-1', 'before', content_hash), ('canvas-1', 'target', '0' * 64)]:
+        result = json.loads(asyncio.run(canvas_replace_text(canvas_id, old, 'new', hash_value, **context)))
+        assert result['type'] == 'canvas.error'
+    assert json.loads(asyncio.run(canvas_update_document('canvas-1', 'whole replacement', **context)))['type'] == 'canvas.error'
+    assert json.loads(asyncio.run(canvas_create_document('new document', **context)))['type'] == 'canvas.error'
+    result = json.loads(asyncio.run(canvas_replace_text('canvas-1', 'target', 'replacement', content_hash, **context)))
+    assert result['type'] == 'canvas.document'
+    assert chat.chat[CANVAS_DOCUMENTS_KEY]['canvas-1']['content'] == 'before replacement after'
+    result = json.loads(asyncio.run(canvas_replace_text('canvas-1', 'target', 'again', content_hash, **context)))
+    assert result['type'] == 'canvas.error'
 
 
 def test_canvas_partial_read_and_versioned_replace(install_chat_mutator):

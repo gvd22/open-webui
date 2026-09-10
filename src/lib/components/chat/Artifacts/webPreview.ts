@@ -217,7 +217,10 @@ const virtualFetchScript = (files: Record<string, WebPreviewFile>, entrypoint: s
     try { path = decodeURIComponent(url.pathname.slice(1)); }
     catch { return new Response('Invalid preview file path', { status: 400 }); }
     const file = Object.prototype.hasOwnProperty.call(registry.files, path) ? registry.files[path] : null;
-    if (!file) return new Response('Preview file not found: ' + path, { status: 404 });
+    if (!file) {
+      window.dispatchEvent(new CustomEvent('preview-resource-error', { detail: path }));
+      return new Response('Preview file not found: ' + path, { status: 404 });
+    }
     return new Response(method === 'HEAD' ? null : file.content, { headers: { 'Content-Type': file.mime || 'text/plain' } });
   };
 })();<\/script>`;
@@ -273,7 +276,7 @@ export const mergePersistedWebPreview = (
 		files,
 		content: files[entrypoint]?.content ?? '',
 		updatedAt: Number(persisted.updated_at ?? artifact.updatedAt ?? 0),
-		contentHash: artifact.contentHash,
+		contentHash: persisted.contentHash ?? persisted.content_hash ?? artifact.contentHash,
 		exportedPath: persisted.exported_path ?? artifact.exportedPath,
 		exportedRuntime: persisted.exported_runtime ?? artifact.exportedRuntime,
 		hasFilePayload: true

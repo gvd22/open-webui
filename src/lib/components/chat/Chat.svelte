@@ -87,6 +87,7 @@
 	} from './Artifacts/canvas';
 	import { getWebPreviewsFromHistory, mergePersistedWebPreview } from './Artifacts/webPreview';
 	import { buildChatWorkspaceArtifacts } from './Artifacts/chatArtifacts';
+	import { WORKSPACE_ASK_AI_EVENT } from './Artifacts/artifactEditing';
 
 	import {
 		archiveChatById,
@@ -508,6 +509,22 @@
 
 	// Chat Input
 	let prompt = '';
+	let workspaceRequest: { chatId: string; focus: WorkspaceModelFocus } | null = null;
+	$: if (workspaceRequest && workspaceRequest.chatId !== $chatId) workspaceRequest = null;
+	const prepareWorkspaceRequest = (event: Event) => {
+		const detail = (event as CustomEvent).detail;
+		if (detail?.chatId !== $chatId || readOnly || typeof detail.prompt !== 'string') return;
+		if (prompt.trim()) {
+			toast.info($i18n.t('Send or clear your current message first.'));
+			return;
+		}
+		const active = getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
+		if (!active || active.id !== detail.focus?.id || active.kind !== detail.focus?.kind) return;
+		prompt = detail.prompt;
+		workspaceRequest = { chatId: $chatId, focus: structuredClone(detail.focus) };
+		messageInput?.setText(prompt);
+		messageInput?.focus({ preventScroll: true });
+	};
 	let chatFiles = [];
 	let files: any[] = [];
 	let params = {};
@@ -1633,6 +1650,7 @@
 		window.addEventListener('message', onMessageHandler);
 		window.addEventListener('pyodide:files', handlePyodideFilesChanged);
 		window.addEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
+		window.addEventListener(WORKSPACE_ASK_AI_EVENT, prepareWorkspaceRequest);
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 
@@ -1722,6 +1740,7 @@
 				window.removeEventListener('message', onMessageHandler);
 				window.removeEventListener('pyodide:files', handlePyodideFilesChanged);
 				window.removeEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
+				window.removeEventListener(WORKSPACE_ASK_AI_EVENT, prepareWorkspaceRequest);
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				dismissContextCompactionToast();
@@ -2586,7 +2605,9 @@
 
 	let processingQueueChats = new Set<string>();
 	const getCurrentWorkspaceFocus = (): WorkspaceModelFocus | undefined =>
-		getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
+		workspaceRequest?.chatId === $chatId
+			? workspaceRequest.focus
+			: getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
 
 	const processNextInQueue = async (targetChatId: string) => {
 		if (processingQueueChats.has(targetChatId)) return;
@@ -3023,6 +3044,7 @@
 			return false;
 		}
 		const _files = structuredClone(inputFiles);
+		workspaceRequest = null;
 
 		chatFiles.push(
 			..._files.filter(
@@ -4603,6 +4625,21 @@
 									id={embedded ? messageInputDropzoneId : undefined}
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
+									{#if workspaceRequest}
+										<div class="flex items-center gap-2 px-3 py-1 text-xs text-gray-500">
+											<span class="min-w-0 truncate"
+												>{$i18n.t(
+													workspaceRequest.focus.selection ? 'Selected passage' : 'Web Preview'
+												)}: {workspaceRequest.focus.selection?.text.slice(0, 80) ??
+													workspaceRequest.focus.id}</span
+											><button
+												type="button"
+												class="shrink-0 underline"
+												on:click={() => (workspaceRequest = null)}
+												>{$i18n.t('Cancel targeting')}</button
+											>
+										</div>
+									{/if}
 									<MessageInput
 										bind:this={messageInput}
 										{history}
@@ -4694,6 +4731,21 @@
 									</div>
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
+									{#if workspaceRequest}
+										<div class="flex items-center gap-2 px-3 py-1 text-xs text-gray-500">
+											<span class="min-w-0 truncate"
+												>{$i18n.t(
+													workspaceRequest.focus.selection ? 'Selected passage' : 'Web Preview'
+												)}: {workspaceRequest.focus.selection?.text.slice(0, 80) ??
+													workspaceRequest.focus.id}</span
+											><button
+												type="button"
+												class="shrink-0 underline"
+												on:click={() => (workspaceRequest = null)}
+												>{$i18n.t('Cancel targeting')}</button
+											>
+										</div>
+									{/if}
 									<MessageInput
 										bind:this={messageInput}
 										{history}

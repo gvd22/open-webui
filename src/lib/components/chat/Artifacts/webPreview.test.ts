@@ -63,17 +63,20 @@ describe('Web Preview contract', () => {
 		expect(script).toBeTruthy();
 		expect(script).not.toContain('</script>');
 		let networkCalls = 0;
-		const window: { fetch: (input?: unknown, init?: unknown) => Promise<Response> } = {
-			fetch: async () => {
+		const missing: string[] = [];
+		const window = {
+			dispatchEvent: (event: CustomEvent<string>) => missing.push(event.detail),
+			fetch: async (_input: RequestInfo | URL, _init?: RequestInit) => {
 				networkCalls++;
 				return new Response('external');
 			}
 		};
-		vm.runInNewContext(script!, { window, URL, Request, Response });
+		vm.runInNewContext(script!, { window, URL, Request, Response, CustomEvent });
 		expect(await (await window.fetch('../data.json?version=1')).json()).toEqual([
 			'</script><script>unsafe()</script>'
 		]);
 		expect((await window.fetch('missing.json')).status).toBe(404);
+		expect(missing).toEqual(['pages/missing.json']);
 		expect((await window.fetch('../data.json', { method: 'POST' })).status).toBe(405);
 		expect(networkCalls).toBe(0);
 		await window.fetch('https://example.org/data.json');
@@ -317,9 +320,15 @@ describe('Web Preview contract', () => {
 				title: 'Edited',
 				entrypoint: 'index.html',
 				files: { 'index.html': { content: '<h1>Edited</h1>', mime: 'text/html' } },
-				updated_at: 20
+				updated_at: 20,
+				contentHash: 'saved-version-hash'
 			})
-		).toMatchObject({ title: 'Edited', content: '<h1>Edited</h1>', updatedAt: 20 });
+		).toMatchObject({
+			title: 'Edited',
+			content: '<h1>Edited</h1>',
+			updatedAt: 20,
+			contentHash: 'saved-version-hash'
+		});
 	});
 
 	it('keeps an unsaved local draft in the shared artifact state across remounts', () => {
