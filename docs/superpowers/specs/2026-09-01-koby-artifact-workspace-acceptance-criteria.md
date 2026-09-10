@@ -88,6 +88,16 @@ willkuerlich den Chat.
   denselben Pfad, ohne einen zweiten Eintrag zu erzeugen.
 - Ein Persistenzfehler ist sichtbar; bis zur erfolgreichen Speicherung bleibt der Runtime-Pfad als
   temporaerer Eintrag nutzbar. Ein fremder Datei-Identifier darf nie an den Chat gebunden werden.
+- Das Output-Menue unterscheidet browserlokale Dateien, laufende Speicherung, fehlgeschlagene
+  Speicherung, ungespeicherte Aenderungen und bestaetigte Chat-Snapshots. Ein aelterer Snapshot
+  bedeutet nicht, dass die aktuelle Arbeitskopie gespeichert ist.
+- `workspace_display_file(path)` darf fertige PDF-, DOCX-, PPTX-, XLS-, XLSX- und CSV-Outputs des
+  aktiven Chats im Viewer oeffnen. Registrierung erfordert Code-Interpreter-Freigabe, Pyodide,
+  `ENABLE_DOCUMENT_VIEWER=true` und eine interaktive Session. Backend und Frontend pruefen
+  Berechtigung und Chat-Kontext erneut. Fehlende Dateien und Chatwechsel erzeugen einen Fehler;
+  `opening` bestaetigt den Oeffnungsauftrag, nicht den abgeschlossenen Dokument-Render.
+- Canvas und Web Preview werden nach Reload und Nachrichten-Zweigwechsel nicht als neu erstellt
+  behandelt. Gespeicherte Objekte bleiben unabhaengig von offenen Tabs ueber Outputs erreichbar.
 - Chat-Loeschung und Datei-Aufbewahrung folgen den Regeln normaler Chat-Uploads. Das Loeschen des
   Chats loescht weiterhin keine unabhaengige browserlokale Pyodide-Arbeitskopie.
 
@@ -409,3 +419,80 @@ Die Funktion ist nur abgenommen, wenn:
 - Screenshots oder Traces die sichtbaren Ergebnisse belegen,
 - bekannte Luecken ausdruecklich als Luecken dokumentiert sind,
 - die Produktionsumgebung und produktive Daten unberuehrt bleiben.
+
+## 11. Verifikation vom 10. September 2026
+
+Dieser Abgleich betrifft den aktuellen Pyodide-only-Branch auf 0.11.3. Die oben
+beschriebenen Terminal-Journeys gelten nicht als in diesem Branch implementiert
+oder bestanden.
+
+- Frontend: 174 Tests in 20 Dateien bestanden (`npm run test:frontend -- --run`).
+- Backend: 159 Tests fuer Canvas, Web Preview, Mutationen, Kontext, Output-Katalog,
+  Persistenz und Builtin-Berechtigungen bestanden; isolierte Testdatenbank.
+- Produktionsbuild mit Node 22 sowie Viewer-Abhaengigkeits- und Bundle-Pruefung bestanden.
+- Vollanwendung: Neun Chromium-Journeys bestanden. Sie pruefen explizites Oeffnen
+  ueber Outputs, Autosave, Chatwechsel, Reload ohne Auto-Open, Notes-Promotion,
+  CSV-Upload, Sichtbarkeit des aktiven Tabs bei horizontalem Ueberlauf und
+  Wiedereroeffnen eines gespeicherten Outputs in einem neuen Browserkontext ohne
+  Runtime-Katalog. Der Berechtigungstest wird im No-Auth-Lauf bewusst uebersprungen
+  und separat mit echter Anmeldung ausgefuehrt.
+- Viewer-Harness: 39 Tests in Chromium, Firefox und WebKit bestanden; PDF, DOCX,
+  PPTX, CSV, Zoom/Pan/Reset, defekte Dateien, Runtime-Ausfall, schmale Ansichten
+  sowie helle und dunkle Darstellung.
+- Echter Modelllauf im lokalen Browser: GPT-5.5 erstellte einen Canvas, eine
+  Web Preview mit `index.html` und `styles.css` sowie per `execute_code` eine CSV.
+  `workspace_display_file` zeigte die Tabelle mit Alpha/10 und Beta/20 rechts an.
+  Nach Schliessen des Test-Tabs waren beide Objekte und der serverseitige
+  Datei-Verweis im gespeicherten Chat weiterhin vorhanden.
+- Separater Browser-Test mit echter eingeschraenkter Benutzeridentitaet bestanden: Canvas und Web Preview ohne Runtime
+  oeffenbar; Files nicht verfuegbar; Upload-API und Notes-Promotion liefern 403;
+  fremde Chats, Dateimetadaten und Dateiinhalte bleiben unzugaenglich. Upload,
+  Capture und Attach Files sind deaktiviert; Attach Notes ist nicht sichtbar.
+- Alte gespeicherte Outputs ohne Versionszeitstempel bleiben oeffenbar und zeigen
+  `Saved version available`. Bei bekannten neueren Browser-Aenderungen weist
+  manuelles Oeffnen auf die letzte gespeicherte Version hin; Modellanzeige nutzt
+  in diesem Fall die aktuelle Browser-Datei.
+- Keine neue Datenbankmigration im Fork, keine Aenderung an produktiven Diensten
+  oder Daten. Die isolierte Berechtigungs-Testdatenbank wird mit den bestehenden
+  Upstream-Migrationen initialisiert.
+
+### 11.1 Regressionen und Wiederholung
+
+- Viewer-Harness und Hauptanwendung haben getrennte Vite-Caches. Zuvor konnte der
+  Harness veraltete Editor-Abhaengigkeiten und `504 Outdated Optimize Dep`
+  verursachen. Pyodide wird im Dev-Server vorab optimiert, damit sein erster
+  Worker-Start keinen Seiten-Reload ausloest.
+- Der Outputs-Katalog erhaelt gespeicherte Canvas-/Preview-Objekte explizit vom
+  Chat; er funktioniert auch ohne sichtbare Erstellungskarte im aktuellen Verlauf.
+- Neue Tests decken unterbrochene Uploads, erneutes Speichern, ueberholte
+  Bestaetigungen, gleichnamige Dateien in verschiedenen Chats und unklare
+  Serverantworten ab. Bei Netzwerkfehlern, HTTP 408 oder 5xx werden moeglicherweise
+  bereits zugeordnete Uploads nicht geloescht.
+- Der aktive Tab wird bei Auswahl in den sichtbaren Bereich der Tab-Leiste
+  verschoben, ohne Chat oder Dokument zu scrollen.
+
+Den eigenstaendigen Rechte-Test nach `npm run build` mit Node 22 starten:
+`node scripts/test-workspace-permissions.mjs`. Voraussetzung ist die eingerichtete
+Backend-Umgebung in `.venv`. Der Runner waehlt einen freien Loopback-Port, erstellt
+eine frische Datenbank unter `.tmp/permissions-*`, deaktiviert Modellprovider und
+beendet seinen Backend-Prozess nach dem Test. Die regulaere Dev-Instanz und ihre
+Benutzer werden nicht veraendert.
+
+**Speichergrenze:** Erst `Saved to chat` bestaetigt die serverseitige Speicherung.
+Ein abrupt geschlossenes Browserfenster waehrend `Saving...` garantiert keine
+Fertigstellung. Es gibt keinen Service-Worker-Hintergrundupload. Nicht gespeicherte
+Browserdaten sind kein Ersatz fuer einen bestaetigten Datei-Upload. Der Abbruch
+des Uploads ist als Unit-Regression getestet; das Beenden des gesamten Browsers
+waehrend eines laufenden Uploads ist nicht als eigener E2E-Test nachgewiesen.
+
+Lokale, nicht versionierte Pruefprotokolle liegen unter
+`.tmp/workspace-sep10-*.log` und `.tmp/permissions-sep10-*.log`. Fehlgeschlagene
+Browserlaeufe behalten Traces und Screenshots in `.tmp/workspace-e2e-results`
+beziehungsweise im isolierten Berechtigungs-Testverzeichnis. Der reale Modellchat
+hat die ID `84e0be17-0104-4def-9505-79cd48b08436` in der lokalen Dev-Instanz.
+
+**Offene Freigabegrenze:** Die globale Svelte-Typpruefung ist nicht gruen:
+7.660 Fehler und 200 Warnungen in 339 Dateien. Gegen den bisherigen lokalen
+Pruefstand kamen keine neuen Diagnosegruppen hinzu; das ersetzt keine fehlerfreie
+Gesamtpruefung. Der reale Modellnachweis oben belegt die genannten Erstellungs-
+und Anzeigepfade, nicht pauschal saemtliche Modell-/Konfigurationskombinationen.
