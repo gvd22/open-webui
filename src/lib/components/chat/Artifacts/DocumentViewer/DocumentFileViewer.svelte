@@ -297,16 +297,23 @@
 
 <div
 	bind:this={root}
-	class="document-viewer relative h-full min-h-0 overflow-hidden bg-white dark:bg-gray-900"
+	class="document-viewer relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-gray-800 dark:bg-[#171717] dark:text-gray-200"
 	data-testid="document-file-viewer"
 	data-document-path={path}
 	data-rendered-generation={displayedGeneration || undefined}
 	aria-busy={loading || refreshing}
 >
-	{#if displayedData}
-		<div
-			class="absolute right-3 top-3 z-30 flex items-center gap-1 rounded-xl border border-gray-200/80 bg-white/90 p-1 shadow-sm backdrop-blur-md dark:border-gray-700/80 dark:bg-gray-850/90"
-		>
+	<div
+		role="group"
+		aria-label={$i18n.t('Document actions')}
+		class="flex h-10 shrink-0 items-center justify-end gap-1 border-b border-gray-100 px-2 dark:border-gray-800"
+	>
+		{#if refreshing}
+			<span class="mr-auto px-2" role="status" aria-label={$i18n.t('Loading')}>
+				<Spinner className="size-3.5" />
+			</span>
+		{/if}
+		{#if displayedData}
 			<Tooltip content={$i18n.t('Download displayed version')}>
 				<button
 					type="button"
@@ -327,65 +334,61 @@
 					<ArrowsPointingOut className="size-4" />
 				</button>
 			</Tooltip>
-		</div>
-	{/if}
+		{/if}
+	</div>
 
-	{#if format === 'pdf' && candidateData}
-		<PDFViewer
-			data={pdfData}
-			{targetPage}
-			on:preview-rendered={handlePreviewRendered}
-			on:preview-failed={handlePreviewFailed}
-			className="w-full h-full bg-[#f5f4f1] dark:bg-[#171719] px-3 pt-12 pb-16 sm:px-6"
-		/>
-	{:else if candidateData}
-		<OfficeDocumentPreview
-			data={candidateData}
-			format={format as Exclude<WorkspaceDocumentFormat, 'pdf'>}
-			{targetPage}
-			on:preview-rendered={handlePreviewRendered}
-			on:preview-failed={handlePreviewFailed}
-		/>
-	{/if}
+	<div class="relative min-h-0 flex-1 overflow-hidden">
+		{#if format === 'pdf' && candidateData}
+			<PDFViewer
+				data={pdfData}
+				{targetPage}
+				on:preview-rendered={handlePreviewRendered}
+				on:preview-failed={handlePreviewFailed}
+				className="w-full h-full bg-gray-50 dark:bg-[#171717] px-3 pt-4 pb-16 sm:px-6"
+			/>
+		{:else if candidateData}
+			<OfficeDocumentPreview
+				data={candidateData}
+				format={format as Exclude<WorkspaceDocumentFormat, 'pdf'>}
+				{targetPage}
+				on:preview-rendered={handlePreviewRendered}
+				on:preview-failed={handlePreviewFailed}
+			/>
+		{/if}
 
-	{#if loading && !displayedData}
-		<div class="absolute inset-0 flex items-center justify-center">
-			<span class="sr-only" role="status">{$i18n.t('Loading')}</span>
-			<Spinner className="size-5" />
-		</div>
-	{:else if refreshing}
-		<div
-			class="pointer-events-none absolute left-3 top-3 z-30 rounded-full bg-white/90 p-2 shadow-sm dark:bg-gray-850/90"
-		>
-			<Spinner className="size-3.5" />
-		</div>
-	{:else if error && !displayedData}
-		<div
-			role="alert"
-			class="absolute inset-0 flex items-center justify-center p-8 text-center text-sm text-gray-500 dark:text-gray-400"
-		>
-			<div class="space-y-3">
-				<div>{error}</div>
-				<button
-					type="button"
-					class="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-gray-100 dark:text-gray-900"
-					on:click={() => scheduleLoad(true)}
-				>
+		{#if loading && !displayedData}
+			<div class="absolute inset-0 flex items-center justify-center">
+				<span class="sr-only" role="status">{$i18n.t('Loading')}</span>
+				<Spinner className="size-5" />
+			</div>
+		{:else if error && !displayedData}
+			<div
+				role="alert"
+				class="absolute inset-0 flex items-center justify-center p-8 text-center text-sm text-gray-500 dark:text-gray-400"
+			>
+				<div class="space-y-3">
+					<div>{error}</div>
+					<button
+						type="button"
+						class="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-gray-100 dark:text-gray-900"
+						on:click={() => scheduleLoad(true)}
+					>
+						{$i18n.t('Try again')}
+					</button>
+				</div>
+			</div>
+		{:else if error}
+			<div
+				role="status"
+				class="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs text-red-700 shadow-sm dark:bg-red-950/90 dark:text-red-200"
+			>
+				<span>{error}</span>
+				<button type="button" class="font-semibold underline" on:click={() => scheduleLoad(true)}>
 					{$i18n.t('Try again')}
 				</button>
 			</div>
-		</div>
-	{:else if error}
-		<div
-			role="status"
-			class="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs text-red-700 shadow-sm dark:bg-red-950/90 dark:text-red-200"
-		>
-			<span>{error}</span>
-			<button type="button" class="font-semibold underline" on:click={() => scheduleLoad(true)}>
-				{$i18n.t('Try again')}
-			</button>
-		</div>
-	{/if}
+		{/if}
+	</div>
 </div>
 
 <style>
@@ -394,6 +397,6 @@
 	}
 
 	:global(.dark) .document-viewer:fullscreen {
-		background: #111113;
+		background: #171717;
 	}
 </style>

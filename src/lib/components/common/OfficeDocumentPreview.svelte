@@ -134,7 +134,7 @@
 		<PptxPreview {slides} bind:currentSlide {targetPage} className="h-full w-full" />
 	{:else if workbook && sheetHtml}
 		<div class="flex h-full min-h-0 flex-col">
-			<div class="office-preview min-h-0 flex-1 overflow-auto">
+			<div class="office-sheet min-h-0 flex-1 overflow-auto">
 				{@html sheetHtml}
 			</div>
 			{#if sheetNames.length > 1}
@@ -174,51 +174,59 @@
 </div>
 
 <style>
-	:global(.office-preview) {
-		padding: 1rem;
-		background: white;
-		color: #1f2937;
+	.office-sheet {
+		padding: 0.75rem;
+		font-family: inherit;
+		font-size: 0.8125rem;
+		line-height: 1.5;
 	}
-	:global(.dark .office-preview) {
-		background: #111827;
-		color: #e5e7eb;
-	}
-	:global(.office-preview table) {
+	.office-sheet :global(table) {
 		width: max-content;
-		min-width: 100%;
 		border-collapse: collapse;
-		font-size: 0.75rem;
+		font: inherit;
 	}
-	:global(.office-preview table td),
-	:global(.office-preview table th) {
-		min-width: 5rem;
+	.office-sheet :global(td),
+	.office-sheet :global(th) {
+		min-width: 8rem;
+		max-width: 28rem;
 		border: 1px solid rgba(128, 128, 128, 0.2);
-		padding: 0.35rem 0.55rem;
-		white-space: nowrap;
+		padding: 0.4rem 0.75rem;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		text-align: left;
+		user-select: text;
 	}
-	:global(.office-preview table th.excel-col-hdr),
-	:global(.office-preview .excel-row-num) {
+	.office-sheet :global(th.excel-col-hdr),
+	.office-sheet :global(.excel-row-num) {
 		position: sticky;
 		z-index: 1;
-		background: #f3f4f6;
-		color: #6b7280;
+		background: #f5f5f5;
+		color: #737373;
+		font-size: 0.6875rem;
 		font-weight: 500;
 		text-align: center;
 	}
-	:global(.office-preview table th.excel-col-hdr) {
+	.office-sheet :global(th.excel-col-hdr) {
 		top: 0;
 	}
-	:global(.office-preview .excel-row-num) {
+	.office-sheet :global(.excel-row-num) {
 		left: 0;
-		min-width: 3rem;
+		min-width: 2.5rem;
 	}
-	:global(.dark .office-preview table th.excel-col-hdr),
-	:global(.dark .office-preview .excel-row-num) {
-		background: #1f2937;
-		color: #9ca3af;
+	.office-sheet :global(thead .excel-row-num) {
+		top: 0;
+		z-index: 2;
 	}
-	:global(.office-preview .excel-num) {
+	:global(.dark) .office-sheet :global(th.excel-col-hdr),
+	:global(.dark) .office-sheet :global(.excel-row-num) {
+		background: #242424;
+		color: #a3a3a3;
+	}
+	.office-sheet :global(.excel-num) {
 		text-align: right;
 		font-variant-numeric: tabular-nums;
+	}
+	.office-sheet :global(tbody tr:hover td:not(.excel-row-num)) {
+		background: rgba(128, 128, 128, 0.08);
 	}
 </style>

@@ -121,10 +121,36 @@ test('renders the real DOCX and PPTX fixtures with safe controls', async ({ page
 });
 
 test('renders CSV data in the shared spreadsheet viewer', async ({ page }) => {
-	await page.goto('/?format=csv');
-	await expect(page.getByTestId('document-file-viewer')).toBeVisible();
-	await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
-	await expect(page.getByRole('cell', { name: 'Bern', exact: true })).toBeVisible();
+	for (const theme of ['light', 'dark']) {
+		for (const width of [1200, 390]) {
+			await page.setViewportSize({ width, height: 844 });
+			await page.goto(`/?format=csv&theme=${theme}`);
+			const viewer = page.getByTestId('document-file-viewer');
+			await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
+			await expect(page.getByRole('cell', { name: 'Bern', exact: true })).toBeVisible();
+			// Other app previews must not leak their global table styles into this viewer.
+			await page.addStyleTag({
+				content: '.office-preview table { font-family: monospace; min-width: 100%; }'
+			});
+			const layout = await viewer.evaluate((root) => {
+				const table = root.querySelector('table')!;
+				const toolbar = root.querySelector('[role="group"]')!;
+				const background = getComputedStyle(root).backgroundColor;
+				return {
+					width: table.getBoundingClientRect().width,
+					covered: toolbar.getBoundingClientRect().bottom > table.getBoundingClientRect().top,
+					fontMatches: getComputedStyle(table).fontFamily === getComputedStyle(root).fontFamily,
+					background,
+					overflow: root.scrollWidth > root.clientWidth
+				};
+			});
+			expect(layout.width).toBeLessThan(600);
+			expect(layout.covered).toBe(false);
+			expect(layout.fontMatches).toBe(true);
+			expect(layout.overflow).toBe(false);
+			expect(layout.background).toBe(theme === 'dark' ? 'rgb(23, 23, 23)' : 'rgb(255, 255, 255)');
+		}
+	}
 });
 
 test('opens requested workspace document pages without changing default zoom', async ({ page }) => {
