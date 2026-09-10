@@ -120,6 +120,7 @@ const viewerRuntime = (): Plugin => ({
 
 export default defineConfig({
 	root: harnessRoot,
+	cacheDir: path.join(repositoryRoot, 'node_modules/.vite-viewer'),
 	server: { hmr: false },
 	plugins: [svelte(), viewerRuntime()],
 	define: {
