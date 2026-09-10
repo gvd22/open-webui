@@ -29,6 +29,20 @@
 	let closeButtonElement: HTMLButtonElement;
 	const getTabElements = () =>
 		Array.from(tabListElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+	$: activeTabId = tabs.find((tab) => tab.index === selectedIndex)?.id;
+	const revealActiveTab = async (id: string) => {
+		await tick();
+		if (activeTabId !== id || !tabListElement) return;
+		const element = tabListElement;
+		const selected = element.querySelector<HTMLElement>('[aria-selected="true"]');
+		if (!selected) return;
+		const item = selected.parentElement!.getBoundingClientRect();
+		const list = element.getBoundingClientRect();
+		// Scroll only the tab strip, never the chat or document viewport.
+		if (item.left < list.left) element.scrollLeft += item.left - list.left;
+		else if (item.right > list.right) element.scrollLeft += item.right - list.right;
+	};
+	$: if (activeTabId && tabListElement) void revealActiveTab(activeTabId);
 
 	const iconKind = (kind: string) => {
 		if (kind === 'canvas-note') return 'document';

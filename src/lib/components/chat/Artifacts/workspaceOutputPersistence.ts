@@ -4,6 +4,7 @@ import {
 	user,
 	pyodideWorker,
 	workspaceOutputFiles,
+	workspaceOutputSaveStates,
 	type WorkspaceOutputFile
 } from '$lib/stores';
 import { deleteFileById, uploadFile } from '$lib/apis/files';
@@ -29,6 +30,15 @@ export const createWorkspaceOutputPersistence = (
 ) => {
 	const outputSnapshotQueue = new Map<string, Promise<void>>();
 	const outputSnapshotVersions = new Map<string, number>();
+	const setSaveState = (key: string, version: number, state?: 'saving' | 'failed') => {
+		if (outputSnapshotVersions.get(key) !== version) return;
+		workspaceOutputSaveStates.update((states) => {
+			const next = { ...states };
+			if (state) next[key] = state;
+			else delete next[key];
+			return next;
+		});
+	};
 	type PyodideFilesEventDetail = {
 		chatId?: string;
 		kind?: string;
@@ -99,26 +109,31 @@ export const createWorkspaceOutputPersistence = (
 			get(chatId) === chatContextId
 				? resolveWorkspaceOutputFile(get(workspaceOutputFiles), path)
 				: null;
+		const savedAt = Date.now();
 		const output = createWorkspaceOutputFile(path, {
 			fileId: uploadedFile.id,
 			messageId: messageId ?? previous?.messageId,
 			originChatId: chatContextId,
 			contentType: uploadedFile.meta?.content_type ?? contentType,
 			size: uploadedFile.meta?.size ?? data.byteLength,
-			persistedAt: Date.now(),
-			updatedAt: Date.now()
+			persistedAt: savedAt,
+			updatedAt: savedAt
 		});
 		if (!output) return;
 		workspaceOutputCatalog.record(chatContextId, path, output, {
 			onConfirmed: () => {
-				if (get(chatId) === chatContextId) onSaved(output, uploadedFile);
+				setSaveState(key, expectedVersion);
+				if (get(chatId) === chatContextId && outputSnapshotVersions.get(key) === expectedVersion) {
+					onSaved(output, uploadedFile);
+				}
 			},
 			onFailed: (error) => {
+				setSaveState(key, expectedVersion, 'failed');
 				const status =
 					error && typeof error === 'object' && 'status' in error
 						? Number((error as { status?: unknown }).status)
 						: NaN;
-				if (!Number.isInteger(status) || status < 400) {
+				if (!Number.isInteger(status) || status < 400 || status >= 500 || status === 408) {
 					console.warn(
 						'Workspace output upload retained because persistence outcome is unknown',
 						error
@@ -155,6 +170,7 @@ export const createWorkspaceOutputPersistence = (
 				)
 			)
 			.catch((error) => {
+				setSaveState(key, expectedVersion, 'failed');
 				console.error('Workspace output snapshot could not be saved', error);
 				if (get(chatId) === chatContextId) {
 					onError();
@@ -163,7 +179,6 @@ export const createWorkspaceOutputPersistence = (
 			.finally(() => {
 				if (outputSnapshotQueue.get(key) === next) {
 					outputSnapshotQueue.delete(key);
-					outputSnapshotVersions.delete(key);
 				}
 			});
 		outputSnapshotQueue.set(key, next);
@@ -181,6 +196,7 @@ export const createWorkspaceOutputPersistence = (
 		const version = (outputSnapshotVersions.get(key) ?? 0) + 1;
 		outputSnapshotVersions.set(key, version);
 		if (!deleted) {
+			setSaveState(key, version, 'saving');
 			queuePyodideOutputSnapshot(
 				chatContextId,
 				path,
@@ -189,8 +205,8 @@ export const createWorkspaceOutputPersistence = (
 				snapshotData,
 				allowRuntimeRead
 			);
-		} else if (!outputSnapshotQueue.has(key)) {
-			outputSnapshotVersions.delete(key);
+		} else {
+			setSaveState(key, version);
 		}
 	};
 

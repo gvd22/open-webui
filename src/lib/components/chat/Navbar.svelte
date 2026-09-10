@@ -48,6 +48,8 @@
 	export let scrollToTop: (() => void) | null = null;
 	export let workspaceDefaultContentId = WORKSPACE_FILES_ID;
 	export let onOpenWorkspaceOutputFile: (file: WorkspaceOutputFile) => void = () => {};
+	export let canvasDocuments: Record<string, any> = {};
+	export let webPreviews: Record<string, any> = {};
 
 	export let chat;
 	export let history;
@@ -235,7 +237,11 @@
 					{/if}
 
 					{#if chat?.id}
-						<WorkspaceOutputsMenu onOpenFile={onOpenWorkspaceOutputFile} />
+						<WorkspaceOutputsMenu
+							onOpenFile={onOpenWorkspaceOutputFile}
+							{canvasDocuments}
+							{webPreviews}
+						/>
 					{/if}
 
 					<Tooltip content={$i18n.t('Workspace')}>

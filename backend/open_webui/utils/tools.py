@@ -112,6 +112,7 @@ from open_webui.tools.builtin import (
     web_preview_replace_text,
     web_preview_select,
     web_preview_update,
+    workspace_display_file,
     write_note,
 )
 from open_webui.utils.access_control import has_access, has_connection_access, has_permission
@@ -740,6 +741,16 @@ async def get_builtin_tools(
     chat = None
     if is_saved_chat_id(chat_id):
         chat = await Chats.get_chat_by_id(chat_id)
+
+    from open_webui.env import ENABLE_DOCUMENT_VIEWER
+    if (
+        execute_code in builtin_functions
+        and ENABLE_DOCUMENT_VIEWER
+        and supports_chat_workspace_tools(chat_id, chat)
+        and await Config.get('code_interpreter.engine', 'pyodide') == 'pyodide'
+        and metadata.get('session_id')
+    ):
+        builtin_functions.append(workspace_display_file)
 
     # Internal Note chats bypass model tool-category selection, but never the
     # global Notes switch or the user's current Notes permission.

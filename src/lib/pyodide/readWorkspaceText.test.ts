@@ -44,7 +44,7 @@ describe('runtime snapshot reads', () => {
 		const target = worker();
 		const remove = vi.spyOn(target, 'removeEventListener');
 		const pending = readWorkspaceText(target, 'read', '/mnt/uploads/a.csv', 10);
-		target.dispatchEvent(new ErrorEvent('error', { message: 'Worker crashed' }));
+		target.dispatchEvent(Object.assign(new Event('error'), { message: 'Worker crashed' }));
 		await expect(pending).rejects.toThrow('Worker crashed');
 		expect(remove).toHaveBeenCalledWith('message', expect.any(Function));
 		expect(remove).toHaveBeenCalledWith('error', expect.any(Function));

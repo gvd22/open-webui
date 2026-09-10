@@ -1504,6 +1504,66 @@ async def ask_user(
 # =============================================================================
 
 
+async def workspace_display_file(
+    path: str,
+    __event_call__: callable = None,
+    __metadata__: dict = None,
+    __chat_id__: str = None,
+    __user__: dict = None,
+) -> str:
+    """Open a generated document from this chat in the user's workspace viewer.
+
+    Call after execute_code finishes, when a PDF, Word, PowerPoint, spreadsheet or CSV
+    is ready to show. Do not open intermediate files. This does not create or save files.
+
+    :param path: Exact /mnt/uploads/ path of a generated PDF, DOCX, PPTX, XLS, XLSX or CSV.
+    :return: Whether opening was requested, or an error if unavailable.
+    """
+    from open_webui.env import ENABLE_DOCUMENT_VIEWER
+    from open_webui.utils.canvas import is_internal_note_chat
+    from open_webui.utils.access_control import has_permission
+    from open_webui.utils.workspace_outputs import normalize_workspace_output
+
+    chat = await _get_artifact_chat(__chat_id__, __user__)
+    if chat is None or is_internal_note_chat(chat):
+        return JSONCodec.dumps({'error': 'A saved, owner-visible chat is required.'})
+    if (
+        not ENABLE_DOCUMENT_VIEWER
+        or not await Config.get('code_interpreter.enable', False)
+        or await Config.get('code_interpreter.engine', 'pyodide') != 'pyodide'
+    ):
+        return JSONCodec.dumps({'error': 'Pyodide document display is disabled.'})
+    if (__user__ or {}).get('role') != 'admin' and not await has_permission(
+        (__user__ or {}).get('id', ''), 'features.code_interpreter', await Config.get('user.permissions')
+    ):
+        return JSONCodec.dumps({'error': 'Code Interpreter permission is required.'})
+    if not normalize_workspace_output({'path': path}):
+        return JSONCodec.dumps({'error': 'Invalid document path.'})
+    if PurePosixPath(path).suffix.lower() not in {'.pdf', '.docx', '.pptx', '.xls', '.xlsx', '.csv'}:
+        return JSONCodec.dumps({'error': 'This format is download-only. Use an output link instead.'})
+    if __event_call__ is None or not (__metadata__ or {}).get('session_id'):
+        return JSONCodec.dumps({'error': 'An interactive browser session is required.'})
+    try:
+        result = await __event_call__(
+            {
+                'type': 'workspace:display_file',
+                'data': {'path': path, 'session_id': __metadata__['session_id']},
+            }
+        )
+        if not isinstance(result, dict) or result.get('status') != 'opening':
+            return JSONCodec.dumps(
+                {
+                    'error': (result or {}).get('error', 'Document could not be opened.')
+                    if isinstance(result, dict)
+                    else 'Document could not be opened.'
+                }
+            )
+        return JSONCodec.dumps({'status': 'opening', 'path': path})
+    except Exception:
+        log.exception('Workspace document display failed')
+        return JSONCodec.dumps({'error': 'The browser did not confirm the display request.'})
+
+
 async def execute_code(
     code: str,
     __request__: Request = None,

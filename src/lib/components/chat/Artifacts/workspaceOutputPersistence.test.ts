@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { chatId, user } from '$lib/stores';
+import { chatId, user, workspaceOutputSaveStates } from '$lib/stores';
+import { get } from 'svelte/store';
 import { uploadFile, deleteFileById } from '$lib/apis/files';
 import { readPyodideWorkerFile } from './DocumentViewer/pyodideFileRead';
 import { createWorkspaceOutputPersistence } from './workspaceOutputPersistence';
@@ -11,7 +12,8 @@ vi.mock('$lib/stores', async () => {
 		chatId: writable(''),
 		user: writable(null),
 		pyodideWorker: writable({}),
-		workspaceOutputFiles: writable([])
+		workspaceOutputFiles: writable([]),
+		workspaceOutputSaveStates: writable({})
 	};
 });
 vi.mock('$lib/apis/files', () => ({ uploadFile: vi.fn(), deleteFileById: vi.fn() }));
@@ -36,6 +38,7 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	vi.stubGlobal('localStorage', { token: 'test-token' });
 	chatId.set('chat-1');
+	workspaceOutputSaveStates.set({});
 	user.set({ role: 'admin' } as any);
 	vi.mocked(uploadFile).mockResolvedValue({ id: 'upload-1' } as any);
 	vi.mocked(deleteFileById).mockResolvedValue(true);
@@ -104,15 +107,73 @@ it('rejects missing atomic data, respects upload permissions, and ignores tempor
 	expect(readPyodideWorkerFile).not.toHaveBeenCalled();
 });
 
-it('keeps uploads on unknown persistence outcomes and deletes them on definite rejection', async () => {
+it('keeps the saving state until the catalog confirms the upload', async () => {
 	const { schedule, catalog, onSaved } = setup();
 	schedule('chat-1', path, 'message-1', false, data);
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('saving');
 	await flush();
 	const callbacks = catalog.record.mock.calls[0][3];
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('saving');
 	callbacks.onConfirmed();
+	expect(get(workspaceOutputSaveStates)).toEqual({});
 	expect(onSaved).toHaveBeenCalledOnce();
-	callbacks.onFailed(new Error('Network unavailable'));
 	expect(deleteFileById).not.toHaveBeenCalled();
-	callbacks.onFailed({ status: 403 });
-	expect(deleteFileById).toHaveBeenCalledWith('test-token', 'upload-1');
+});
+
+it.each([
+	[new Error('Network unavailable'), false],
+	[{ status: 500 }, false],
+	[{ status: 408 }, false],
+	[{ status: 403 }, true]
+])('handles catalog failure %s without claiming a successful save', async (error, remove) => {
+	const { schedule, catalog, onSaved } = setup();
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	catalog.record.mock.calls[0][3].onFailed(error);
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('failed');
+	expect(onSaved).not.toHaveBeenCalled();
+	if (remove) expect(deleteFileById).toHaveBeenCalledWith('test-token', 'upload-1');
+	else expect(deleteFileById).not.toHaveBeenCalled();
+});
+
+it('ignores old confirmation callbacks after a completed queue is reused for the same path', async () => {
+	const { schedule, catalog, onSaved } = setup();
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	const old = catalog.record.mock.calls[0][3];
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	old.onConfirmed();
+	expect(onSaved).not.toHaveBeenCalled();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('saving');
+	catalog.record.mock.calls[1][3].onConfirmed();
+	expect(onSaved).toHaveBeenCalledOnce();
+	expect(get(workspaceOutputSaveStates)).toEqual({});
+});
+
+it('recovers from an interrupted upload on the next snapshot', async () => {
+	const { schedule, catalog, onError } = setup();
+	vi.mocked(uploadFile).mockRejectedValueOnce(new Error('Connection lost'));
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('failed');
+	expect(onError).toHaveBeenCalledOnce();
+	expect(catalog.record).not.toHaveBeenCalled();
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	catalog.record.mock.calls[0][3].onConfirmed();
+	expect(get(workspaceOutputSaveStates)).toEqual({});
+});
+
+it('keeps simultaneous same-path uploads in different chats isolated', async () => {
+	const { schedule, catalog, onSaved } = setup();
+	schedule('chat-1', path, undefined, false, data);
+	schedule('chat-2', path, undefined, false, data);
+	await flush();
+	expect(catalog.record.mock.calls.map(([id]) => id)).toEqual(['chat-1', 'chat-2']);
+	for (const call of catalog.record.mock.calls) call[3].onConfirmed();
+	expect(onSaved).toHaveBeenCalledOnce();
+	expect(onSaved.mock.calls[0][0].originChatId).toBe('chat-1');
+	expect(deleteFileById).not.toHaveBeenCalled();
+	expect(get(workspaceOutputSaveStates)).toEqual({});
 });

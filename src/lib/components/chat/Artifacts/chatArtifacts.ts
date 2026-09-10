@@ -1,7 +1,7 @@
 import {
 	getCanvasNoteArtifactsFromOutput,
-	hasNewCanvasArtifact,
 	mergePersistedCanvasArtifact,
+	type CanvasNoteArtifact,
 	preserveNewerCanvas,
 	preserveWorkspaceSelection
 } from './canvas';
@@ -29,12 +29,67 @@ export type ChatWorkspaceArtifact = {
 	source?: string;
 };
 
+export type WorkspaceOutputArtifact = CanvasNoteArtifact | WebPreviewArtifact;
+
+// The output catalog includes saved objects even when their message branch is not visible.
+// It does not add tabs or trigger the first-creation auto-open behavior.
+export const getWorkspaceOutputArtifacts = (
+	current: ChatWorkspaceArtifact[],
+	canvases: Record<string, any> = {},
+	previews: Record<string, any> = {}
+): WorkspaceOutputArtifact[] => {
+	const items = new Map<string, WorkspaceOutputArtifact>();
+	for (const [canvasId, saved] of Object.entries(canvases)) {
+		if (!saved || typeof saved !== 'object') continue;
+		items.set(
+			`canvas:${canvasId}`,
+			mergePersistedCanvasArtifact(
+				{ type: 'canvas-note', canvasId, title: '', content: '', source: 'tool' },
+				saved
+			)
+		);
+	}
+	for (const [previewId, saved] of Object.entries(previews)) {
+		if (!saved || typeof saved !== 'object') continue;
+		items.set(
+			`preview:${previewId}`,
+			mergePersistedWebPreview(
+				{
+					type: 'web-preview',
+					previewId,
+					title: '',
+					content: '',
+					source: 'tool',
+					entrypoint: 'index.html',
+					files: {}
+				},
+				saved
+			)
+		);
+	}
+	for (const item of current) {
+		if (item.type === 'canvas-note' && item.canvasId) {
+			items.set(
+				`canvas:${item.canvasId}`,
+				mergePersistedCanvasArtifact(item as CanvasNoteArtifact, canvases[item.canvasId])
+			);
+		} else if (item.type === 'web-preview' && item.previewId) {
+			items.set(
+				`preview:${item.previewId}`,
+				mergePersistedWebPreview(item as WebPreviewArtifact, previews[item.previewId])
+			);
+		}
+	}
+	return [...items.values()];
+};
+
 export const buildChatWorkspaceArtifacts = ({
 	messages,
 	currentArtifacts,
 	persistedCanvasDocuments,
 	persistedWebPreviews,
 	knownWebPreviewIds,
+	knownCanvasIds = new Set<string>(),
 	selectedArtifactId
 }: {
 	messages: any[];
@@ -42,6 +97,7 @@ export const buildChatWorkspaceArtifacts = ({
 	persistedCanvasDocuments: Record<string, any>;
 	persistedWebPreviews: Record<string, any>;
 	knownWebPreviewIds: Set<string>;
+	knownCanvasIds?: Set<string>;
 	selectedArtifactId: string | null;
 }) => {
 	let contents: ChatWorkspaceArtifact[] = [];
@@ -122,21 +178,27 @@ export const buildChatWorkspaceArtifacts = ({
 
 	const canvases = contents.filter((item) => item.type === 'canvas-note');
 	const previews = contents.filter((item) => item.type === 'web-preview') as WebPreviewArtifact[];
-	const latestCanvas = canvases.at(-1);
-	const canvasAutoOpenId =
-		hasNewCanvasArtifact(previousCanvases as any, canvases as any) &&
-		contents.some((item) => item.type === 'canvas-note' && item.source === 'tool')
-			? preserveWorkspaceSelection(
-					selectedArtifactId,
-					latestCanvas?.canvasId ?? latestCanvas?.noteId
-				)
-			: null;
+	const latestCanvas = [...canvases]
+		.reverse()
+		.find(
+			(item) => item.source === 'tool' && !knownCanvasIds.has(item.canvasId ?? item.noteId ?? '')
+		);
+	const canvasAutoOpenId = latestCanvas
+		? preserveWorkspaceSelection(selectedArtifactId, latestCanvas?.canvasId ?? latestCanvas?.noteId)
+		: null;
 	const newToolPreview = findNewToolWebPreview(previews, knownWebPreviewIds);
 
 	return {
 		contents,
 		canvasAutoOpenId,
 		newToolPreviewId: newToolPreview?.previewId ?? null,
-		knownWebPreviewIds: new Set(previews.map((preview) => preview.previewId))
+		knownWebPreviewIds: new Set([
+			...knownWebPreviewIds,
+			...previews.map((preview) => preview.previewId)
+		]),
+		knownCanvasIds: new Set([
+			...knownCanvasIds,
+			...canvases.map((item) => item.canvasId ?? item.noteId ?? '')
+		])
 	};
 };

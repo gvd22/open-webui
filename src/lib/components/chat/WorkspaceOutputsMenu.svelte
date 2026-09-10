@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { toast } from 'svelte-sonner';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import {
 		artifactContents,
-		showArtifacts,
-		showControls,
-		workspaceOpenRequestId,
-		workspaceOutputFiles
+		chatId,
+		workspaceOutputFiles,
+		workspaceOutputSaveStates
 	} from '$lib/stores';
+	import { getWorkspaceOutputStorageLabel, workspaceOutputKey } from './Artifacts/workspaceOutputs';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -17,35 +18,36 @@
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import FileTypeIcon from './FileNav/FileTypeIcon.svelte';
 	import type { WorkspaceOutputFile } from '$lib/stores';
+	import {
+		getWorkspaceOutputArtifacts,
+		type WorkspaceOutputArtifact
+	} from './Artifacts/chatArtifacts';
+	import { openCanvasArtifact, openWebPreviewArtifact } from './Messages/workspaceArtifactOpen';
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
-	type WorkspaceArtifact = {
-		type: 'canvas-note' | 'web-preview';
-		title?: string;
-		canvasId?: string;
-		previewId?: string;
-		noteId?: string;
-	};
+	export let canvasDocuments: Record<string, any> = {};
+	export let webPreviews: Record<string, any> = {};
 
 	export let onOpenFile: (file: WorkspaceOutputFile) => void = () => {};
 
 	let show = false;
 	let dropdown: Dropdown;
 
-	$: artifacts = (
-		Array.isArray($artifactContents) ? ($artifactContents as WorkspaceArtifact[]) : []
-	).filter((item) => item?.type === 'canvas-note' || item?.type === 'web-preview');
+	$: artifacts = getWorkspaceOutputArtifacts(
+		Array.isArray($artifactContents) ? $artifactContents : [],
+		canvasDocuments,
+		webPreviews
+	);
 	$: outputs = $workspaceOutputFiles;
 
 	const close = () => dropdown?.close();
 
-	function openArtifact(item: WorkspaceArtifact) {
-		const id = item.canvasId || item.previewId || item.noteId;
-		if (!id) return;
-		workspaceOpenRequestId.set(id);
-		showArtifacts.set(true);
-		showControls.set(true);
+	function openArtifact(item: WorkspaceOutputArtifact) {
 		close();
+		const onError = () => toast.error($i18n.t('Workspace content could not be loaded'));
+		void (item.type === 'canvas-note'
+			? openCanvasArtifact(item, onError)
+			: openWebPreviewArtifact(item, onError));
 	}
 
 	function openFile(file: WorkspaceOutputFile) {
@@ -78,7 +80,7 @@
 				</div>
 			{:else}
 				{#if artifacts.length > 0}
-					{#each artifacts as item (item.canvasId || item.previewId || item.noteId)}
+					{#each artifacts as item (item.type + ':' + (item.type === 'canvas-note' ? item.canvasId : item.previewId))}
 						<button type="button" on:click={() => openArtifact(item)}>
 							{#if item.type === 'web-preview'}
 								<GlobeAlt className="size-4" />
@@ -99,7 +101,17 @@
 					{#each outputs as file (file.path)}
 						<button type="button" on:click={() => openFile(file)} title={file.path}>
 							<FileTypeIcon name={file.name} type="file" size={16} />
-							<span class="min-w-0 flex-1 truncate text-left">{file.name}</span>
+							<span class="min-w-0 flex-1 text-left">
+								<span class="block truncate">{file.name}</span>
+								<span class="block text-xs text-gray-500 dark:text-gray-400"
+									>{$i18n.t(
+										getWorkspaceOutputStorageLabel(
+											file,
+											$workspaceOutputSaveStates[workspaceOutputKey($chatId, file.path)]
+										)
+									)}</span
+								>
+							</span>
 						</button>
 					{/each}
 				{/if}

@@ -146,6 +146,71 @@ def extra_params(*, metadata: dict | None = None, user: dict | None = None, skil
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ('enabled', 'engine', 'viewer', 'permission', 'capability', 'session', 'expected'),
+    [
+        (True, 'pyodide', True, True, True, 'session', True),
+        (False, 'pyodide', True, True, True, 'session', False),
+        (True, 'jupyter', True, True, True, 'session', False),
+        (True, 'pyodide', False, True, True, 'session', False),
+        (True, 'pyodide', True, False, True, 'session', False),
+        (True, 'pyodide', True, True, False, 'session', False),
+        (True, 'pyodide', True, True, True, '', False),
+    ],
+)
+async def test_document_display_registration(
+    monkeypatch, enabled, engine, viewer, permission, capability, session, expected
+):
+    install_config(
+        monkeypatch,
+        flags={'code_interpreter.enable': enabled, 'code_interpreter.engine': engine},
+        permissions=permission,
+    )
+    monkeypatch.setattr(env, 'ENABLE_DOCUMENT_VIEWER', viewer)
+    tools = await tools_utils.get_builtin_tools(
+        make_request(),
+        extra_params(user={'id': 'user-1', 'role': 'user'}, metadata={'session_id': session}),
+        features={'code_interpreter': True},
+        model=model_for('code_interpreter', capabilities={'code_interpreter': capability}),
+    )
+    assert ('workspace_display_file' in tools) is expected
+
+
+@pytest.mark.asyncio
+async def test_document_display_validates_owner_permissions_and_browser_ack(monkeypatch):
+    import json
+
+    from open_webui.tools import builtin
+    from open_webui.utils import access_control
+
+    install_config(monkeypatch, chat=SimpleNamespace(user_id='user-1', meta={}))
+    monkeypatch.setattr(env, 'ENABLE_DOCUMENT_VIEWER', True)
+    permission = AsyncMock(return_value=True)
+    monkeypatch.setattr(access_control, 'has_permission', permission)
+    event_call = AsyncMock(return_value={'status': 'opening'})
+    args = dict(
+        __chat_id__=CHAT_ID,
+        __user__={'id': 'user-1', 'role': 'user'},
+        __metadata__={'session_id': 'session'},
+        __event_call__=event_call,
+    )
+    assert json.loads(await builtin.workspace_display_file('/mnt/uploads/report.pdf', **args))['status'] == 'opening'
+    event_call.assert_awaited_once()
+    event_call.reset_mock()
+    for path in ['/mnt/uploads/../secret.pdf', '/elsewhere/file.pdf', '/mnt/uploads/script.py']:
+        assert 'error' in json.loads(await builtin.workspace_display_file(path, **args))
+    permission.return_value = False
+    assert 'error' in json.loads(await builtin.workspace_display_file('/mnt/uploads/report.pdf', **args))
+    permission.return_value = True
+    args['__user__'] = {'id': 'other', 'role': 'admin'}
+    assert 'error' in json.loads(await builtin.workspace_display_file('/mnt/uploads/report.pdf', **args))
+    event_call.assert_not_awaited()
+    args['__user__'] = {'id': 'user-1', 'role': 'admin'}
+    event_call.return_value = {'error': 'Chat changed'}
+    assert 'error' in json.loads(await builtin.workspace_display_file('/mnt/uploads/report.pdf', **args))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ('category', 'capabilities', 'features', 'metadata'),
     [
         ('time', {}, {}, {}),

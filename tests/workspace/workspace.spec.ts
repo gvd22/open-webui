@@ -220,6 +220,13 @@ const openSeededWorkspace = async (page: Page, seeded: SeededWorkspace) => {
 	await page.addInitScript((token) => localStorage.setItem('token', token), seeded.token);
 	await page.goto(`/c/${seeded.chatId}`);
 	await dismissReleaseNotes(page);
+	await expect(page.getByRole('button', { name: 'Outputs', exact: true }).last()).toBeVisible();
+	await expect(page.getByTestId('workspace-tabs')).not.toBeVisible();
+	await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+	await page
+		.getByRole('menu')
+		.getByRole('button', { name: 'E2E Canvas Alpha', exact: true })
+		.click();
 	await expect(page.getByTestId('workspace-tabs')).toBeVisible();
 	for (const title of [
 		'E2E Canvas Alpha',
@@ -333,6 +340,13 @@ test.describe('seeded workspace lifecycle', () => {
 
 		await page.reload();
 		await dismissReleaseNotes(page);
+		await expect(page.getByRole('button', { name: 'Outputs', exact: true }).last()).toBeVisible();
+		await expect(page.getByTestId('workspace-tabs')).not.toBeVisible();
+		await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+		await page
+			.getByRole('menu')
+			.getByRole('button', { name: 'E2E Canvas Alpha manual', exact: true })
+			.click();
 		await expect(page.getByTestId('workspace-tabs')).toBeVisible();
 		await expectSingleArtifactCards(page, {
 			canvasAlpha: 'E2E Canvas Alpha manual',
@@ -353,6 +367,21 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect(page.getByLabel('Undo AI change')).toHaveCount(0);
 		const reloadedChat = await readChat(page.request, seeded);
 		expect(reloadedChat.chat._canvas_documents[CANVAS_ALPHA].last_ai_update).toBeNull();
+	});
+
+	test('reveals the active tab when opened through Outputs in a narrow workspace', async ({
+		page
+	}) => {
+		await page.setViewportSize({ width: 1280, height: 760 });
+		await openSeededWorkspace(page, seeded);
+		await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+		await page
+			.getByRole('menu')
+			.getByRole('button', { name: 'E2E Preview Beta', exact: true })
+			.click();
+		await expect(page.getByRole('tab', { name: 'E2E Preview Beta', exact: true })).toBeInViewport({
+			ratio: 1
+		});
 	});
 
 	test('keeps the Pyodide workspace free of Terminal and Browser launch controls', async ({
@@ -473,7 +502,8 @@ test('opens and reopens Files in a new session without a page reload', async ({ 
 });
 
 test('reopens a durable output card after its Pyodide file is no longer catalogued', async ({
-	page
+	page,
+	browser
 }) => {
 	const token = await signInForNoAuth(page.request);
 	const name = `durable-output-${Date.now()}.csv`;
@@ -552,6 +582,18 @@ test('reopens a durable output card after its Pyodide file is no longer catalogu
 
 		await expect(page.getByRole('tab', { name, exact: true })).toBeVisible();
 		await expect(page.getByRole('tabpanel', { name })).toContainText('x');
+		const url = page.url();
+		await page.close();
+		const reopened = await browser.newPage();
+		try {
+			await reopened.addInitScript((value) => localStorage.setItem('token', value), token);
+			await reopened.goto(url);
+			await dismissReleaseNotes(reopened);
+			await reopened.getByRole('button', { name: `Open: ${name}`, exact: true }).click();
+			await expect(reopened.getByRole('tabpanel', { name })).toContainText('x');
+		} finally {
+			await reopened.close();
+		}
 	} finally {
 		if (chatId) {
 			await page.request.delete(`/api/v1/chats/${chatId}`, { headers: authHeaders(token) });

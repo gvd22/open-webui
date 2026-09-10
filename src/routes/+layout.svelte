@@ -634,6 +634,15 @@
 					cb?.({ error: error instanceof Error ? error.message : String(error) });
 				});
 				return;
+			} else if (type === 'workspace:display_file') {
+				try {
+					const { displayWorkspaceOutput } =
+						await import('$lib/components/chat/Artifacts/workspaceDisplay');
+					cb(await displayWorkspaceOutput(event.chat_id, data.path));
+				} catch (error) {
+					cb({ error: error instanceof Error ? error.message : String(error) });
+				}
+				return;
 			} else if (type === 'workspace:read_runtime_file') {
 				try {
 					cb({ content: await readRuntimeFileForPreview(data) });

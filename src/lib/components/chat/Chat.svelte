@@ -71,6 +71,7 @@
 	import {
 		createWorkspaceOutputCatalog,
 		createWorkspaceOutputFile,
+		hasNewerWorkspaceOutputVersion,
 		reassignWorkspaceOutputMessageFiles,
 		resolveWorkspaceOutputFile,
 		WORKSPACE_OPEN_OUTPUT_EVENT
@@ -80,7 +81,10 @@
 		getOutputText,
 		hasPendingToolInteraction
 	} from './Messages/structuredOutput';
-	import { mergePersistedCanvasArtifact } from './Artifacts/canvas';
+	import {
+		getCanvasNoteArtifactsFromHistory,
+		mergePersistedCanvasArtifact
+	} from './Artifacts/canvas';
 	import { getWebPreviewsFromHistory, mergePersistedWebPreview } from './Artifacts/webPreview';
 	import { buildChatWorkspaceArtifacts } from './Artifacts/chatArtifacts';
 
@@ -409,6 +413,7 @@
 
 	let generating = false;
 	let knownWebPreviewIds = new Set<string>();
+	let knownCanvasIds = new Set<string>();
 	let workspaceHydrationKey = '';
 	let workspaceHydrationWarningShown = false;
 	let dragged = false;
@@ -1059,6 +1064,9 @@
 	};
 
 	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
+		if (hasNewerWorkspaceOutputVersion(file)) {
+			toast.info($i18n.t('Opening the last saved version. Recent changes have not been saved.'));
+		}
 		const viewerEnabled = $config?.features?.enable_document_viewer === true;
 		if ((!viewerEnabled || !getWorkspaceDocumentFormat(file.path)) && file.fileId) {
 			window.open(
@@ -2065,10 +2073,12 @@
 			persistedCanvasDocuments: (chat?.chat?._canvas_documents ?? {}) as Record<string, any>,
 			persistedWebPreviews: (chat?.chat?._web_preview_documents ?? {}) as Record<string, any>,
 			knownWebPreviewIds,
+			knownCanvasIds,
 			selectedArtifactId: get(artifactCode)
 		});
 
 		knownWebPreviewIds = result.knownWebPreviewIds;
+		knownCanvasIds = result.knownCanvasIds;
 		(artifactContents as any).set(result.contents);
 		void hydrateWorkspaceReferences(result.contents);
 
@@ -2100,6 +2110,7 @@
 		const pageUrl = $page?.url ?? new URL(window.location.href);
 		resetWebSearchConfirmation();
 		knownWebPreviewIds = new Set();
+		knownCanvasIds = new Set();
 		workspaceHydrationKey = '';
 		workspaceHydrationWarningShown = false;
 
@@ -2417,9 +2428,16 @@
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
 						: convertMessagesToHistory(chatContent.messages);
-				knownWebPreviewIds = new Set(
-					getWebPreviewsFromHistory(history).map((preview) => preview.previewId)
-				);
+				knownWebPreviewIds = new Set([
+					...getWebPreviewsFromHistory(history).map((preview) => preview.previewId),
+					...Object.keys(chatContent._web_preview_documents ?? {})
+				]);
+				knownCanvasIds = new Set([
+					...getCanvasNoteArtifactsFromHistory(history).map(
+						(item) => item.canvasId || item.noteId || ''
+					),
+					...Object.keys(chatContent._canvas_documents ?? {})
+				]);
 				if (chat?.current_message_id && history?.messages?.[chat.current_message_id]) {
 					history.currentId = chat.current_message_id;
 				}
@@ -4477,6 +4495,8 @@
 							{history}
 							{workspaceDefaultContentId}
 							onOpenWorkspaceOutputFile={openWorkspaceOutputFile}
+							canvasDocuments={chat?.chat?._canvas_documents ?? {}}
+							webPreviews={chat?.chat?._web_preview_documents ?? {}}
 							title={$chatTitle}
 							shareEnabled={!!history.currentId}
 							{initNewChat}

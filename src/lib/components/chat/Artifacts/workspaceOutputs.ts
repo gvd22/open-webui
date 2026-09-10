@@ -4,6 +4,22 @@ import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
 
 export const WORKSPACE_OPEN_OUTPUT_EVENT = 'workspace:open-output';
 
+export const workspaceOutputKey = (chatId: string, path: string) => `${chatId}\u0000${path}`;
+
+export const hasNewerWorkspaceOutputVersion = (file: WorkspaceOutputFile) =>
+	!!file.fileId && file.persistedAt !== undefined && file.updatedAt > file.persistedAt;
+
+export const getWorkspaceOutputStorageLabel = (
+	file: WorkspaceOutputFile,
+	state?: 'saving' | 'failed'
+) => {
+	if (state === 'saving') return 'Saving...';
+	if (state === 'failed') return 'Saving failed';
+	if (!file.fileId) return 'Only in this browser';
+	if (file.persistedAt === undefined) return 'Saved version available';
+	return hasNewerWorkspaceOutputVersion(file) ? 'Changes not saved' : 'Saved to chat';
+};
+
 const OUTPUT_EXTENSIONS = new Set([
 	'csv',
 	'doc',
