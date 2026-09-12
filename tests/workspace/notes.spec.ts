@@ -258,4 +258,26 @@ test.describe('promoted note editor lifecycle', () => {
 			expect(persistedCanvasContent).toContain(item);
 		}
 	});
+
+	test('adds a selection from a promoted Canvas to the chat composer', async ({ page }) => {
+		await page.addInitScript((token) => localStorage.setItem('token', token), fixture.token);
+		await page.goto(`/c/${fixture.chatId}`);
+		await dismissReleaseNotes(page);
+		await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+		await page
+			.getByRole('menu')
+			.getByRole('button', { name: 'Launch Checklist', exact: true })
+			.click();
+		const paragraph = page
+			.locator('#artifacts-container [contenteditable="true"] p')
+			.filter({ hasText: 'Owner: Alex' });
+		await paragraph.click({ clickCount: 3 });
+		await page.getByLabel('Selection instruction').fill('Change the owner to Sam.');
+		await page.getByRole('button', { name: 'Add to chat', exact: true }).click();
+		await expect(page.locator('#chat-input')).toContainText('Change the owner to Sam.');
+		await expect(page.getByLabel('Selected passage', { exact: true })).toContainText('Owner: Alex');
+		await expect(
+			page.locator('#artifacts-container').getByRole('button', { name: 'Undo AI change' })
+		).toHaveCount(0);
+	});
 });

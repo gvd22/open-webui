@@ -134,6 +134,7 @@
 	import Banner from '../common/Banner.svelte';
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
+	import WorkspaceSelectionQuote from './Messages/WorkspaceSelectionQuote.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
 	import {
@@ -509,21 +510,42 @@
 
 	// Chat Input
 	let prompt = '';
-	let workspaceRequest: { chatId: string; focus: WorkspaceModelFocus } | null = null;
+	let workspaceRequest: { chatId: string; focus: WorkspaceModelFocus; title: string } | null = null;
 	$: if (workspaceRequest && workspaceRequest.chatId !== $chatId) workspaceRequest = null;
 	const prepareWorkspaceRequest = (event: Event) => {
 		const detail = (event as CustomEvent).detail;
-		if (detail?.chatId !== $chatId || readOnly || typeof detail.prompt !== 'string') return;
-		if (prompt.trim()) {
-			toast.info($i18n.t('Send or clear your current message first.'));
+		if (detail?.chatId !== $chatId || readOnly || typeof detail.prompt !== 'string') {
+			event.preventDefault();
 			return;
 		}
 		const active = getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
-		if (!active || active.id !== detail.focus?.id || active.kind !== detail.focus?.kind) return;
-		prompt = detail.prompt;
-		workspaceRequest = { chatId: $chatId, focus: structuredClone(detail.focus) };
+		if (!active || active.id !== detail.focus?.id || active.kind !== detail.focus?.kind) {
+			event.preventDefault();
+			return;
+		}
+		if (
+			workspaceRequest &&
+			JSON.stringify(workspaceRequest.focus) !== JSON.stringify(detail.focus)
+		) {
+			event.preventDefault();
+			toast.info($i18n.t('Remove the current selection before adding another.'));
+			return;
+		}
+		prompt = [prompt.trim(), detail.prompt.trim()].filter(Boolean).join('\n\n');
+		workspaceRequest = {
+			chatId: $chatId,
+			focus: structuredClone(detail.focus),
+			title: String(detail.title ?? 'Canvas').slice(0, 100)
+		};
 		messageInput?.setText(prompt);
-		messageInput?.focus({ preventScroll: true });
+		if ($mobile) {
+			showControls.set(false);
+			showArtifacts.set(false);
+		}
+		void tick().then(() => {
+			if (workspaceRequest?.chatId === detail.chatId && $chatId === detail.chatId)
+				messageInput?.focus({ preventScroll: true });
+		});
 	};
 	let chatFiles = [];
 	let files: any[] = [];
@@ -3044,6 +3066,9 @@
 			return false;
 		}
 		const _files = structuredClone(inputFiles);
+		const workspaceSelection = workspaceFocus?.selection
+			? { ...structuredClone(workspaceFocus), title: workspaceRequest?.title ?? 'Canvas' }
+			: undefined;
 		workspaceRequest = null;
 
 		chatFiles.push(
@@ -3066,6 +3091,7 @@
 			childrenIds: [],
 			role: 'user',
 			content: inputContent,
+			workspace_selection: workspaceSelection,
 			files: _files.length > 0 ? _files : undefined,
 			timestamp: Math.floor(Date.now() / 1000), // Unix epoch
 			models: selectedModels
@@ -3387,7 +3413,8 @@
 			modelId = null,
 			modelIdx = null,
 			regenerationPrompt = null,
-			workspaceFocus = getCurrentWorkspaceFocus()
+			workspaceFocus = _history.messages[parentId]?.workspace_selection ??
+				getCurrentWorkspaceFocus()
 		}: {
 			messages?: any[] | null;
 			modelId?: string | null;
@@ -4626,18 +4653,16 @@
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
 									{#if workspaceRequest}
-										<div class="flex items-center gap-2 px-3 py-1 text-xs text-gray-500">
-											<span class="min-w-0 truncate"
-												>{$i18n.t(
-													workspaceRequest.focus.selection ? 'Selected passage' : 'Web Preview'
-												)}: {workspaceRequest.focus.selection?.text.slice(0, 80) ??
-													workspaceRequest.focus.id}</span
-											><button
-												type="button"
-												class="shrink-0 underline"
-												on:click={() => (workspaceRequest = null)}
-												>{$i18n.t('Cancel targeting')}</button
-											>
+										<div class="px-4 pb-2">
+											<WorkspaceSelectionQuote
+												text={workspaceRequest.focus.selection?.displayText ??
+													workspaceRequest.focus.selection?.text ??
+													''}
+												title={workspaceRequest.focus.selection
+													? workspaceRequest.title
+													: 'Web Preview'}
+												onRemove={() => (workspaceRequest = null)}
+											/>
 										</div>
 									{/if}
 									<MessageInput
@@ -4732,18 +4757,16 @@
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
 									{#if workspaceRequest}
-										<div class="flex items-center gap-2 px-3 py-1 text-xs text-gray-500">
-											<span class="min-w-0 truncate"
-												>{$i18n.t(
-													workspaceRequest.focus.selection ? 'Selected passage' : 'Web Preview'
-												)}: {workspaceRequest.focus.selection?.text.slice(0, 80) ??
-													workspaceRequest.focus.id}</span
-											><button
-												type="button"
-												class="shrink-0 underline"
-												on:click={() => (workspaceRequest = null)}
-												>{$i18n.t('Cancel targeting')}</button
-											>
+										<div class="px-4 pb-2">
+											<WorkspaceSelectionQuote
+												text={workspaceRequest.focus.selection?.displayText ??
+													workspaceRequest.focus.selection?.text ??
+													''}
+												title={workspaceRequest.focus.selection
+													? workspaceRequest.title
+													: 'Web Preview'}
+												onRemove={() => (workspaceRequest = null)}
+											/>
 										</div>
 									{/if}
 									<MessageInput

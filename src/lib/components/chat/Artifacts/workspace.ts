@@ -35,7 +35,7 @@ export type WorkspaceTab = {
 export type WorkspaceModelFocus = {
 	kind: 'canvas' | 'web_preview';
 	id: string;
-	selection?: { text: string; contentHash: string };
+	selection?: { text: string; displayText?: string; contentHash: string };
 };
 
 export const WORKSPACE_FILES_ID = 'workspace:files';

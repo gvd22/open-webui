@@ -138,7 +138,7 @@ def _compact_workspace_arguments(arguments: Any) -> str:
     return json.dumps(compact, ensure_ascii=True, separators=(',', ':'))
 
 
-def _compact_workspace_result_text(text: str) -> str:
+def _compact_workspace_result_text(text: str, *, include_changes: bool = True) -> str:
     try:
         result = json.loads(text)
     except (TypeError, ValueError):
@@ -149,11 +149,32 @@ def _compact_workspace_result_text(text: str) -> str:
     compact = result
     if isinstance(result, dict) and result.get('type') in WORKSPACE_RESULT_CONTENT_TYPES:
         compact = {
-            key: value for key, value in result.items() if key not in WORKSPACE_RESULT_CONTENT_TYPES[result['type']]
+            key: value for key, value in result.items()
+            if key not in WORKSPACE_RESULT_CONTENT_TYPES[result['type']] and key != 'changes'
         }
         compact['contentOmitted'] = True
     serialized = json.dumps(compact, ensure_ascii=True, separators=(',', ':'))
     if len(serialized) <= WORKSPACE_RESULT_MAX_CHARS:
+        # UI-only excerpts live beside the compact reference, never in replayed model context.
+        changes = result.get('changes') if isinstance(result, dict) else None
+        if include_changes and isinstance(changes, list):
+            bounded = []
+            for change in changes[:24]:
+                if not isinstance(change, dict) or not all(isinstance(change.get(k), str) for k in ('path', 'before', 'after')):
+                    continue
+                candidate = {k: change[k][:240 if k == 'path' else 3000] for k in ('path', 'before', 'after')}
+                candidate['truncated'] = bool(change.get('truncated')) or any(candidate[k] != change[k] for k in ('before', 'after'))
+                while len(json.dumps([*bounded, candidate], ensure_ascii=True)) > 16_000 and (candidate['before'] or candidate['after']):
+                    candidate['before'] = candidate['before'][:len(candidate['before']) // 2]
+                    candidate['after'] = candidate['after'][:len(candidate['after']) // 2]
+                    candidate['truncated'] = True
+                if len(json.dumps([*bounded, candidate], ensure_ascii=True)) > 16_000:
+                    if bounded:
+                        bounded[-1]['truncated'] = True
+                    break
+                bounded.append(candidate)
+            if bounded:
+                return json.dumps({**compact, 'changes': bounded}, ensure_ascii=True, separators=(',', ':'))
         return serialized
     return json.dumps(
         {
@@ -169,10 +190,10 @@ def _compact_workspace_result_text(text: str) -> str:
     )
 
 
-def _compact_workspace_result_item(item: dict) -> None:
+def _compact_workspace_result_item(item: dict, *, include_changes: bool) -> None:
     parts = item.get('output', [])
     if isinstance(parts, str):
-        item['output'] = _compact_workspace_result_text(parts)
+        item['output'] = _compact_workspace_result_text(parts, include_changes=include_changes)
         return
     if isinstance(parts, dict):
         parts = [parts]
@@ -180,10 +201,10 @@ def _compact_workspace_result_item(item: dict) -> None:
         return
     for part in parts:
         if isinstance(part, dict) and part.get('type') == 'input_text':
-            part['text'] = _compact_workspace_result_text(str(part.get('text', '')))
+            part['text'] = _compact_workspace_result_text(str(part.get('text', '')), include_changes=include_changes)
 
 
-def compact_workspace_tool_output(output: list[dict]) -> list[dict]:
+def compact_workspace_tool_output(output: list[dict], *, include_changes: bool = True) -> list[dict]:
     """Remove durable Workspace content from stored tool history.
 
     The canonical content remains attached to the chat and can be loaded with
@@ -209,7 +230,7 @@ def compact_workspace_tool_output(output: list[dict]) -> list[dict]:
         if item.get('type') == 'function_call':
             item['arguments'] = _compact_workspace_arguments(item.get('arguments', '{}'))
         elif item.get('type') == 'function_call_output':
-            _compact_workspace_result_item(item)
+            _compact_workspace_result_item(item, include_changes=include_changes)
     return compact
 
 

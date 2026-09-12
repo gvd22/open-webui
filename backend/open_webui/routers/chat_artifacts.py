@@ -52,6 +52,11 @@ class CanvasDocumentForm(BaseModel):
     expected_content_hash: str | None = None
 
 
+class ArtifactUndoForm(BaseModel):
+    expected_updated_at: int
+    expected_content_hash: str
+
+
 class CanvasPromotionForm(BaseModel):
     title: str
     content: str
@@ -292,11 +297,48 @@ async def select_transient_web_preview(
     return {'previewId': preview_id, **document, 'contentHash': web_preview_content_hash(document)}
 
 
+@router.post('/{id}/web-preview/{preview_id}/undo-ai')
+async def undo_last_web_preview_ai_update(
+    id: str,
+    preview_id: str,
+    form_data: ArtifactUndoForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    def mutate(chat_data: dict, _session: AsyncSession):
+        documents = dict(chat_data.get(WEB_PREVIEW_DOCUMENTS_KEY) or {})
+        current = documents.get(preview_id)
+        if not current:
+            raise HTTPException(status_code=404, detail='Web Preview not found in this chat.')
+        previous = current.get('last_ai_update')
+        if not isinstance(previous, dict):
+            raise HTTPException(status_code=409, detail='No AI Web Preview update to undo.')
+        restored = build_web_preview_document_update(
+            preview_id, current, files=previous['files'], title=previous['title'],
+            entrypoint=previous['entrypoint'], expected_updated_at=form_data.expected_updated_at,
+            expected_content_hash=form_data.expected_content_hash,
+        )
+        restored['last_ai_update'] = None
+        documents[preview_id] = restored
+        chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
+        return chat_data, restored
+
+    try:
+        mutation = await Chats.mutate_chat_by_id(id, mutate, user_id=user.id, db=db, touch=False)
+    except WebPreviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.payload) from exc
+    if mutation is None:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+    document = mutation[1]
+    return {'previewId': preview_id, **document, 'contentHash': web_preview_content_hash(document)}
+
+
 @router.post('/{id}/canvas/{canvas_id}/undo-ai')
 async def undo_last_canvas_ai_update(
     request: Request,
     id: str,
     canvas_id: str,
+    form_data: ArtifactUndoForm,
     user=Depends(get_verified_user),
     db: AsyncSession = Depends(get_async_session),
 ):
@@ -310,6 +352,11 @@ async def undo_last_canvas_ai_update(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='Canvas document not found in this chat.',
             )
+        try:
+            require_canvas_precondition(canvas_id, document, form_data.expected_updated_at,
+                                        form_data.expected_content_hash)
+        except CanvasConflictError as exc:
+            raise HTTPException(status_code=409, detail=exc.payload) from exc
         previous = document.get('last_ai_update')
         if not isinstance(previous, dict):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='No AI Canvas update to undo.')

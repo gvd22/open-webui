@@ -14,6 +14,7 @@ from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.notes import NoteForm, Notes
 from open_webui.routers.chat_artifacts import (
+    ArtifactUndoForm,
     CanvasDocumentForm,
     CanvasPromotionForm,
     promote_transient_canvas_document,
@@ -460,6 +461,7 @@ def test_undo_route_restores_the_last_ai_snapshot(install_chat_mutator):
             Request({'type': 'http', 'method': 'POST', 'path': '/'}),
             chat.id,
             'canvas-1',
+            form_data=ArtifactUndoForm(expected_updated_at=0, expected_content_hash=canvas_content_hash('# Reiseplan\n\nKI-Version')),
             user=SimpleNamespace(id='user-1'),
         )
     )

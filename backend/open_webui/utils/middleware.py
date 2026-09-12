@@ -2259,7 +2259,7 @@ def process_messages_with_output(
             output_messages = convert_output_to_messages(
                 message['output']
                 if preserve_workspace_output
-                else compact_workspace_tool_output(message['output']),
+                else compact_workspace_tool_output(message['output'], include_changes=False),
                 raw=True,
                 reasoning_format=reasoning_format,
                 flatten_tool_images=True,
@@ -2269,7 +2269,7 @@ def process_messages_with_output(
                 continue
 
         clean_message = dict(message)
-        for key in ('id', 'files', 'output', 'model', 'contextSummary', 'context_summary', 'usage'):
+        for key in ('id', 'files', 'output', 'model', 'contextSummary', 'context_summary', 'usage', 'workspace_selection'):
             clean_message.pop(key, None)
         processed.append(clean_message)
 

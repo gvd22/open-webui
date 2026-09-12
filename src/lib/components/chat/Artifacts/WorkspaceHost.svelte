@@ -653,7 +653,6 @@
 											title={contents[selectedContentIdx].title ?? ''}
 											content={contents[selectedContentIdx].content}
 											titleEdited={contents[selectedContentIdx].titleEdited ?? false}
-											canUndoAiUpdate={contents[selectedContentIdx].canUndoAiUpdate ?? false}
 											showClose={!hasWorkspaceTabs}
 											on:close={closeWorkspace}
 										/>

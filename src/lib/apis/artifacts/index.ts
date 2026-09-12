@@ -42,8 +42,20 @@ export const updateTransientCanvasDocument = async (
 export const undoLastTransientCanvasAiUpdate = async (
 	token: string,
 	chatId: string,
-	canvasId: string
-) => artifactRequest(`${artifactPath(chatId, 'canvas', canvasId)}/undo-ai`, token);
+	canvasId: string,
+	version: { expected_updated_at: number; expected_content_hash: string }
+) =>
+	artifactRequest(`${artifactPath(chatId, 'canvas', canvasId)}/undo-ai`, token, { body: version });
+
+export const undoLastWebPreviewAiUpdate = async (
+	token: string,
+	chatId: string,
+	previewId: string,
+	version: { expected_updated_at: number; expected_content_hash: string }
+) =>
+	artifactRequest(`${artifactPath(chatId, 'web-preview', previewId)}/undo-ai`, token, {
+		body: version
+	});
 
 export const selectTransientCanvasDocument = async (
 	token: string,

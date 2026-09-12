@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
 	generateCanvasTitle,
 	canUseNotes,
-	canSynchronizeCanvasDocumentChange,
 	getCanvasNoteArtifactsFromHistory,
 	getCanvasNoteArtifactsFromOutput,
 	hasNewCanvasArtifact,
@@ -30,34 +29,70 @@ const artifact = (overrides: Partial<CanvasNoteArtifact> = {}): CanvasNoteArtifa
 });
 
 describe('Canvas tool state', () => {
-	it.each(['pending', 'queued', 'requires_approval'])('preserves the waiting state for %s approvals after reload', (status) => {
-		const call = { type: 'function_call' as const, call_id: 'waiting', name: 'canvas_update_document', status };
-		expect(hasPendingToolInteraction([call])).toBe(true);
-		expect(hasPendingToolInteraction([call, { type: 'function_call_output', call_id: 'waiting', output: 'done' }])).toBe(false);
-	});
+	it.each(['pending', 'queued', 'requires_approval'])(
+		'preserves the waiting state for %s approvals after reload',
+		(status) => {
+			const call = {
+				type: 'function_call' as const,
+				call_id: 'waiting',
+				name: 'canvas_update_document',
+				status
+			};
+			expect(hasPendingToolInteraction([call])).toBe(true);
+			expect(
+				hasPendingToolInteraction([
+					call,
+					{ type: 'function_call_output', call_id: 'waiting', output: 'done' }
+				])
+			).toBe(false);
+		}
+	);
 	it('preserves manual content and Undo state when old tool history is replayed', () => {
-		const current = artifact({ content: 'Manual edit', contentHash: 'new', canUndoAiUpdate: false });
-		expect(preserveNewerCanvas(artifact({ updatedAt: 10, canUndoAiUpdate: true }), current)).toEqual(current);
+		const current = artifact({
+			content: 'Manual edit',
+			contentHash: 'new',
+			canUndoAiUpdate: false
+		});
+		expect(
+			preserveNewerCanvas(artifact({ updatedAt: 10, canUndoAiUpdate: true }), current)
+		).toEqual(current);
 		expect(preserveNewerCanvas(artifact({ updatedAt: 20 }), current).content).toBe('Manual edit');
 		expect(preserveNewerCanvas(artifact({ updatedAt: 21 }), current).updatedAt).toBe(21);
 	});
 	it('renders a version conflict as failure, never as a successful update', () => {
 		const items = buildOutputDisplayItems([
-			{ type: 'function_call', call_id: 'conflict', name: 'canvas_update_document', status: 'completed' },
-			{ type: 'function_call_output', call_id: 'conflict', output: JSON.stringify({ type: 'canvas.conflict', message: 'Changed while waiting' }) }
+			{
+				type: 'function_call',
+				call_id: 'conflict',
+				name: 'canvas_update_document',
+				status: 'completed'
+			},
+			{
+				type: 'function_call_output',
+				call_id: 'conflict',
+				output: JSON.stringify({ type: 'canvas.conflict', message: 'Changed while waiting' })
+			}
 		]);
 		expect(items[0]).toMatchObject({ type: 'canvas_activity', error: 'Changed while waiting' });
 	});
-	it.each(['pending', 'queued', 'rejected'])('keeps %s workspace calls in the native tool UI', (status) => {
-		const items = buildOutputDisplayItems([{
-			type: 'function_call', call_id: 'approval', name: 'canvas_create_document',
-			arguments: JSON.stringify({ title: 'Agenda', content: 'Original content' }), status
-		}]);
-		expect(items).toHaveLength(1);
-		expect(items[0].type).toBe('detail_single');
-		expect((items[0] as any).token.attributes.status).toBe(status);
-		expect((items[0] as any).token.attributes.arguments).toContain('Original content');
-	});
+	it.each(['pending', 'queued', 'rejected'])(
+		'keeps %s workspace calls in the native tool UI',
+		(status) => {
+			const items = buildOutputDisplayItems([
+				{
+					type: 'function_call',
+					call_id: 'approval',
+					name: 'canvas_create_document',
+					arguments: JSON.stringify({ title: 'Agenda', content: 'Original content' }),
+					status
+				}
+			]);
+			expect(items).toHaveLength(1);
+			expect(items[0].type).toBe('detail_single');
+			expect((items[0] as any).token.attributes.status).toBe(status);
+			expect((items[0] as any).token.attributes.arguments).toContain('Original content');
+		}
+	);
 	it('keeps a meaningful title supplied by the Canvas tool', () => {
 		expect(generateCanvasTitle('# Tagesausflug Bern\n\n- Anreise', 'Tagesausflug Bern')).toBe(
 			'Tagesausflug Bern'
@@ -303,12 +338,6 @@ describe('Canvas tool state', () => {
 		expect(
 			hasNewCanvasArtifact([artifact()], [artifact(), artifact({ canvasId: 'canvas-2' })])
 		).toBe(true);
-	});
-
-	it('does not echo an externally applied Canvas update back as a local edit', () => {
-		expect(canSynchronizeCanvasDocumentChange(true, 0, 10)).toBe(false);
-		expect(canSynchronizeCanvasDocumentChange(false, 20, 10)).toBe(false);
-		expect(canSynchronizeCanvasDocumentChange(false, 20, 20)).toBe(true);
 	});
 
 	it('allows Notes promotion only when Notes and the user permission are enabled', () => {

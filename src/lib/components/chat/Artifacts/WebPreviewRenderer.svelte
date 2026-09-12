@@ -6,7 +6,6 @@
 	import JSZip from 'jszip';
 	import { get } from 'svelte/store';
 	import ArtifactConflict from './ArtifactConflict.svelte';
-	import ArtifactComparison from './ArtifactComparison.svelte';
 	import {
 		draftKey,
 		readConflictDraft,
@@ -32,7 +31,6 @@
 	import Eye from '$lib/components/icons/Eye.svelte';
 	import Folder from '$lib/components/icons/Folder.svelte';
 	import Refresh from '$lib/components/icons/Refresh.svelte';
-	import ArrowUturnLeft from '$lib/components/icons/ArrowUturnLeft.svelte';
 	import type { WebPreviewArtifact, WebPreviewFile } from './webPreview';
 	import {
 		composeWebPreviewHtml,
@@ -79,9 +77,6 @@
 	let serverVersion: any = null;
 	let resolving = false;
 	let disposed = false;
-	let previousUpdate: PreviewSaveSnapshot | null = null;
-	let compareChanges = false;
-	let viewport: 'desktop' | 'mobile' = 'desktop';
 	let iframe: HTMLIFrameElement;
 	let diagnostics: PreviewDiagnostic[] = [];
 	let diagnosticsOpen = false;
@@ -167,16 +162,6 @@
 			resolving = false;
 		}
 	};
-	const undoPreviewUpdate = () => {
-		if (!previousUpdate || dirty || conflict) return;
-		title = previousUpdate.title;
-		entrypoint = previousUpdate.entrypoint;
-		files = structuredClone(previousUpdate.files);
-		selectedPath = files[selectedPath] ? selectedPath : entrypoint;
-		previousUpdate = null;
-		compareChanges = false;
-		queuePreviewSave();
-	};
 
 	$: selectedFile = files[selectedPath] ?? files[entrypoint];
 	$: previewHtml = composeWebPreviewHtml(files, entrypoint);
@@ -192,12 +177,6 @@
 		!dirty &&
 		!conflict
 	) {
-		if (
-			JSON.stringify(artifact.files) !== JSON.stringify(files) ||
-			artifact.title !== title ||
-			artifact.entrypoint !== entrypoint
-		)
-			previousUpdate = buildSaveSnapshot();
 		lastArtifact = artifact;
 		title = artifact.title;
 		entrypoint = artifact.entrypoint;
@@ -378,8 +357,6 @@
 	};
 
 	const setSelectedContent = (content: string) => {
-		previousUpdate = null;
-		compareChanges = false;
 		files = { ...files, [selectedPath]: { ...selectedFile, content } };
 		queuePreviewSave();
 	};
@@ -571,7 +548,6 @@
 			disabled={!!conflict || resolving}
 			on:input={(event) => {
 				title = (event.currentTarget as HTMLInputElement).value;
-				previousUpdate = null;
 				queuePreviewSave();
 			}}
 			aria-label={$i18n.t('Preview title')}
@@ -636,58 +612,30 @@
 			</button>
 		</Tooltip>
 	</div>
-	<div
-		class="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-1.5 text-xs dark:border-gray-800"
-	>
-		{#if mode === 'preview'}
-			<div class="flex gap-1" role="group" aria-label={$i18n.t('Preview width')}>
-				{#each ['desktop', 'mobile'] as size}
-					<button
-						type="button"
-						class="rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 {viewport === size
-							? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
-							: ''}"
-						aria-pressed={viewport === size}
-						on:click={() => (viewport = size as typeof viewport)}
-						>{$i18n.t(size === 'desktop' ? 'Desktop' : 'Mobile')}</button
-					>
-				{/each}
-			</div>
-		{:else}
-			<select
-				class="preview-file-select min-w-0 max-w-full rounded border border-gray-200 bg-transparent p-1 dark:border-gray-700"
-				aria-label={$i18n.t('Preview file')}
-				bind:value={selectedPath}
-			>
-				{#each Object.keys(files) as path}<option value={path}>{path}</option>{/each}
-			</select>
-		{/if}
-		{#if previousUpdate && !dirty && !conflict}
-			<button
-				type="button"
-				class="px-2 py-1 underline"
-				aria-expanded={compareChanges}
-				on:click={() => (compareChanges = !compareChanges)}>{$i18n.t('Changes')}</button
-			>
-			<Tooltip content={$i18n.t('Undo AI change')}
-				><button
+	{#if mode === 'code' || diagnostics.length}
+		<div
+			class="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-1.5 text-xs dark:border-gray-800"
+		>
+			{#if mode === 'code'}
+				<select
+					class="preview-file-select min-w-0 max-w-full rounded border border-gray-200 bg-transparent p-1 dark:border-gray-700"
+					aria-label={$i18n.t('Preview file')}
+					bind:value={selectedPath}
+				>
+					{#each Object.keys(files) as path}<option value={path}>{path}</option>{/each}
+				</select>
+			{/if}
+			{#if diagnostics.length}
+				<button
 					type="button"
-					class="rounded p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800"
-					aria-label={$i18n.t('Undo AI change')}
-					on:click={undoPreviewUpdate}><ArrowUturnLeft className="size-4" /></button
-				></Tooltip
-			>
-		{/if}
-		{#if diagnostics.length}
-			<button
-				type="button"
-				class="ml-auto px-2 py-1 text-red-600 dark:text-red-300"
-				aria-expanded={diagnosticsOpen}
-				on:click={() => (diagnosticsOpen = !diagnosticsOpen)}
-				>{$i18n.t('Errors')} ({diagnostics.length})</button
-			>
-		{/if}
-	</div>
+					class="ml-auto px-2 py-1 text-red-600 dark:text-red-300"
+					aria-expanded={diagnosticsOpen}
+					on:click={() => (diagnosticsOpen = !diagnosticsOpen)}
+					>{$i18n.t('Errors')} ({diagnostics.length})</button
+				>
+			{/if}
+		</div>
+	{/if}
 	{#if conflict}
 		<ArtifactConflict
 			before={JSON.stringify(
@@ -708,23 +656,6 @@
 			onRecover={() => resolveConflict(true)}
 			onDiscard={() => resolveConflict(false)}
 		/>
-	{/if}
-	{#if compareChanges && previousUpdate}
-		<div class="max-h-64 shrink-0 overflow-auto border-b border-gray-100 dark:border-gray-800">
-			{#if previousUpdate.title !== title || previousUpdate.entrypoint !== entrypoint}
-				<ArtifactComparison
-					before={`${previousUpdate.title}\n${previousUpdate.entrypoint}`}
-					after={`${title}\n${entrypoint}`}
-				/>
-			{/if}
-			{#each [...new Set( [...Object.keys(previousUpdate.files), ...Object.keys(files)] )].filter((path) => previousUpdate?.files[path]?.content !== files[path]?.content) as path}
-				<div class="px-3 pt-2 text-xs font-medium">{path}</div>
-				<ArtifactComparison
-					before={previousUpdate.files[path]?.content ?? ''}
-					after={files[path]?.content ?? ''}
-				/>
-			{/each}
-		</div>
 	{/if}
 	{#if diagnosticsOpen && diagnostics.length}
 		<section
@@ -749,16 +680,12 @@
 				</div>
 			</div>
 		{:else}
-			<div
-				class="flex min-h-0 flex-1 justify-center overflow-hidden bg-gray-50 dark:bg-gray-900"
-				data-preview-width={viewport}
-			>
+			<div class="flex min-h-0 flex-1 justify-center overflow-hidden bg-gray-50 dark:bg-gray-900">
 				{#key reloadKey}
 					<iframe
 						bind:this={iframe}
 						{title}
 						srcdoc={injectCsp(renderedHtml, resolveWebPreviewCsp(iframeCsp))}
-						style:width={viewport === 'mobile' ? '390px' : '100%'}
 						style:max-width="100%"
 						class="h-full min-h-0 w-full border-0 bg-white"
 						sandbox={buildWebPreviewSandbox({
@@ -784,10 +711,7 @@
 						path
 							? 'bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-white'
 							: 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-900/60'}"
-						on:click={() => (selectedPath = path)}
-						>{path}{previousUpdate && previousUpdate.files[path]?.content !== files[path]?.content
-							? ' *'
-							: ''}</button
+						on:click={() => (selectedPath = path)}>{path}</button
 					>
 				{/each}
 			</nav>

@@ -1,4 +1,5 @@
 import { createMessagesList } from '$lib/utils';
+import { normalizeArtifactChanges, type ArtifactChange } from './artifactChanges';
 
 export type WebPreviewFile = { content: string; mime: string };
 export type WebPreviewArtifact = {
@@ -10,6 +11,7 @@ export type WebPreviewArtifact = {
 	files: Record<string, WebPreviewFile>;
 	updatedAt?: number;
 	contentHash?: string;
+	changes?: ArtifactChange[];
 	exportedPath?: string;
 	exportedRuntime?: 'terminal' | 'pyodide';
 	hasFilePayload?: boolean;
@@ -72,6 +74,7 @@ const normalizeDocument = (value: any): WebPreviewArtifact | null => {
 		files,
 		updatedAt: Number(value.updatedAt ?? 0),
 		contentHash: value.contentHash ?? undefined,
+		changes: normalizeArtifactChanges(value.changes),
 		exportedPath: value.exportedPath ?? undefined,
 		exportedRuntime: value.exportedRuntime ?? undefined,
 		hasFilePayload,

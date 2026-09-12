@@ -512,23 +512,59 @@ und Anzeigepfade, nicht pauschal saemtliche Modell-/Konfigurationskombinationen.
   Noch laufende, nicht als Konflikt erkannte Saves bleiben von dieser Sicherung
   ausgeschlossen. Es gibt keine neue Datenbankmigration.
 - Eine eindeutige Canvas-Textauswahl bis 8.000 Zeichen kann mit einer Anweisung
-  in den Chat uebernommen werden. Dies sendet noch keine Modellanfrage und
-  ersetzt keinen vorhandenen Composer-Entwurf. Der Composer zeigt das Ziel und
-  erlaubt `Cancel targeting`. Ein Tabwechsel veraendert den eingefrorenen
+  direkt an der Auswahl in einem kleinen Dialog in den Chat uebernommen werden
+  (`Add to chat`). Die Anweisung ist optional und wird an einen vorhandenen
+  Composer-Entwurf angehaengt, nicht automatisch abgeschickt. Der Composer zeigt
+  Titel und Textzitat mit Entfernen-Aktion. Ein anderes Auswahlziel muss zuvor
+  entfernt werden. Auf schmalen Ansichten schliesst sich das Workspace-Overlay,
+  damit der Chatentwurf sichtbar wird. Ein Tabwechsel veraendert den eingefrorenen
   Dokumentbezug nicht. Die API bindet `canvas_replace_text` an Original-ID,
   Originaltext und Originalhash; Erstellen/Vollersetzung sind fuer diesen Auftrag
-  gesperrt. Mehrdeutige oder nicht exakt im Markdown vorkommende formatierte
-  Auswahlen muessen verkleinert werden.
-- Canvas zeigt die bestehende letzte KI-Aenderung im Vergleich und behaelt sein
-  vorhandenes Undo. Web Preview vergleicht die letzte waehrend des geoeffneten
-  Editors eingegangene Inhaltsaenderung und kann diesen Stand mit normalem Autosave
-  zuruecknehmen. Mehrere Tool-Aufrufe sind einzelne Updates, keine atomare
-  Turn-Version. Manuelle Bearbeitung verwirft dieses Preview-Undo; Schliessen oder
-  Reload verwirft den Vergleich, nicht den gespeicherten Inhalt. Kein dauerhaftes
-  Versionsarchiv. Vergleichsausschnitte sind je Seite auf 12.000 Zeichen begrenzt.
-- Web Preview bietet Desktopbreite und 390-Pixel-Mobilbreite, begrenzt durch den
-  vorhandenen Platz. Im schmalen Codebereich ersetzt eine Dateiauswahl die
-  seitliche Dateiliste. Dies ist eine Breitenvorschau, keine Geraeteemulation.
+  gesperrt. Sichtbare Textauswahlen werden auf den exakten Markdown-Quelltext
+  abgebildet, einschliesslich Fett-/Kursivtext, Links, Listen, mehrerer Absaetze,
+  Inline-Code und Sonderzeichen. Im Chat bleibt das Zitat ohne Markdown-Marker
+  lesbar. Mehrdeutige und nicht sicher abbildbare Auswahlen werden abgelehnt.
+- Reines Selektieren oder Ein-/Ausblenden von Aenderungsmarkierungen loest kein
+  Autosave und keine Markdown-Normalisierung aus. Manuelle Aenderungen werden
+  auch unmittelbar nach einem externen Update erfasst, ohne zeitbasierte Sperre.
+  Vor dem Uebernehmen wird Autosave abgeschlossen und der gesamte erfasste
+  Quelltext mit dem gespeicherten Dokument verglichen. Nur bei Gleichheit wird
+  dessen kanonischer Hash verwendet; ein veralteter UI-Hash allein ist kein
+  Konflikt. Chatwechsel, weitere lokale Bearbeitung oder echte externe Aenderungen
+  waehrend dieses Ablaufs verhindern die Uebernahme.
+- Das Auswahlzitat wird mit der User-Nachricht als `workspace_selection` im
+  bestehenden Chat-JSON gespeichert. Es bleibt nach Reload lesbar und wird bei
+  Regeneration als dasselbe versionierte Ziel verwendet. Kein neuer Tabellenentwurf.
+- "Aenderungen anzeigen" erscheint ausschliesslich im Canvas-Editor, auch bei
+  verknuepften Notes. Entfernte Texte werden direkt an ihrer Stelle im Dokument
+  dezent rot und durchgestrichen, hinzugefuegte Texte dezent gruen markiert.
+  Die vorhandene Dokumentformatierung bleibt erhalten. Keine Vergleichsbox im
+  Chat und kein Aenderungsschalter bei Web Preview. Alte gespeicherte Chat-Diffs
+  werden ebenfalls nicht angezeigt.
+- Canvas hat keine eigene Kopfzeile, keinen zusaetzlichen Titel und keine
+  Wort-/Zeichenzaehler, auch nicht bei verknuepften Notes. Der Dokumenttext beginnt
+  direkt oben; Dokumentueberschrift und gespeicherter Objektname bleiben erhalten.
+  Die Workspace-Tabs bleiben unveraendert. Aenderungsansicht, Undo und weitere
+  Dokumentaktionen schweben rechts oben als kompakte, tastaturbedienbare Icons
+  mit Tooltips. Der erste Textblock haelt ausreichend Abstand zu den Aktionen,
+  auch in schmalen Ansichten. Es gibt keine zusaetzliche vollbreite Aktionsleiste.
+  Eigenstaendige Notes behalten ihre vorhandenen Metadaten und Zaehler.
+- Markierungen sind ausschliesslich Editor-Dekorationen: Sie veraendern weder
+  Dokument-JSON noch Autosave oder Undo-Historie. Ausblenden, Weiterbearbeiten,
+  Versionswechsel und Schliessen entfernen sie. Nach Reload wird der letzte
+  gespeicherte KI-Snapshot erst auf ausdruecklichen Klick erneut verglichen.
+  Der Vergleich markiert den geaenderten Bereich zwischen erstem und letztem
+  Unterschied; zusammenhaengende Wortgrenzen bleiben lesbar.
+- Canvas-Undo ist innerhalb der eingeschalteten Aenderungsansicht verfuegbar.
+  Es verwendet den letzten KI-Snapshot des Objekts im Chat-JSON, nicht den
+  Zustand eines gemounteten Editors. Es prueft atomar Objekt-ID, Inhalts-Hash und
+  Zeitversion. Ein zweites Undo oder ein alter Chat-Diff darf keine neuere manuelle
+  oder KI-Aenderung ueberschreiben. Konflikte werden sichtbar gemeldet. Mehrere
+  Tool-Aufrufe bleiben einzelne Updates, keine atomare Turn-Version. Exportierte
+  Dateien werden durch Undo nicht veraendert. Kein unbeschraenktes Versionsarchiv.
+- Web Preview verwendet ausschliesslich die vorhandene Workspace-Breite; keine
+  Desktop-/Mobile-Umschalter oder Geraeteemulation. Im schmalen Codebereich ersetzt
+  weiterhin eine Dateiauswahl die seitliche Dateiliste.
 - JS-Fehler, unbehandelte Promise-Ablehnungen, Ressourcen-/CSP-Fehler und fehlende
   virtuelle Fetch-Dateien werden innerhalb der bestehenden Sandbox gemeldet.
   Maximal 20 unterschiedliche Meldungen pro Render, je 600 Zeichen Text und 200
@@ -561,3 +597,50 @@ Abnahme dieses Bearbeitungspakets am 10.09.2026:
   Canvas-Auswahl gegen gespeicherten Originaltext pruefen und nur aeussere
   Auswahl-Leerzeichen entfernen. Konflikte bleiben explizit statt stiller Retries
   mit neuerem Hash. Pruefprotokolle: `.tmp/artifact-edit-*.log`.
+
+Nachpruefung der Auswahl- und Inline-Aenderungsoberflaeche am 11.09.2026:
+
+- 160 Frontend-Tests, 120 Backend-Tests und Node-22-Produktionsbuild bestanden.
+  Die globale Svelte-Pruefung ist wegen vorhandener projektweiter Diagnosen
+  weiterhin nicht gruen; sie ist keine bestandene Abnahmebedingung.
+- Vollstaendiger Workspace-Browserlauf: 17 bestanden, ein Berechtigungstest
+  absichtlich ausgenommen und in isolierter Konfiguration separat bestanden.
+  Auswahl aus Canvas und verknuepfter Note, erhaltene Composer-Entwuerfe,
+  Chat-/Tabwechsel, Reload, Inline-Undo, Konflikte, Uploads und Pyodide-Files
+  wurden geprueft. Helle/dunkle und schmale Screenshots visuell kontrolliert.
+- Reales Modell GPT-5.5 im Testchat `3f95b4aa-7ae8-4305-931d-47f6fe0f4fec`:
+  ausgewaehlten Canvas-Satz geaendert, zweiten Absatz erhalten, Inline-Undo und
+  gespeichertes Auswahlzitat nach Reload geprueft. Zwei-Dateien-Web-Preview
+  erstellt, beide Dateien aktualisiert und ueber Inline-Undo zurueckgenommen;
+  gerenderte Vorschau anschliessend kontrolliert.
+- Im schmalen Layout beide Workspace-Sichtbarkeitszustaende beim Uebernehmen
+  schliessen; andernfalls blieb der Chatentwurf hinter dem Overlay verborgen.
+  Vergleichsausschnitte enthalten lesbaren Zeilenkontext statt Wortfragmente.
+  Protokolle: `.tmp/selection-*.log`, Bilder: `.tmp/workspace-e2e-results/`.
+
+UX-Korrektur am 11.09.2026: Die obige historische Inline-Chat-Abnahme ist durch
+die Canvas-interne Darstellung ersetzt. Aktuell geprueft: 12 gezielte Unit-Tests,
+Canvas-Vergleich und versionsgebundenes Undo nach Reload, keine Vergleichs-UI im
+Chat oder bei Web Preview, Weiterbearbeiten ohne Mitspeichern von Dekorationen,
+helle und schmale dunkle Ansicht sowie die beiden verknuepften Notes-Journeys.
+Protokolle: `.tmp/canvas-document-*.log`.
+
+Nachpruefung der haeufig abgelehnten Textauswahl am 11.09.2026:
+
+- Reine Auswahltransaktionen speichern nicht mehr. Die zeitbasierte Sperre fuer
+  schnelle manuelle Eingaben ist entfernt. Formatierter sichtbarer Text wird auf
+  eindeutige Quellbereiche abgebildet; nicht teilbare Zeichenreferenzen werden
+  nicht auf einen groesseren Bereich erweitert. Absatzabstaende bleiben erhalten.
+- 187 Frontend-Tests, 36 gezielte Backend-Tests und Node-22-Produktionsbuild
+  bestanden. Vollstaendiger Workspace-Browserlauf: 20 bestanden, ein
+  Berechtigungstest in der No-Auth-Konfiguration ausgenommen. Nach der letzten
+  Quellbereichsabsicherung beide neuen Browserregressionen erneut bestanden:
+  Formatierungen ohne Autosave sowie sofortiges Bearbeiten/Auswaehlen mit echtem
+  konkurrierendem Server-Update. Die globale Typpruefung bleibt bei 7.533 Fehlern
+  und 200 Warnungen; keine Diagnosen in den neuen Auswahl-Hilfsdateien.
+- Reales GPT-5.5 im Testchat `ac944771-156e-4409-8ba7-0cb4e72afe5d`: Canvas
+  erstellt, Satz mit fetter Passage ausgewaehlt, Anweisung im Chat abgeschickt,
+  nur diesen Satz ersetzt. Zweiter Absatz und Fettformatierung unveraendert.
+  Canvas-interne Markierungen, Reload, Wiedereroeffnen ueber Outputs und erneute
+  Uebernahme derselben formatierten Passage erfolgreich geprueft.
+  Protokolle: `.tmp/selection-source-*.log`. Keine Datenbankmigration.

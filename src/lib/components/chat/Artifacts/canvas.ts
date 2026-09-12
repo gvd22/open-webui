@@ -1,4 +1,5 @@
 import { createMessagesList } from '$lib/utils';
+import { normalizeArtifactChanges, type ArtifactChange } from './artifactChanges';
 
 export type CanvasNoteArtifact = {
 	type: 'canvas-note';
@@ -10,6 +11,7 @@ export type CanvasNoteArtifact = {
 	canUndoAiUpdate?: boolean;
 	updatedAt?: number;
 	contentHash?: string;
+	changes?: ArtifactChange[];
 	hasContentPayload?: boolean;
 	source: 'tool';
 };
@@ -64,12 +66,6 @@ export const generateCanvasTitle = (content = '', fallback = '') => {
 	return truncateCanvasTitle(title);
 };
 
-export const canSynchronizeCanvasDocumentChange = (
-	isApplyingExternalContent: boolean,
-	suppressedUntil: number,
-	now = Date.now()
-) => !isApplyingExternalContent && now >= suppressedUntil;
-
 export const canUseNotes = (
 	enabled: boolean,
 	role: string | undefined,
@@ -120,6 +116,7 @@ const normalizeToolCanvasDocument = (value: any): CanvasNoteArtifact | null => {
 		canUndoAiUpdate: Boolean(value.canUndoAiUpdate),
 		updatedAt: Number(value.updatedAt ?? 0),
 		contentHash: value.contentHash ?? undefined,
+		changes: normalizeArtifactChanges(value.changes),
 		source: 'tool',
 		...(hasContentPayload ? {} : { hasContentPayload: false })
 	};
@@ -200,7 +197,9 @@ export const preserveNewerCanvas = (
 	incoming: CanvasNoteArtifact,
 	current?: CanvasNoteArtifact
 ): CanvasNoteArtifact =>
-	current && current.hasContentPayload !== false && Number(current.updatedAt ?? 0) > 0 &&
+	current &&
+	current.hasContentPayload !== false &&
+	Number(current.updatedAt ?? 0) > 0 &&
 	Number(current.updatedAt ?? 0) >= Number(incoming.updatedAt ?? 0)
 		? { ...incoming, ...current }
 		: incoming;

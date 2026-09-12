@@ -6,14 +6,13 @@
 	import { toast } from 'svelte-sonner';
 
 	import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
-	import {
-		selectTransientCanvasDocument,
-		undoLastTransientCanvasAiUpdate,
-		updateTransientCanvasDocument
-	} from '$lib/apis/chats';
+	import { selectTransientCanvasDocument, updateTransientCanvasDocument } from '$lib/apis/chats';
 	import { artifactContents, config, user } from '$lib/stores';
 	import CanvasEditor from './CanvasEditor.svelte';
-	import { canSynchronizeCanvasDocumentChange, canUseNotes } from './canvas';
+	import CanvasSelectionEditor from './CanvasSelectionEditor.svelte';
+	import CanvasDocumentChanges from './CanvasDocumentChanges.svelte';
+	import { addCanvasSelectionToChat } from './canvasSelectionRequest';
+	import { canUseNotes } from './canvas';
 	import {
 		createSerializedSaveQueue,
 		registerWorkspaceSaveBarrier,
@@ -30,7 +29,6 @@
 	export let title = '';
 	export let content = '';
 	export let titleEdited = false;
-	export let canUndoAiUpdate = false;
 	export let showClose = true;
 	$: notesAvailable = canUseNotes(
 		Boolean($config?.features?.enable_notes),
@@ -43,14 +41,13 @@
 	let lastTitleProp = title;
 	let lastContentProp = content;
 	let isApplyingExternalDocument = false;
-	let suppressWorkspaceSyncUntil = Date.now() + 300;
 	let linkedNoteUnavailable = false;
 	let saveConflict = false;
+	let disposed = false;
 	let unregisterSaveBarrier = () => {};
 
 	const markExternalDocumentUpdate = () => {
 		isApplyingExternalDocument = true;
-		suppressWorkspaceSyncUntil = Date.now() + 300;
 		queueMicrotask(() => {
 			isApplyingExternalDocument = false;
 		});
@@ -68,9 +65,7 @@
 	}
 
 	const updateWorkspaceTitle = (nextTitle: string) => {
-		const isManualChange =
-			canSynchronizeCanvasDocumentChange(isApplyingExternalDocument, suppressWorkspaceSyncUntil) &&
-			nextTitle !== linkedTitle;
+		const isManualChange = !isApplyingExternalDocument && nextTitle !== linkedTitle;
 		linkedTitle = nextTitle;
 		if (!isManualChange) {
 			return;
@@ -209,7 +204,7 @@
 
 	const updateWorkspaceDocument = (updates: { title?: string; content?: string }) => {
 		const isManualChange =
-			canSynchronizeCanvasDocumentChange(isApplyingExternalDocument, suppressWorkspaceSyncUntil) &&
+			!isApplyingExternalDocument &&
 			((updates.title !== undefined && updates.title !== linkedTitle) ||
 				(updates.content !== undefined && updates.content !== linkedContent));
 		linkedTitle = updates.title ?? linkedTitle;
@@ -254,36 +249,27 @@
 	});
 
 	onDestroy(() => {
+		disposed = true;
 		void workspaceSaveQueue.flush().finally(unregisterSaveBarrier);
 	});
-
-	const undoAiUpdate = async () => {
-		if (!chatId || !canvasId) {
-			console.error('Canvas undo requested without an active chat or document');
-			return;
-		}
-
+	const askAboutSelection = async (selection: string, instruction: string) => {
+		const selectedSource = linkedContent;
 		try {
-			const document = await undoLastTransientCanvasAiUpdate(localStorage.token, chatId, canvasId);
-			linkedTitle = document.title;
-			linkedContent = document.content;
-			(artifactContents as any).update((items: any[]) =>
-				(items ?? []).map((item) =>
-					item?.canvasId === canvasId
-						? {
-								...item,
-								title: document.title,
-								content: document.content,
-								titleEdited: Boolean(document.title_edited),
-								canUndoAiUpdate: false,
-								updatedAt: document.updated_at,
-								contentHash: document.contentHash
-							}
-						: item
-				)
-			);
-		} catch (error) {
-			console.error('Unable to undo Canvas AI update', error);
+			return await addCanvasSelectionToChat({
+				chatId,
+				canvasId,
+				content: selectedSource,
+				selection,
+				title: linkedTitle,
+				instruction,
+				save: async () => {
+					await workspaceSaveQueue.flush();
+					return !saveConflict;
+				},
+				isCurrent: () => !disposed && !linkedNoteUnavailable && linkedContent === selectedSource
+			});
+		} catch (error: any) {
+			toast.error($i18n.t(error?.message ?? 'Could not verify this selection. Please try again.'));
 		}
 	};
 </script>
@@ -294,13 +280,23 @@
 			id={noteId}
 			canvas={true}
 			showCanvasClose={showClose}
-			canUndoCanvasAiUpdate={canUndoAiUpdate}
 			onClose={() => dispatch('close')}
 			onTitleChange={updateWorkspaceTitle}
 			onDocumentChange={updateWorkspaceDocument}
 			onUnavailable={markLinkedNoteUnavailable}
-			onUndoCanvasAiUpdate={undoAiUpdate}
-		/>
+		>
+			<svelte:fragment slot="canvas-actions" let:editor>
+				<CanvasDocumentChanges {editor} {chatId} {canvasId} disabled={saveConflict} />
+			</svelte:fragment>
+			<svelte:fragment slot="canvas-selection" let:editor let:selection>
+				<CanvasSelectionEditor
+					{editor}
+					{selection}
+					disabled={saveConflict}
+					onAdd={(instruction) => askAboutSelection(selection, instruction)}
+				/>
+			</svelte:fragment>
+		</NoteEditor>
 	</div>
 {:else if canvasId}
 	{#key canvasId}
@@ -310,7 +306,6 @@
 			{title}
 			{content}
 			{titleEdited}
-			{canUndoAiUpdate}
 			{showClose}
 			noteId={linkedNoteUnavailable ? '' : noteId}
 			on:close={() => dispatch('close')}

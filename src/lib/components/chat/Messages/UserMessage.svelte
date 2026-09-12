@@ -13,6 +13,7 @@
 	import equal from 'fast-deep-equal';
 
 	import Name from './Name.svelte';
+	import WorkspaceSelectionQuote from './WorkspaceSelectionQuote.svelte';
 	import ProfileImage from './ProfileImage.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import FileItem from '$lib/components/common/FileItem.svelte';
@@ -389,6 +390,18 @@
 								: ' w-full'}"
 						>
 							{#if message.content}
+								{#if typeof message.workspace_selection?.selection?.text === 'string'}
+									<div class="mb-3">
+										<WorkspaceSelectionQuote
+											text={typeof message.workspace_selection.selection.displayText === 'string'
+												? message.workspace_selection.selection.displayText
+												: message.workspace_selection.selection.text}
+											title={typeof message.workspace_selection.title === 'string'
+												? message.workspace_selection.title
+												: 'Canvas'}
+										/>
+									</div>
+								{/if}
 								{#if $settings?.renderMarkdownInUserMessages ?? true}
 									<div class="markdown-prose">
 										<Markdown

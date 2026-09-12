@@ -85,6 +85,7 @@ from open_webui.utils.canvas import (
     sync_linked_canvases_from_note,
     sync_linked_canvas_note_content,
 )
+from open_webui.utils.artifact_changes import artifact_changes
 from open_webui.utils.web_preview import (
     WEB_PREVIEW_ACTIVE_DOCUMENT_KEY,
     WEB_PREVIEW_DOCUMENTS_KEY,
@@ -117,7 +118,7 @@ def _canvas_tool_conflict(exc: CanvasConflictError) -> str:
     return json.dumps(exc.payload, ensure_ascii=False)
 
 
-def _canvas_tool_document(document: dict, warning: str = '') -> str:
+def _canvas_tool_document(document: dict, warning: str = '', *, changes: bool = False) -> str:
     return json.dumps(
         {
             'type': 'canvas.document',
@@ -128,6 +129,7 @@ def _canvas_tool_document(document: dict, warning: str = '') -> str:
             'titleEdited': bool(document.get('title_edited', False)),
             'noteId': document.get('note_id'),
             'canUndoAiUpdate': bool(document.get('last_ai_update')),
+            **({'changes': artifact_changes(document)} if changes else {}),
             **({'warning': warning} if warning else {}),
         },
         ensure_ascii=False,
@@ -382,7 +384,7 @@ async def canvas_update_document(
         except Exception:
             log.exception('Unable to publish linked Canvas Note event canvas_id=%s', canvas_id)
 
-    return _canvas_tool_document(document)
+    return _canvas_tool_document(document, changes=True)
 
 
 async def canvas_select_document(
@@ -593,7 +595,7 @@ async def canvas_replace_text(
             await _emit_note_updated(__request__, __user__, updated_note)
         except Exception:
             log.exception('Unable to publish linked Canvas Note event canvas_id=%s', canvas_id)
-    return _canvas_tool_document(document)
+    return _canvas_tool_document(document, changes=True)
 
 
 # =============================================================================
@@ -609,7 +611,7 @@ def _web_preview_conflict(exc: WebPreviewConflictError) -> str:
     return json.dumps(exc.payload, ensure_ascii=False)
 
 
-def _web_preview_document(document: dict, warning: str = '') -> str:
+def _web_preview_document(document: dict, warning: str = '', *, changes: bool = False) -> str:
     return json.dumps(
         {
             'type': 'web_preview.document',
@@ -620,6 +622,7 @@ def _web_preview_document(document: dict, warning: str = '') -> str:
             'contentHash': web_preview_content_hash(document),
             'exportedPath': document.get('exported_path'),
             'exportedRuntime': document.get('exported_runtime'),
+            **({'changes': artifact_changes(document, preview=True)} if changes else {}),
             **({'warning': warning} if warning else {}),
         },
         ensure_ascii=False,
@@ -718,6 +721,7 @@ async def web_preview_update(
             current,
             files=files,
             title=title,
+            source='ai',
             entrypoint=entrypoint,
             expected_updated_at=expected_updated_at,
             expected_content_hash=expected_content_hash,
@@ -732,7 +736,7 @@ async def web_preview_update(
         return _web_preview_conflict(exc)
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
-    return _web_preview_document(document)
+    return _web_preview_document(document, changes=True)
 
 
 async def web_preview_select(
@@ -899,6 +903,7 @@ async def web_preview_replace_text(
             files=files,
             expected_updated_at=int(current.get('updated_at') or 0),
             expected_content_hash=web_preview_content_hash(current),
+            source='ai',
         )
         documents[preview_id] = updated
         chat_data[WEB_PREVIEW_DOCUMENTS_KEY] = documents
@@ -908,7 +913,7 @@ async def web_preview_replace_text(
         document = await _mutate_artifact_chat(chat, mutate, 'Web Preview')
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
-    return _web_preview_document(document)
+    return _web_preview_document(document, changes=True)
 
 
 async def web_preview_import_runtime_file(
@@ -1007,6 +1012,7 @@ async def web_preview_import_runtime_file(
             preview_id,
             current,
             files=files,
+            source='ai',
             expected_updated_at=expected_updated_at,
             expected_content_hash=expected_content_hash,
         )
@@ -1020,7 +1026,7 @@ async def web_preview_import_runtime_file(
         return _web_preview_conflict(exc)
     except (RuntimeError, ValueError) as exc:
         return _web_preview_error(str(exc))
-    return _web_preview_document(document)
+    return _web_preview_document(document, changes=True)
 
 
 # =============================================================================

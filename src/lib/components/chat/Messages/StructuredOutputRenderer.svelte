@@ -76,7 +76,10 @@
 	} text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition`;
 
 	$: displayItems = dedupeWebPreviewDisplayItems(
-		dedupeCanvasDisplayItems(buildOutputDisplayItems(output) as OutputDisplayItem[], previousCanvasIds),
+		dedupeCanvasDisplayItems(
+			buildOutputDisplayItems(output) as OutputDisplayItem[],
+			previousCanvasIds
+		),
 		previousWebPreviewIds
 	);
 </script>
@@ -113,7 +116,7 @@
 		<CanvasPreview
 			title={displayItem.artifact.title}
 			content={displayItem.artifact.content}
-				canvasId={displayItem.artifact.canvasId}
+			canvasId={displayItem.artifact.canvasId}
 			noteId={displayItem.artifact.noteId ?? ''}
 			{model}
 			{save}

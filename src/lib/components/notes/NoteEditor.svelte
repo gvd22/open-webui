@@ -72,7 +72,6 @@
 		getPinnedNoteList
 	} from '$lib/apis/notes';
 	import { deleteChatById } from '$lib/apis/chats';
-	import { canSynchronizeCanvasDocumentChange } from '$lib/components/chat/Artifacts/canvas';
 
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import FileItem from '../common/FileItem.svelte';
@@ -101,11 +100,9 @@
 	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
 	export let onUnavailable: () => void = () => {};
 	export let showCanvasClose = true;
-	export let canUndoCanvasAiUpdate = false;
-	export let onUndoCanvasAiUpdate: () => void = () => {};
 
-	let editor = null;
-	let note = null;
+	let editor: any = null;
+	let note: any = null;
 
 	const newNote = {
 		title: '',
@@ -137,7 +134,7 @@
 	let wordCount = 0;
 	let charCount = 0;
 
-	let versionIdx = null;
+	let versionIdx: number | null = null;
 	let selectedModelId = null;
 
 	let recording = false;
@@ -150,14 +147,13 @@
 	let noteChatDraftKey = '';
 	let noteChatCreating = false;
 
-	let selectedContent = null;
+	let selectedContent: { text: string; from: number; to: number } | null = null;
 	let noteAttachmentFiles = [];
 	let noteChatSuggestedPrompts = [];
 	let pendingNoteEvent = null;
 	let pendingNoteEventTimer = null;
 	let lastLocalContentChangeAt = 0;
 	let applyingExternalContent = false;
-	let canvasDocumentChangeSuppressedUntil = 0;
 	$: noteAttachmentFiles = (files ?? []).filter(
 		(file) => file?.type !== 'image' && !(file?.content_type ?? '').startsWith('image/')
 	);
@@ -316,11 +312,7 @@
 		}
 
 		const selection = editor.state.selection;
-		// RichTextInput can emit an onChange after setContent returns. Do not echo a
-		// model-driven Note event back into the Canvas document as a local edit.
-		if (canvas) {
-			canvasDocumentChangeSuppressedUntil = Date.now() + 1500;
-		}
+		// Guard the actual content transaction, never subsequent user edits by elapsed time.
 		applyingExternalContent = true;
 		editor.commands.setContent(incomingContent.html || marked.parse(incomingContent.md ?? ''));
 		await tick();
@@ -479,7 +471,7 @@ ${content}
 				insertNoteVersion(note);
 				versionIdx = note.data.versions.length - 1;
 			} else {
-				versionIdx = note.data.versions.length;
+				versionIdx = Number(note.data.versions.length);
 			}
 		}
 
@@ -1045,7 +1037,11 @@ ${content}
 				</div>
 			{:else}
 				<div class=" w-full flex flex-col {loading ? 'opacity-20' : ''}">
-					<div class="shrink-0 w-full flex justify-between items-center px-3">
+					<div
+						class={canvas
+							? 'absolute end-3 top-2 z-20 rounded-lg bg-white/90 p-0.5 shadow-sm dark:bg-gray-950/90'
+							: 'shrink-0 w-full flex justify-between items-center px-3'}
+					>
 						<div class="w-full min-w-0 flex items-center">
 							{#if $mobile && !canvas}
 								<Tooltip
@@ -1067,35 +1063,36 @@ ${content}
 								</Tooltip>
 							{/if}
 
-							<input
-								class="w-full text-sm font-normal bg-transparent outline-hidden {$mobile
-									? 'ml-1'
-									: ''}"
-								type="text"
-								bind:value={note.title}
-								on:input={() => {
-									onTitleChange(note.title);
-									onDocumentChange({ title: note.title });
-								}}
-								placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
-								disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
-									titleGenerating}
-								required
-								on:focus={() => {
-									titleInputFocused = true;
-								}}
-								on:blur={(e) => {
-									// check if target is generate button
-									if (ignoreBlur) {
-										ignoreBlur = false;
-										return;
-									}
+							{#if !canvas}
+								<input
+									class="w-full min-w-0 text-sm font-normal bg-transparent outline-hidden {$mobile
+										? 'ml-1'
+										: ''}"
+									type="text"
+									bind:value={note.title}
+									on:input={() => {
+										onTitleChange(note.title);
+										onDocumentChange({ title: note.title });
+									}}
+									placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
+									disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
+										titleGenerating}
+									required
+									on:focus={() => {
+										titleInputFocused = true;
+									}}
+									on:blur={(e) => {
+										// check if target is generate button
+										if (ignoreBlur) {
+											ignoreBlur = false;
+											return;
+										}
 
-									titleInputFocused = false;
-									changeDebounceHandler();
-								}}
-							/>
-
+										titleInputFocused = false;
+										changeDebounceHandler();
+									}}
+								/>
+							{/if}
 							{#if !canvas && titleInputFocused && !titleGenerating}
 								<div
 									class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
@@ -1125,6 +1122,9 @@ ${content}
 							{/if}
 
 							<div class="flex items-center gap-0.5 shrink-0">
+								{#if canvas && editor && versionIdx === null && note?.write_access}
+									<slot name="canvas-actions" {editor} />
+								{/if}
 								{#if note?.write_access && !canvas}
 									{#if editor}
 										<div>
@@ -1271,19 +1271,6 @@ ${content}
 								{/if}
 
 								{#if canvas}
-									{#if canUndoCanvasAiUpdate}
-										<Tooltip content={$i18n.t('Undo AI change')}>
-											<button
-												type="button"
-												class="p-1 transition hover:bg-black/5 dark:hover:bg-white/5"
-												aria-label={$i18n.t('Undo AI change')}
-												on:click={onUndoCanvasAiUpdate}
-											>
-												<ArrowUturnLeft className="size-4" />
-											</button>
-										</Tooltip>
-									{/if}
-
 									{#if showCanvasClose}
 										<Tooltip content={$i18n.t('Close')}>
 											<button
@@ -1314,61 +1301,66 @@ ${content}
 						</div>
 					</div>
 
-					<div class="  px-1.5">
-						<div
-							class=" flex w-full bg-transparent overflow-x-auto scrollbar-none"
-							on:wheel={(e) => {
-								if (e.deltaY !== 0) {
-									e.preventDefault();
-									e.currentTarget.scrollLeft += e.deltaY;
-								}
-							}}
-						>
+					{#if !canvas}
+						<div class="  px-1.5">
 							<div
-								class="flex gap-0.5 items-center text-xs font-normal text-gray-500 dark:text-gray-500 w-fit"
+								class=" flex w-full bg-transparent overflow-x-auto scrollbar-none"
+								on:wheel={(e) => {
+									if (e.deltaY !== 0) {
+										e.preventDefault();
+										e.currentTarget.scrollLeft += e.deltaY;
+									}
+								}}
 							>
-								<button class=" flex items-center gap-1 w-fit py-1 px-1.5 rounded-lg min-w-fit">
-									<!-- check for same date, yesterday, last week, and other -->
+								<div
+									class="flex gap-0.5 items-center text-xs font-normal text-gray-500 dark:text-gray-500 w-fit"
+								>
+									<button class=" flex items-center gap-1 w-fit py-1 px-1.5 rounded-lg min-w-fit">
+										<!-- check for same date, yesterday, last week, and other -->
 
-									{#if dayjs(note.created_at / 1000000).isSame(dayjs(), 'day')}
-										<span
-											>{dayjs(note.created_at / 1000000).format($i18n.t('[Today at] h:mm A'))}</span
-										>
-									{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'day'), 'day')}
-										<span
-											>{dayjs(note.created_at / 1000000).format(
-												$i18n.t('[Yesterday at] h:mm A')
-											)}</span
-										>
-									{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'week'), 'week')}
-										<span
-											>{dayjs(note.created_at / 1000000).format(
-												$i18n.t('[Last] dddd [at] h:mm A')
-											)}</span
-										>
-									{:else}
-										<span>{dayjs(note.created_at / 1000000).format($i18n.t('DD/MM/YYYY'))}</span>
-									{/if}
-								</button>
+										{#if dayjs(note.created_at / 1000000).isSame(dayjs(), 'day')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Today at] h:mm A')
+												)}</span
+											>
+										{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'day'), 'day')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Yesterday at] h:mm A')
+												)}</span
+											>
+										{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'week'), 'week')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Last] dddd [at] h:mm A')
+												)}</span
+											>
+										{:else}
+											<span>{dayjs(note.created_at / 1000000).format($i18n.t('DD/MM/YYYY'))}</span>
+										{/if}
+									</button>
 
-								<div class="flex items-center gap-1 px-1 min-w-fit">
-									<div>
-										{$i18n.t('{{COUNT}} words', {
-											COUNT: wordCount
-										})}
-									</div>
-									<div>
-										{$i18n.t('{{COUNT}} characters', {
-											COUNT: charCount
-										})}
+									<div class="flex items-center gap-1 px-1 min-w-fit">
+										<div>
+											{$i18n.t('{{COUNT}} words', {
+												COUNT: wordCount
+											})}
+										</div>
+										<div>
+											{$i18n.t('{{COUNT}} characters', {
+												COUNT: charCount
+											})}
+										</div>
 									</div>
 								</div>
 							</div>
 						</div>
-					</div>
-
+					{/if}
 					<div
-						class=" flex-1 w-full h-full overflow-auto px-3 relative flex flex-col"
+						class=" flex-1 w-full h-full overflow-auto px-3 relative flex flex-col {canvas
+							? 'canvas-document-content'
+							: ''}"
 						id="note-content-container"
 					>
 						{#if noteAttachmentFiles.length > 0}
@@ -1399,6 +1391,15 @@ ${content}
 							</div>
 						{/if}
 
+						{#if canvas && editor && versionIdx === null && note?.write_access}
+							<slot
+								name="canvas-selection"
+								{editor}
+								selection={selectedContent
+									? editor.state.doc.textBetween(selectedContent.from, selectedContent.to, '\n\n')
+									: ''}
+							/>
+						{/if}
 						<RichTextInput
 							bind:this={inputElement}
 							bind:editor
@@ -1435,13 +1436,7 @@ ${content}
 								lastLocalContentChangeAt = Date.now();
 								note.data.content.html = content.html;
 								note.data.content.md = content.md;
-								if (
-									!canvas ||
-									canSynchronizeCanvasDocumentChange(
-										applyingExternalContent,
-										canvasDocumentChangeSuppressedUntil
-									)
-								) {
+								if (!canvas || !applyingExternalContent) {
 									onDocumentChange({ content: content.md });
 								}
 
@@ -1587,3 +1582,10 @@ ${content}
 		</NotePanel>
 	{/if}
 </div>
+
+<style>
+	.canvas-document-content :global(.tiptap > :first-child:not(.canvas-removed-text)),
+	.canvas-document-content :global(.tiptap > .canvas-removed-text:first-child > :first-child) {
+		padding-inline-end: 7rem;
+	}
+</style>

@@ -928,7 +928,7 @@
 			],
 			content: provider ? undefined : content,
 			autofocus: messageInput ? true : false,
-			onTransaction: () => {
+			onTransaction: ({ transaction }) => {
 				if (!editor) return;
 
 				// Defer Svelte reactivity trigger to rAF so we don't interleave
@@ -941,6 +941,9 @@
 						}
 					});
 				}
+
+				// Selection and decoration transactions must not normalize or autosave the document.
+				if (!transaction.docChanged) return;
 
 				htmlValue = editor.getHTML();
 				jsonValue = editor.getJSON();
