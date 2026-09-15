@@ -4,7 +4,7 @@
 	import type { i18n as i18nType } from 'i18next';
 
 	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
-	import { fileIconName } from '$lib/components/chat/FileNav/fileIcon';
+	import { fileIconName, fileIconTone } from '$lib/components/chat/FileNav/fileIcon';
 	import CodeBracket from '$lib/components/icons/CodeBracket.svelte';
 	import Document from '$lib/components/icons/Document.svelte';
 	import Folder from '$lib/components/icons/Folder.svelte';
@@ -54,17 +54,6 @@
 			return 'connector';
 		}
 		return 'code';
-	};
-
-	const fileIconTone = (name: string) => {
-		const extension = name.split('.').pop()?.toLowerCase() ?? '';
-		if (['doc', 'docx', 'odt'].includes(extension)) return 'text-blue-600 dark:text-blue-400';
-		if (['ppt', 'pptx'].includes(extension)) return 'text-orange-600 dark:text-orange-400';
-		if (['xls', 'xlsx', 'ods', 'csv', 'tsv'].includes(extension)) {
-			return 'text-emerald-600 dark:text-emerald-400';
-		}
-		if (extension === 'pdf') return 'text-red-600 dark:text-red-400';
-		return 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300';
 	};
 
 	// Select before the active editor can consume the pointer's final click.

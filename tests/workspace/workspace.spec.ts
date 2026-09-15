@@ -428,6 +428,157 @@ test.describe('seeded workspace lifecycle', () => {
 		});
 	});
 
+	for (const kind of ['canvas', 'web-preview'] as const) {
+		test(`${kind} recovers a failed autosave after tab switch and reload`, async ({ page }) => {
+			await openSeededWorkspace(page, seeded);
+			const title = kind === 'canvas' ? 'E2E Canvas Alpha' : 'E2E Preview Alpha';
+			const id = kind === 'canvas' ? CANVAS_ALPHA : PREVIEW_ALPHA;
+			if (kind === 'web-preview') await page.getByRole('tab', { name: title, exact: true }).click();
+			const endpoint = `/api/v1/chats/${seeded.chatId}/${kind}/${id}`;
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let captured!: () => void;
+			const requested = new Promise<void>((resolve) => {
+				captured = resolve;
+			});
+			await page.route(`**${endpoint}`, async (route) => {
+				captured();
+				await gate;
+				await route.fulfill({
+					status: 503,
+					contentType: 'application/json',
+					body: '{"detail":"Temporary outage"}'
+				});
+			});
+			try {
+				const input =
+					kind === 'canvas'
+						? page.locator('#artifacts-container [contenteditable="true"]')
+						: page.getByLabel('Preview title', { exact: true });
+				await input.fill('Draft survives a temporary outage');
+				await requested;
+				await page.getByRole('tab', { name: 'E2E Canvas Beta', exact: true }).click();
+				const failed = page.waitForResponse(
+					(response) => response.url().endsWith(endpoint) && response.status() === 503
+				);
+				release();
+				await failed;
+				await page.unroute(`**${endpoint}`);
+				await page.reload();
+				await dismissReleaseNotes(page);
+				await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+				await page.getByRole('menu').getByRole('button', { name: title, exact: true }).click();
+				await expect(page.getByRole('region', { name: 'Unsaved draft' })).toBeVisible();
+				if (kind === 'canvas')
+					await expect(
+						page.locator('#artifacts-container .canvas-document-content .ProseMirror')
+					).toContainText('Draft survives a temporary outage');
+				else await expect(input).toHaveValue('Draft survives a temporary outage');
+				await page.getByRole('button', { name: 'Recover draft', exact: true }).click();
+				await expect
+					.poll(async () => {
+						const data = await readChat(page.request, seeded);
+						const doc =
+							data.chat[kind === 'canvas' ? '_canvas_documents' : '_web_preview_documents'][id];
+						return kind === 'canvas' ? doc.content : doc.title;
+					})
+					.toContain('Draft survives a temporary outage');
+				await expect(page.getByRole('region', { name: 'Unsaved draft' })).toHaveCount(0);
+			} finally {
+				release();
+			}
+		});
+	}
+
+	for (const action of ['switch', 'close'] as const) {
+		test(`a delayed card open respects a later workspace ${action}`, async ({ page }) => {
+			await openSeededWorkspace(page, seeded);
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const endpoint = `/api/v1/chats/${seeded.chatId}/web-preview/${PREVIEW_ALPHA}/select`;
+			await page.route(`**${endpoint}`, async (route) => {
+				await gate;
+				await route.continue();
+			});
+			try {
+				await page.getByRole('button', { name: 'Open: E2E Preview Alpha', exact: true }).click();
+				if (action === 'switch')
+					await page.getByRole('tab', { name: 'E2E Canvas Beta', exact: true }).click();
+				else
+					await page
+						.locator('#artifacts-container')
+						.getByRole('button', { name: 'Close', exact: true })
+						.click();
+				const response = page.waitForResponse((result) => result.url().endsWith(endpoint));
+				release();
+				await response;
+				// Allow the response handlers and the next render to finish.
+				await page.waitForTimeout(200);
+				if (action === 'switch')
+					await expect(
+						page.getByRole('tab', { name: 'E2E Canvas Beta', exact: true })
+					).toHaveAttribute('aria-selected', 'true');
+				else await expect(page.getByTestId('workspace-tabs')).not.toBeVisible();
+			} finally {
+				release();
+			}
+		});
+	}
+
+	for (const module of [false, true]) {
+		test(`renders root assets and literal closing tags in a ${module ? 'module' : 'classic'} preview script`, async ({
+			page
+		}) => {
+			const endpoint = `/api/v1/chats/${seeded.chatId}/web-preview/${PREVIEW_ALPHA}`;
+			const current = await (
+				await page.request.post(`${endpoint}/select`, { headers: authHeaders(seeded.token) })
+			).json();
+			const saved = await page.request.post(endpoint, {
+				headers: authHeaders(seeded.token),
+				data: {
+					title: current.title,
+					entrypoint: 'pages/index.html',
+					expected_updated_at: current.updated_at,
+					expected_content_hash: current.contentHash,
+					files: {
+						'pages/index.html': {
+							mime: 'text/html',
+							content: `<html><head><link href="/styles.css"></head><body><p id="result">Waiting</p><script ${module ? 'type="module" ' : ''}src="/app.js"></script></body></html>`
+						},
+						'styles.css': {
+							mime: 'text/css',
+							content:
+								'#result { color: rgb(10, 120, 30); } #result::after { content: "</style>"; }'
+						},
+						'app.js': {
+							mime: 'text/javascript',
+							content:
+								'document.querySelector("#result").textContent = String.raw`</script><div>literal</div>`;'
+						}
+					}
+				}
+			});
+			expect(saved.ok()).toBe(true);
+			await openSeededWorkspace(page, seeded);
+			await page.getByRole('tab', { name: 'E2E Preview Alpha', exact: true }).click();
+			const frame = page.frameLocator('#artifacts-container iframe');
+			await expect(frame.locator('#result')).toHaveText('</script><div>literal</div>');
+			await expect(frame.locator('#result')).toHaveCSS('color', 'rgb(10, 120, 30)');
+			expect(
+				await frame.locator('#result').evaluate((node) => getComputedStyle(node, '::after').content)
+			).toBe('"</style>"');
+			await expect(frame.locator('div')).toHaveCount(0);
+			await expect(page.locator('#artifacts-container iframe')).not.toHaveAttribute(
+				'sandbox',
+				/allow-same-origin/
+			);
+		});
+	}
+
 	test('keeps the Pyodide workspace free of Terminal and Browser launch controls', async ({
 		page
 	}) => {
@@ -473,12 +624,17 @@ test.describe('seeded workspace lifecycle', () => {
 					})
 				).ok()
 			).toBeTruthy();
-			const titleInput = page.getByLabel(kind === 'canvas' ? 'Title' : 'Preview title', {
-				exact: true
-			});
-			await titleInput.fill('My recovered draft');
+			const draftInput =
+				kind === 'canvas'
+					? page.locator('#artifacts-container .canvas-document-content .ProseMirror')
+					: page.getByLabel('Preview title', { exact: true });
+			const expectDraft = async (text: string) => {
+				if (kind === 'canvas') await expect(draftInput).toHaveText(text);
+				else await expect(draftInput).toHaveValue(text);
+			};
+			await draftInput.fill('My recovered draft.');
 			await expect(page.getByRole('region', { name: 'Unsaved draft' })).toBeVisible();
-			await expect(titleInput).toHaveValue('My recovered draft');
+			await expectDraft('My recovered draft.');
 			await page.getByRole('button', { name: 'Compare', exact: true }).click();
 			await expect(page.getByLabel('Changes', { exact: true })).toContainText(
 				'Server-only content'
@@ -488,16 +644,17 @@ test.describe('seeded workspace lifecycle', () => {
 			await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
 			await page.getByRole('menu').getByRole('button', { name: remote.title, exact: true }).click();
 			await expect(page.getByRole('region', { name: 'Unsaved draft' })).toBeVisible();
-			await expect(titleInput).toHaveValue('My recovered draft');
+			await expectDraft('My recovered draft.');
 			await page.getByRole('button', { name: 'Recover draft', exact: true }).click();
 			await expect(page.getByRole('region', { name: 'Unsaved draft' })).toHaveCount(0);
 			await expect
 				.poll(async () => {
 					const data = await readChat(page.request, seeded);
-					return data.chat[kind === 'canvas' ? '_canvas_documents' : '_web_preview_documents'][id]
-						.title;
+					const document =
+						data.chat[kind === 'canvas' ? '_canvas_documents' : '_web_preview_documents'][id];
+					return kind === 'canvas' ? document.content : document.title;
 				})
-				.toBe('My recovered draft');
+				.toContain('My recovered draft.');
 			const latest = await (
 				await page.request.post(`${endpoint}/select`, { headers: authHeaders(seeded.token) })
 			).json();
@@ -514,10 +671,10 @@ test.describe('seeded workspace lifecycle', () => {
 					})
 				).ok()
 			).toBeTruthy();
-			await titleInput.fill('Discard this edit');
+			await draftInput.fill('Discard this edit');
 			await expect(page.getByRole('region', { name: 'Unsaved draft' })).toBeVisible();
 			await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
-			await expect(titleInput).toHaveValue('Server wins on discard');
+			await expectDraft(kind === 'canvas' ? 'Server-only content' : 'Server wins on discard');
 			await expect(page.getByRole('region', { name: 'Unsaved draft' })).toHaveCount(0);
 		});
 	}
@@ -1126,6 +1283,74 @@ test('opens and reopens Files in a new session without a page reload', async ({ 
 	await expect
 		.poll(() => page.evaluate(() => (window as any).__workspacePageSentinel))
 		.toBe(sentinel);
+});
+
+test('keeps Files rows inset and stable through focus and menu selection', async ({ page }) => {
+	test.setTimeout(120_000);
+	const token = await signInForNoAuth(page.request);
+	await page.addInitScript((value) => localStorage.setItem('token', value), token);
+	await page.goto('/');
+	await dismissReleaseNotes(page);
+	await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+	const files = page.getByRole('region', { name: 'Pyodide file browser' });
+	await expect(files.getByRole('status')).toHaveCount(0, { timeout: 90_000 });
+	await files.getByRole('button', { name: 'Actions', exact: true }).last().click();
+	const chooser = page.waitForEvent('filechooser');
+	await page.getByRole('menu').getByRole('button', { name: 'Upload', exact: true }).click();
+	const name = 'spacing-regression-with-a-long-document-name.txt';
+	await (
+		await chooser
+	).setFiles({ name, mimeType: 'text/plain', buffer: Buffer.from('Layout check') });
+	const row = files.locator('[data-file-row]').filter({ hasText: name });
+	await expect(row).toBeVisible();
+	await expect(page.getByRole('menu')).toHaveCount(0);
+
+	for (const width of [1440, 390]) {
+		await page.setViewportSize({ width, height: 900 });
+		if (!(await files.isVisible())) {
+			await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+		}
+		await expect(row).toBeVisible();
+		for (const dark of [false, true]) {
+			await page.evaluate(
+				(value) => document.documentElement.classList.toggle('dark', value),
+				dark
+			);
+			const bounds = await files.boundingBox();
+			const before = await row.boundingBox();
+			expect(before!.height).toBe(28);
+			expect(before!.x - bounds!.x).toBeGreaterThanOrEqual(16);
+			expect(bounds!.x + bounds!.width - before!.x - before!.width).toBeGreaterThanOrEqual(16);
+			expect(before!.y - bounds!.y).toBe(44);
+			const label = row.getByTitle(name, { exact: true });
+			const labelBefore = await label.boundingBox();
+			const open = row.getByRole('button', { name: new RegExp(name) });
+			const more = row.locator('button').last();
+			await open.focus();
+			await open.press('Tab');
+			await expect(more).toBeFocused();
+			await more.press('Shift+Tab');
+			await expect(open).toBeFocused();
+			expect(
+				await row
+					.locator(':scope > div')
+					.evaluate((element) => getComputedStyle(element).outlineStyle)
+			).toBe('solid');
+			await more.click();
+			await expect(page.getByRole('menu')).toBeVisible();
+			expect(await label.boundingBox()).toEqual(labelBefore);
+			expect(await row.boundingBox()).toEqual(before);
+			const menu = await page.getByRole('menu').boundingBox();
+			expect(menu!.x).toBeGreaterThanOrEqual(16);
+			expect(menu!.x + menu!.width).toBeLessThanOrEqual(width - 16);
+			await page.getByRole('menu').press('Escape');
+			await expect(page.getByRole('menu')).toHaveCount(0);
+			await expect(more).toBeFocused();
+			expect(await files.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+				true
+			);
+		}
+	}
 });
 
 test('reopens a durable output card after its Pyodide file is no longer catalogued', async ({

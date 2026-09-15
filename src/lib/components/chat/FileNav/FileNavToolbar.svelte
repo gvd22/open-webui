@@ -63,7 +63,7 @@
 </script>
 
 <div
-	class="flex h-11 shrink-0 items-center gap-2 border-b border-gray-100 bg-white px-2.5 dark:border-gray-800 dark:bg-gray-850"
+	class="flex h-9 shrink-0 items-center gap-2 border-b border-gray-100 bg-white px-2.5 dark:border-gray-800 dark:bg-gray-850"
 >
 	<div class="flex shrink-0 items-center gap-0.5 px-1">
 		<!-- Back -->
@@ -97,7 +97,7 @@
 
 	<div
 		bind:this={breadcrumbEl}
-		class="scrollbar-none flex h-8 min-w-0 flex-1 items-center overflow-x-auto rounded-md bg-gray-50 px-2 dark:bg-gray-800/60"
+		class="scrollbar-none flex h-6 min-w-0 flex-1 items-center overflow-x-auto rounded-md bg-gray-50 px-2 dark:bg-gray-800/60"
 	>
 		<Icon name="folder" size={14} class="mr-1.5 shrink-0 text-gray-400 dark:text-gray-500" />
 		{#each visibleBreadcrumbs as crumb, i}
