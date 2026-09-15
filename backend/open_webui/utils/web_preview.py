@@ -173,7 +173,6 @@ def build_web_preview_document_update(
     exported_path: str | None = None,
     exported_runtime: str | None = None,
     update_export: bool = False,
-    source: str = 'manual',
 ) -> dict:
     """Build one normalized, version-checked update for API and model tools."""
     normalized_files = normalize_web_preview_files(files)
@@ -205,14 +204,7 @@ def build_web_preview_document_update(
     if update_export:
         updated['exported_path'] = exported_path
         updated['exported_runtime'] = exported_runtime
-    if source not in ('ai', 'manual'):
-        raise ValueError('Invalid Web Preview update source.')
-    changed = any(updated.get(key) != current.get(key) for key in ('title', 'entrypoint', 'files'))
-    if changed or source == 'ai':
-        updated['last_ai_update'] = (
-            {key: current.get(key) for key in ('title', 'entrypoint', 'files')}
-            if source == 'ai' else None
-        )
+    updated.pop('last_ai_update', None)
     return updated
 
 

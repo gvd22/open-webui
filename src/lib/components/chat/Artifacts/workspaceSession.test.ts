@@ -30,7 +30,12 @@ describe('workspace session persistence', () => {
 					order: ['workspace:files'],
 					closed: [],
 					filesOpened: true,
-					openedFiles: [{ path: '/report.pdf', fileId: 'file-1' }]
+					openedFiles: [
+						{ path: '/report.pdf', fileId: 'file-1' },
+						{ path: '/notes.md' },
+						{ path: '/data.json' },
+						{ path: '/readme.txt' }
+					]
 				},
 				target
 			)
@@ -38,7 +43,12 @@ describe('workspace session persistence', () => {
 
 		expect(readWorkspaceState('chat-1', target)).toMatchObject({
 			filesOpened: true,
-			openedFiles: [{ path: '/report.pdf', fileId: 'file-1' }]
+			openedFiles: [
+				{ path: '/report.pdf', fileId: 'file-1' },
+				{ path: '/notes.md' },
+				{ path: '/data.json' },
+				{ path: '/readme.txt' }
+			]
 		});
 	});
 
@@ -80,7 +90,8 @@ describe('workspace session persistence', () => {
 					{ path: '/report.pdf', fileId: 'file-1' },
 					{ path: `/${'x'.repeat(2_000)}.pdf` },
 					{ path: '/bad\n.pdf' },
-					{ path: '/unsupported.odt', fileId: 'file-odt' },
+					{ path: 'https://example.com/file.txt' },
+					{ path: '/folder/' },
 					{ path: '/other.pdf', fileId: 'x'.repeat(300) }
 				]
 			})

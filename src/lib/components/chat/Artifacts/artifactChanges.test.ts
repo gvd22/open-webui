@@ -1,31 +1,9 @@
 import { expect, it } from 'vitest';
-import { normalizeArtifactChanges } from './artifactChanges';
 import {
 	buildOutputDisplayItems,
 	dedupeCanvasDisplayItems,
 	dedupeWebPreviewDisplayItems
 } from '../Messages/structuredOutput';
-
-it('bounds untrusted saved comparisons without interpreting HTML', () => {
-	expect(
-		normalizeArtifactChanges([
-			null,
-			{ before: 1 },
-			{ path: 'x', before: '<script>x</script>', after: 'ok' }
-		])
-	).toEqual([{ path: 'x', before: '<script>x</script>', after: 'ok', truncated: false }]);
-	const changes = normalizeArtifactChanges(
-		Array.from({ length: 99 }, () => ({
-			path: 'x',
-			before: 'a'.repeat(9000),
-			after: 'b'.repeat(9000)
-		}))
-	);
-	expect(changes.length).toBe(24);
-	expect(
-		changes.reduce((size, item) => size + item.before.length + item.after.length, 0)
-	).toBeLessThanOrEqual(12000);
-});
 
 it.each(['canvas', 'web_preview'])(
 	'does not display legacy %s diffs in chat while preserving prose and card deduplication',

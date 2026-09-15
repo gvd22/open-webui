@@ -51,6 +51,18 @@ it('allows only unique bounded selections and bounds comparisons', () => {
 	expect(changedText('', 'x'.repeat(15000)).after).toHaveLength(12000);
 });
 
+it('does not let a late save clear a newer draft from a remounted editor', () => {
+	const key = draftKey('u', 'late-save', 'canvas', 'one');
+	const saved = { content: 'first' },
+		newer = { content: 'second' };
+	keepConflictDraft(key, saved);
+	keepConflictDraft(key, newer);
+	clearConflictDraft(key, saved);
+	expect(readConflictDraft(key)).toEqual(newer);
+	clearConflictDraft(key, newer);
+	expect(readConflictDraft(key)).toBeNull();
+});
+
 it('treats preview diagnostics as bounded untrusted data from the current render', () => {
 	expect(
 		readPreviewDiagnostic(

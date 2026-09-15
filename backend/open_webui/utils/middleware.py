@@ -2259,7 +2259,7 @@ def process_messages_with_output(
             output_messages = convert_output_to_messages(
                 message['output']
                 if preserve_workspace_output
-                else compact_workspace_tool_output(message['output'], include_changes=False),
+                else compact_workspace_tool_output(message['output']),
                 raw=True,
                 reasoning_format=reasoning_format,
                 flatten_tool_images=True,

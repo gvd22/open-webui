@@ -303,7 +303,7 @@
 		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
 		const sourcePath = String(data?.source_path ?? '');
 		if (data?.runtime === 'pyodide') {
-			return await readWorkspaceText(getOrCreateWorker(), data.id, sourcePath, maxBytes);
+			return await readWorkspaceText(getOrCreateWorker(), sourcePath, maxBytes);
 		}
 		throw new Error('No supported runtime is active.');
 	};

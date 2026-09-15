@@ -27,7 +27,9 @@
 	let disposed = false;
 	let decoratedEditor: any = null;
 	let version: { expected_updated_at: number; expected_content_hash: string } | null = null;
-	$: artifact = ($artifactContents ?? []).find((item: any) => item.canvasId === canvasId) as any;
+	$: artifact = ($artifactContents ?? [])
+		.filter((item) => item.type === 'canvas-note')
+		.find((item) => item.canvasId === canvasId);
 	const hide = () => {
 		if (decoratedEditor && !decoratedEditor.isDestroyed) {
 			decoratedEditor.off('update', hide);
@@ -121,9 +123,9 @@
 				{ chatId: targetChat, kind: 'canvas', id: targetId },
 				{ updatedAt: current.updated_at, contentHash: current.contentHash }
 			);
-			(artifactContents as any).update((items: any[]) =>
+			artifactContents.update((items) =>
 				(items ?? []).map((item) =>
-					item.canvasId === targetId
+					item.type === 'canvas-note' && item.canvasId === targetId
 						? {
 								...item,
 								title: current.title,

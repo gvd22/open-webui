@@ -1,18 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { get, type Writable } from 'svelte/store';
+import { get } from 'svelte/store';
 import { artifactContents, artifactCode, chatId, showControls } from '$lib/stores';
 import { selectTransientCanvasDocument, selectTransientWebPreview } from '$lib/apis/chats';
 import {
 	openCanvasArtifact,
 	openWebPreviewArtifact,
-	selectWorkspaceArtifact
+	selectWorkspaceArtifact,
+	cancelPendingWorkspaceOpen
 } from './workspaceArtifactOpen';
 import type { CanvasNoteArtifact } from '../Artifacts/canvas';
 import type { WebPreviewArtifact } from '../Artifacts/webPreview';
 
-const contents = artifactContents as unknown as Writable<
-	(CanvasNoteArtifact | WebPreviewArtifact)[] | null
->;
+const contents = artifactContents;
 
 vi.mock('$lib/stores', async () => {
 	const { writable } = await import('svelte/store');
@@ -121,4 +120,33 @@ describe('shared artifact selection', () => {
 		expect(selectTransientWebPreview).not.toHaveBeenCalled();
 		expect(get(artifactCode)).toBe('preview-1');
 	});
+
+	it.each(['tab', 'close', 'same tab', 'chat roundtrip', 'new card'])(
+		'ignores an older card request after %s',
+		async (action) => {
+			let finish!: (value: any) => void;
+			vi.mocked(selectTransientWebPreview).mockReturnValue(
+				new Promise((resolve) => {
+					finish = resolve;
+				})
+			);
+			showControls.set(true);
+			const pending = openWebPreviewArtifact(preview, vi.fn());
+			if (action === 'tab') artifactCode.set('newer-tab');
+			if (action === 'close') showControls.set(false);
+			if (action === 'same tab') cancelPendingWorkspaceOpen();
+			if (action === 'chat roundtrip') {
+				chatId.set('other-chat');
+				chatId.set('chat-1');
+			}
+			if (action === 'new card') await openCanvasArtifact(canvas, vi.fn());
+			const selected = get(artifactCode),
+				visible = get(showControls);
+			finish({ ...preview, updated_at: 3 });
+			await pending;
+			expect(get(artifactCode)).toBe(selected);
+			expect(get(showControls)).toBe(visible);
+			expect(get(contents)?.some((item) => item.type === 'web-preview')).toBe(false);
+		}
+	);
 });

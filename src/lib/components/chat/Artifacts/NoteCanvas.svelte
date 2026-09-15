@@ -6,13 +6,15 @@
 	import { toast } from 'svelte-sonner';
 
 	import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
 	import { selectTransientCanvasDocument, updateTransientCanvasDocument } from '$lib/apis/chats';
 	import { artifactContents, config, user } from '$lib/stores';
 	import CanvasEditor from './CanvasEditor.svelte';
 	import CanvasSelectionEditor from './CanvasSelectionEditor.svelte';
 	import CanvasDocumentChanges from './CanvasDocumentChanges.svelte';
 	import { addCanvasSelectionToChat } from './canvasSelectionRequest';
-	import { canUseNotes } from './canvas';
+	import { canUseNotes, type CanvasNoteArtifact } from './canvas';
 	import {
 		createSerializedSaveQueue,
 		registerWorkspaceSaveBarrier,
@@ -70,9 +72,9 @@
 		if (!isManualChange) {
 			return;
 		}
-		(artifactContents as any).update((items: any[]) =>
+		artifactContents.update((items) =>
 			(items ?? []).map((item) =>
-				item?.canvasId === canvasId || item?.noteId === noteId
+				item.type === 'canvas-note' && (item.canvasId === canvasId || item.noteId === noteId)
 					? {
 							...item,
 							title: nextTitle,
@@ -125,9 +127,9 @@
 				}
 			);
 			if (chatId !== documentToSave.targetChatId || canvasId !== documentToSave.canvasId) return;
-			(artifactContents as any).update((items: any[]) =>
+			artifactContents.update((items) =>
 				(items ?? []).map((item) =>
-					item?.canvasId === documentToSave.canvasId
+					item.type === 'canvas-note' && item.canvasId === documentToSave.canvasId
 						? {
 								...item,
 								title: document.title,
@@ -152,9 +154,9 @@
 					);
 					linkedTitle = document.title ?? linkedTitle;
 					linkedContent = document.content ?? linkedContent;
-					(artifactContents as any).update((items: any[]) =>
+					artifactContents.update((items) =>
 						(items ?? []).map((item) =>
-							item?.canvasId === documentToSave.canvasId
+							item.type === 'canvas-note' && item.canvasId === documentToSave.canvasId
 								? {
 										...item,
 										title: linkedTitle,
@@ -189,8 +191,9 @@
 
 	const queueWorkspaceSave = () => {
 		if (!chatId || !canvasId) return;
-		const current = ((get(artifactContents) ?? []) as any[]).find(
-			(item) => item?.canvasId === canvasId
+		const current = (get(artifactContents) ?? []).find(
+			(item): item is CanvasNoteArtifact =>
+				item.type === 'canvas-note' && item.canvasId === canvasId
 		);
 		workspaceSaveQueue.enqueue({
 			targetChatId: chatId,
@@ -213,9 +216,9 @@
 			return;
 		}
 
-		(artifactContents as any).update((items: any[]) =>
+		artifactContents.update((items) =>
 			(items ?? []).map((item) =>
-				item?.canvasId === canvasId || item?.noteId === noteId
+				item.type === 'canvas-note' && (item.canvasId === canvasId || item.noteId === noteId)
 					? {
 							...item,
 							...updates,
@@ -231,9 +234,11 @@
 
 	const markLinkedNoteUnavailable = () => {
 		linkedNoteUnavailable = true;
-		(artifactContents as any).update((items: any[]) =>
+		artifactContents.update((items) =>
 			(items ?? []).map((item) =>
-				item?.canvasId === canvasId ? { ...item, noteId: undefined } : item
+				item.type === 'canvas-note' && item.canvasId === canvasId
+					? { ...item, noteId: undefined }
+					: item
 			)
 		);
 	};
@@ -279,14 +284,30 @@
 		<NoteEditor
 			id={noteId}
 			canvas={true}
-			showCanvasClose={showClose}
-			onClose={() => dispatch('close')}
 			onTitleChange={updateWorkspaceTitle}
 			onDocumentChange={updateWorkspaceDocument}
 			onUnavailable={markLinkedNoteUnavailable}
 		>
-			<svelte:fragment slot="canvas-actions" let:editor>
-				<CanvasDocumentChanges {editor} {chatId} {canvasId} disabled={saveConflict} />
+			<svelte:fragment slot="canvas-actions" let:editor let:editable>
+				<div
+					class="absolute end-3 top-2 z-20 flex items-center gap-0.5 rounded-lg bg-white/90 p-0.5 shadow-sm dark:bg-gray-950/90"
+				>
+					{#if editable}
+						<CanvasDocumentChanges {editor} {chatId} {canvasId} disabled={saveConflict} />
+					{/if}
+					{#if showClose}
+						<Tooltip content={$i18n.t('Close')}>
+							<button
+								type="button"
+								class="p-1 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 transition rounded-lg"
+								aria-label={$i18n.t('Close')}
+								on:click={() => dispatch('close')}
+							>
+								<XMark className="size-4" />
+							</button>
+						</Tooltip>
+					{/if}
+				</div>
 			</svelte:fragment>
 			<svelte:fragment slot="canvas-selection" let:editor let:selection>
 				<CanvasSelectionEditor

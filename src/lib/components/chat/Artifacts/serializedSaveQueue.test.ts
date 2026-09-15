@@ -140,12 +140,14 @@ describe('createSerializedSaveQueue', () => {
 
 		const firstSave = save(2, 'hash-2');
 		const remountedSave = save(3, 'hash-3');
+		const nextRemountedSave = save(4, 'hash-4');
 		first.resolve();
-		await Promise.all([firstSave, remountedSave]);
+		await Promise.all([firstSave, remountedSave, nextRemountedSave]);
 
 		expect(effectiveVersions).toEqual([
 			{ updatedAt: 1, contentHash: 'hash-1' },
-			{ updatedAt: 2, contentHash: 'hash-2' }
+			{ updatedAt: 2, contentHash: 'hash-2' },
+			{ updatedAt: 3, contentHash: 'hash-3' }
 		]);
 		expect(maxActive).toBe(1);
 		resetWorkspaceSaveVersion(target);

@@ -81,12 +81,12 @@
 		getOutputText,
 		hasPendingToolInteraction
 	} from './Messages/structuredOutput';
+	import { getCanvasNoteArtifactsFromHistory } from './Artifacts/canvas';
+	import { getWebPreviewsFromHistory } from './Artifacts/webPreview';
 	import {
-		getCanvasNoteArtifactsFromHistory,
-		mergePersistedCanvasArtifact
-	} from './Artifacts/canvas';
-	import { getWebPreviewsFromHistory, mergePersistedWebPreview } from './Artifacts/webPreview';
-	import { buildChatWorkspaceArtifacts } from './Artifacts/chatArtifacts';
+		buildChatWorkspaceArtifacts,
+		createWorkspaceReferenceHydrator
+	} from './Artifacts/chatArtifacts';
 	import { WORKSPACE_ASK_AI_EVENT } from './Artifacts/artifactEditing';
 
 	import {
@@ -416,8 +416,19 @@
 	let generating = false;
 	let knownWebPreviewIds = new Set<string>();
 	let knownCanvasIds = new Set<string>();
-	let workspaceHydrationKey = '';
-	let workspaceHydrationWarningShown = false;
+	const workspaceHydrator = createWorkspaceReferenceHydrator({
+		contents: artifactContents,
+		getChatId: () => $chatId,
+		loadChat: (id) => getChatById(localStorage.token, id),
+		onLoaded: (documents) => {
+			if (chat?.chat) chat = { ...chat, chat: { ...chat.chat, ...documents } };
+		},
+		onError: (error) => {
+			console.error('Workspace references could not be loaded', error);
+			toast.error($i18n.t('Workspace content could not be loaded'));
+		}
+	});
+	onDestroy(() => workspaceHydrator.reset());
 	let dragged = false;
 	let generationController = null;
 	let contextCompactionToastId = null;
@@ -2013,58 +2024,6 @@
 		}
 	};
 
-	const hydrateWorkspaceReferences = async (contents: any[]) => {
-		const targetChatId = $chatId;
-		if (!targetChatId) return;
-		const references = contents.filter(
-			(item) =>
-				item?.source === 'tool' &&
-				((item.type === 'canvas-note' && item.hasContentPayload === false) ||
-					(item.type === 'web-preview' && !item.hasFilePayload))
-		);
-		if (references.length === 0) return;
-		const key = `${targetChatId}:${references
-			.map((item) => `${item.canvasId ?? item.previewId}:${item.updatedAt ?? 0}`)
-			.join(',')}`;
-		if (workspaceHydrationKey === key) return;
-		workspaceHydrationKey = key;
-		try {
-			const refreshedChat = await getChatById(localStorage.token, targetChatId);
-			if ($chatId !== targetChatId || workspaceHydrationKey !== key) return;
-			const canvases = refreshedChat?.chat?._canvas_documents ?? {};
-			const previews = refreshedChat?.chat?._web_preview_documents ?? {};
-			if (chat?.chat) {
-				chat = {
-					...chat,
-					chat: {
-						...chat.chat,
-						_canvas_documents: canvases,
-						_web_preview_documents: previews
-					}
-				};
-			}
-			(artifactContents as any).update((items: any[] | null) =>
-				(items ?? []).map((item) => {
-					if (item?.type === 'canvas-note' && canvases[item.canvasId]) {
-						return mergePersistedCanvasArtifact(item, canvases[item.canvasId]);
-					}
-					if (item?.type === 'web-preview' && previews[item.previewId]) {
-						return mergePersistedWebPreview(item, previews[item.previewId]);
-					}
-					return item;
-				})
-			);
-			workspaceHydrationWarningShown = false;
-		} catch (error) {
-			console.error('Workspace references could not be loaded', error);
-			if (!workspaceHydrationWarningShown) {
-				workspaceHydrationWarningShown = true;
-				toast.error($i18n.t('Workspace content could not be loaded'));
-			}
-			if (workspaceHydrationKey === key) workspaceHydrationKey = '';
-		}
-	};
-
 	$: onHistoryChange(history);
 
 	const dispatchCallOverlayAudio = (message, final = false) => {
@@ -2110,7 +2069,7 @@
 		const messages = history ? createMessagesList(history, history.currentId) : [];
 		const result = buildChatWorkspaceArtifacts({
 			messages,
-			currentArtifacts: (get(artifactContents as any) ?? []) as any[],
+			currentArtifacts: get(artifactContents) ?? [],
 			persistedCanvasDocuments: (chat?.chat?._canvas_documents ?? {}) as Record<string, any>,
 			persistedWebPreviews: (chat?.chat?._web_preview_documents ?? {}) as Record<string, any>,
 			knownWebPreviewIds,
@@ -2120,17 +2079,17 @@
 
 		knownWebPreviewIds = result.knownWebPreviewIds;
 		knownCanvasIds = result.knownCanvasIds;
-		(artifactContents as any).set(result.contents);
-		void hydrateWorkspaceReferences(result.contents);
+		artifactContents.set(result.contents);
+		void workspaceHydrator.hydrate(result.contents);
 
 		if (result.canvasAutoOpenId && !$mobile && $chatId) {
-			(artifactCode as any).set(result.canvasAutoOpenId);
+			artifactCode.set(result.canvasAutoOpenId);
 			showArtifacts.set(true);
 			showControls.set(true);
 		}
 
 		if (result.newToolPreviewId && !$mobile && $chatId) {
-			(artifactCode as any).set(result.newToolPreviewId);
+			artifactCode.set(result.newToolPreviewId);
 			showArtifacts.set(true);
 			showControls.set(true);
 		}
@@ -2152,8 +2111,7 @@
 		resetWebSearchConfirmation();
 		knownWebPreviewIds = new Set();
 		knownCanvasIds = new Set();
-		workspaceHydrationKey = '';
-		workspaceHydrationWarningShown = false;
+		workspaceHydrator.reset();
 
 		// Mark the outgoing chat as read before resetting; in-place created chats
 		// keep chatIdProp undefined, so navigateHandler never marks them read.

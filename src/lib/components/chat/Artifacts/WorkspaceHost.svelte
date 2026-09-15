@@ -36,7 +36,10 @@
 	import { getCanvasNoteArtifactsFromHistory } from './canvas';
 	import { getWebPreviewsFromHistory } from './webPreview';
 	import { readWorkspaceState, writeWorkspaceState } from './workspaceSession';
-	import { selectWorkspaceArtifact } from '../Messages/workspaceArtifactOpen';
+	import {
+		cancelPendingWorkspaceOpen,
+		selectWorkspaceArtifact
+	} from '../Messages/workspaceArtifactOpen';
 	import {
 		buildWorkspaceTabs,
 		buildWorkspaceFileContent,
@@ -44,6 +47,7 @@
 		upsertWorkspaceFileContent,
 		limitWorkspaceFileContents,
 		getWorkspaceDocumentFormatForViewer,
+		getWorkspaceFileOpenTarget,
 		isWorkspaceOpenRequestForChat,
 		getWorkspaceContentId,
 		getVisibleWorkspaceContents,
@@ -52,6 +56,7 @@
 		shouldShowWorkspaceTabs,
 		shouldResetWorkspaceForChatChange,
 		type WorkspaceContent,
+		type WorkspaceFileContent,
 		type WorkspaceTab,
 		WORKSPACE_FILES_ID
 	} from './workspace';
@@ -61,7 +66,7 @@
 	export let showFiles = false;
 
 	let artifactSourceContents: WorkspaceContent[] = [];
-	let openedFileContents: WorkspaceContent[] = [];
+	let openedFileContents: WorkspaceFileContent[] = [];
 	let filesOpened = false;
 	let sourceContents: WorkspaceContent[] = [];
 	let contents: WorkspaceContent[] = [];
@@ -162,6 +167,7 @@
 	}
 
 	function selectWorkspaceContent(index: number) {
+		cancelPendingWorkspaceOpen();
 		const content = contents[index];
 		const targetChatId = $chatId;
 		if (!content) return;
@@ -176,8 +182,8 @@
 		const newContents = getVisibleWorkspaceContents(sourceContents, closedWorkspaceContentIds);
 		workspaceOpenFilePaths.set(
 			newContents
-				.filter((content) => content.type === 'workspace-file' && content.path)
-				.map((content) => content.path as string)
+				.filter((content) => content.type === 'workspace-file')
+				.map((content) => content.path)
 		);
 
 		if (newContents.length === 0) {
@@ -189,9 +195,7 @@
 		const selectedIdx = newContents.findIndex(
 			(content, index) =>
 				getWorkspaceContentId(content, index) === $artifactCode ||
-				content.previewId === $artifactCode ||
-				content.canvasId === $artifactCode ||
-				content.noteId === $artifactCode
+				(content.type === 'canvas-note' && content.noteId === $artifactCode)
 		);
 		contents = newContents;
 		selectedContentIdx =
@@ -203,10 +207,7 @@
 			return value;
 		}
 
-		return [
-			...getCanvasNoteArtifactsFromHistory(history),
-			...getWebPreviewsFromHistory(history)
-		] as WorkspaceContent[];
+		return [...getCanvasNoteArtifactsFromHistory(history), ...getWebPreviewsFromHistory(history)];
 	}
 
 	function rebuildWorkspaceContents(
@@ -255,7 +256,7 @@
 	): boolean {
 		if (
 			(!showFiles && !options.fileId) ||
-			!getWorkspaceDocumentFormatForViewer(path, documentViewerEnabled)
+			(getWorkspaceFileOpenTarget(path) === 'document-viewer' && !documentViewerEnabled)
 		) {
 			return false;
 		}
@@ -341,6 +342,7 @@
 	}
 
 	function closeWorkspaceTab(tab: WorkspaceTab) {
+		cancelPendingWorkspaceOpen();
 		if (tab.id === WORKSPACE_FILES_ID) return;
 		const selectedId = selectedContent
 			? getWorkspaceContentId(selectedContent, selectedContentIdx)
@@ -365,6 +367,7 @@
 	}
 
 	function closeWorkspace() {
+		cancelPendingWorkspaceOpen();
 		persistWorkspaceState();
 		dispatch('close');
 		showControls.set(false);
@@ -443,9 +446,7 @@
 				const codeIdx = contents.findIndex(
 					(content, index) =>
 						getWorkspaceContentId(content, index) === value ||
-						content.previewId === value ||
-						content.canvasId === value ||
-						content.noteId === value ||
+						(content.type === 'canvas-note' && content.noteId === value) ||
 						content.content === value
 				);
 				if (codeIdx !== -1) selectedContentIdx = codeIdx;
@@ -539,7 +540,7 @@
 			</div>
 		{/if}
 
-		{#if contents.length > 0 && !selectedIsCanvasNote && selectedHasArtifactActions}
+		{#if selectedContent && !selectedIsCanvasNote && selectedHasArtifactActions}
 			<div
 				class="pointer-events-auto z-20 flex justify-between items-center border-b border-gray-100 p-2.5 font-primar text-gray-900 dark:border-gray-850 dark:text-white"
 			>
@@ -548,7 +549,7 @@
 						<button
 							class="copy-code-button bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md px-1.5 py-0.5"
 							on:click={() => {
-								copyToClipboard(contents[selectedContentIdx].content);
+								copyToClipboard(selectedContent.content);
 								copied = true;
 
 								setTimeout(() => {
@@ -566,7 +567,7 @@
 							</button>
 						</Tooltip>
 
-						{#if contents[selectedContentIdx].type === 'iframe'}
+						{#if selectedContent.type === 'iframe'}
 							<Tooltip content={$i18n.t('Open in full screen')}>
 								<button
 									class=" bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md p-0.5"
@@ -612,21 +613,18 @@
 								></div>
 							{/if}
 						{/each}
-						{#if !['workspace-file', 'workspace-files'].includes(contents[selectedContentIdx].type)}
+						{#if selectedContent && !['workspace-file', 'workspace-files'].includes(selectedContent.type)}
 							<div
 								id={workspacePanelId}
 								role="tabpanel"
 								aria-labelledby={`workspace-tab-${selectedContentIdx}`}
 								class="absolute inset-0"
 							>
-								{#if contents[selectedContentIdx].type === 'iframe'}
+								{#if selectedContent.type === 'iframe'}
 									<iframe
 										bind:this={iframeElement}
 										title="Content"
-										srcdoc={injectCsp(
-											contents[selectedContentIdx].content,
-											$config?.ui?.iframe_csp ?? ''
-										)}
+										srcdoc={injectCsp(selectedContent.content, $config?.ui?.iframe_csp ?? '')}
 										class="w-full border-0 h-full rounded-none"
 										sandbox="{($settings?.iframeSandboxAllowScripts ?? true)
 											? 'allow-scripts'
@@ -639,28 +637,28 @@
 											: ''}"
 										on:load={iframeLoadHandler}
 									></iframe>
-								{:else if contents[selectedContentIdx].type === 'svg'}
+								{:else if selectedContent.type === 'svg'}
 									<SvgPanZoom
 										className=" w-full h-full max-h-full overflow-hidden"
-										svg={contents[selectedContentIdx].content}
+										svg={selectedContent.content}
 									/>
-								{:else if contents[selectedContentIdx].type === 'canvas-note'}
-									{#key `${$chatId}:${contents[selectedContentIdx].canvasId ?? ''}`}
+								{:else if selectedContent.type === 'canvas-note'}
+									{#key `${$chatId}:${selectedContent.canvasId ?? ''}`}
 										<NoteCanvas
 											chatId={$chatId}
-											canvasId={contents[selectedContentIdx].canvasId ?? ''}
-											noteId={contents[selectedContentIdx].noteId ?? ''}
-											title={contents[selectedContentIdx].title ?? ''}
-											content={contents[selectedContentIdx].content}
-											titleEdited={contents[selectedContentIdx].titleEdited ?? false}
+											canvasId={selectedContent.canvasId ?? ''}
+											noteId={selectedContent.noteId ?? ''}
+											title={selectedContent.title ?? ''}
+											content={selectedContent.content}
+											titleEdited={selectedContent.titleEdited ?? false}
 											showClose={!hasWorkspaceTabs}
 											on:close={closeWorkspace}
 										/>
 									{/key}
-								{:else if contents[selectedContentIdx].type === 'web-preview'}
-									{#key `${$chatId}:${contents[selectedContentIdx].previewId ?? ''}`}
+								{:else if selectedContent.type === 'web-preview'}
+									{#key `${$chatId}:${selectedContent.previewId ?? ''}`}
 										<WebPreviewRenderer
-											artifact={contents[selectedContentIdx] as any}
+											artifact={selectedContent}
 											chatId={$chatId ?? ''}
 											pyodideFilesAvailable={showFiles}
 											iframeCsp={$config?.ui?.iframe_csp ?? ''}

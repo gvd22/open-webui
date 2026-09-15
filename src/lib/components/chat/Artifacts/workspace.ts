@@ -1,26 +1,39 @@
 import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
+import type { CanvasNoteArtifact } from './canvas';
+import type { WebPreviewArtifact } from './webPreview';
 
-export type WorkspaceContent = {
-	type: string;
+export type WorkspaceFileContent = {
+	type: 'workspace-file';
+	workspaceId: string;
+	title: string;
 	content: string;
-	title?: string;
-	workspaceId?: string;
-	canvasId?: string;
-	noteId?: string;
-	previewId?: string;
-	entrypoint?: string;
-	files?: Record<string, { content: string; mime: string }>;
-	exportedPath?: string;
-	exportedRuntime?: string;
-	titleEdited?: boolean;
-	canUndoAiUpdate?: boolean;
-	updatedAt?: number;
-	source?: string;
-	path?: string;
+	path: string;
 	fileId?: string;
 	fileFormat?: WorkspaceDocumentFormat;
 	targetPage?: number;
 };
+
+export type WorkspaceFilesContent = {
+	type: 'workspace-files';
+	workspaceId: typeof WORKSPACE_FILES_ID;
+	title: string;
+	content: string;
+};
+
+export type LegacyWorkspaceContent = {
+	type: 'iframe' | 'svg';
+	content: string;
+	title?: string;
+	workspaceId?: string;
+	source?: string;
+};
+
+export type WorkspaceContent =
+	| CanvasNoteArtifact
+	| WebPreviewArtifact
+	| WorkspaceFileContent
+	| WorkspaceFilesContent
+	| LegacyWorkspaceContent;
 
 export type WorkspaceDocumentFormat = 'pdf' | 'docx' | 'pptx' | 'xls' | 'xlsx' | 'csv';
 
@@ -67,18 +80,15 @@ export const getWorkspaceDocumentFormatForViewer = (path: string, enabled: boole
 
 export const isWorkspaceDocumentPath = (path: string) => getWorkspaceDocumentFormat(path) !== null;
 
-/**
- * Shared by Pyodide Files before it delegates to a workspace tab. Formats
- * outside the narrow viewer contract stay in Files.
- */
-export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'files' =>
-	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'files';
+/** Choose the renderer, not the tab: every file has its own workspace tab. */
+export const getWorkspaceFileOpenTarget = (path: string): 'document-viewer' | 'file-preview' =>
+	getWorkspaceDocumentFormat(path) ? 'document-viewer' : 'file-preview';
 
 export const buildWorkspaceFileContent = (
 	path: string,
 	targetPage?: unknown,
 	fileId?: string | null
-): WorkspaceContent => {
+): WorkspaceFileContent => {
 	const page = normalizeDocumentTargetPage(targetPage);
 	return {
 		type: 'workspace-file',
@@ -92,7 +102,7 @@ export const buildWorkspaceFileContent = (
 	};
 };
 
-export const buildWorkspaceFilesContent = (): WorkspaceContent => ({
+export const buildWorkspaceFilesContent = (): WorkspaceFilesContent => ({
 	type: 'workspace-files',
 	workspaceId: WORKSPACE_FILES_ID,
 	title: 'Files',
@@ -108,7 +118,11 @@ export const buildWorkspaceSourceContents = (
 ): WorkspaceContent[] => [
 	...(showFiles && filesOpened ? [buildWorkspaceFilesContent()] : []),
 	...artifactContents,
-	...(documentViewerEnabled ? openedFileContents : [])
+	...openedFileContents.filter((content) =>
+		content.type === 'workspace-file' && !content.fileFormat
+			? Boolean(showFiles || content.fileId)
+			: documentViewerEnabled
+	)
 ];
 
 const fallbackTitle = (kind: string) => {
@@ -120,11 +134,11 @@ const fallbackTitle = (kind: string) => {
 };
 
 export const upsertWorkspaceFileContent = (
-	contents: WorkspaceContent[],
+	contents: WorkspaceFileContent[],
 	path: string,
 	targetPage?: unknown,
 	fileId?: string | null
-): WorkspaceContent[] => {
+): WorkspaceFileContent[] => {
 	const id = getWorkspaceFileId(path);
 	const page = normalizeDocumentTargetPage(targetPage);
 	const existing = contents.find((content, index) => getWorkspaceContentId(content, index) === id);
@@ -143,8 +157,8 @@ export const upsertWorkspaceFileContent = (
 	);
 };
 
-export const limitWorkspaceFileContents = (
-	contents: WorkspaceContent[],
+export const limitWorkspaceFileContents = <T extends WorkspaceContent>(
+	contents: T[],
 	recency: string[],
 	activeId: string,
 	maximum: number
@@ -215,14 +229,21 @@ const hashWorkspaceIdentity = (value: string) => {
 };
 
 export const getWorkspaceContentId = (content: WorkspaceContent, _index: number) => {
-	const explicitId = content.workspaceId ?? content.previewId ?? content.canvasId ?? content.noteId;
+	const explicitId =
+		content.type === 'canvas-note'
+			? content.canvasId || content.noteId
+			: content.type === 'web-preview'
+				? content.previewId
+				: content.workspaceId;
 	if (explicitId) return explicitId;
 
 	const cachedId = fallbackWorkspaceIds.get(content);
 	if (cachedId) return cachedId;
 
 	const type = content.type || 'workspace-item';
-	const identity = [type, content.source ?? '', content.content].join('\u0000');
+	const identity = [type, 'source' in content ? content.source : '', content.content].join(
+		'\u0000'
+	);
 	const id = `${type}:${hashWorkspaceIdentity(identity)}`;
 	fallbackWorkspaceIds.set(content, id);
 	return id;

@@ -1,6 +1,6 @@
 export const WORKSPACE_ASK_AI_EVENT = 'workspace:ask-ai';
 
-// Conflict drafts survive closing a workspace tab and a reload in this browser tab.
+// Unsaved drafts survive closing a workspace tab and a reload in this browser tab.
 const drafts = new Map<string, unknown>();
 export const draftKey = (userId: string, chatId: string, kind: string, id: string) =>
 	`workspace-draft:${JSON.stringify([userId, chatId, kind, id])}`;
@@ -22,7 +22,12 @@ export const keepConflictDraft = (key: string, draft: unknown) => {
 		return false;
 	}
 };
-export const clearConflictDraft = (key: string) => {
+export const clearConflictDraft = (key: string, savedDraft?: unknown) => {
+	if (
+		savedDraft !== undefined &&
+		JSON.stringify(readConflictDraft(key)) !== JSON.stringify(savedDraft)
+	)
+		return;
 	drafts.delete(key);
 	try {
 		sessionStorage.removeItem(key);

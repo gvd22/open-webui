@@ -25,8 +25,7 @@ class ViewerPyodideWorker {
 			const response = await fetch(`/runtime/files/view?path=${encodeURIComponent(message.path)}`, {
 				headers: {
 					Authorization: 'Bearer viewer-test-token',
-					'X-Session-Id':
-						localStorage.getItem('viewer-runtime-session') ?? 'viewer-browser-test'
+					'X-Session-Id': localStorage.getItem('viewer-runtime-session') ?? 'viewer-browser-test'
 				}
 			});
 			if (response.status === 404) throw new Error('missing');
@@ -35,9 +34,10 @@ class ViewerPyodideWorker {
 			if (contentLength > message.maxBytes) throw new Error('File exceeds the read limit');
 			const data = await response.arrayBuffer();
 			if (data.byteLength > message.maxBytes) throw new Error('File exceeds the read limit');
-			this.emit({ id: message.id, data });
+			this.emit({ type: 'fs:read', id: message.id, data });
 		} catch (cause) {
 			this.emit({
+				type: 'fs:read',
 				id: message.id,
 				error: cause instanceof Error ? cause.message : String(cause)
 			});

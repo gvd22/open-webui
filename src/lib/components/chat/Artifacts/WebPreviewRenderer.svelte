@@ -21,7 +21,8 @@
 
 	import { selectTransientWebPreview, updateTransientWebPreview } from '$lib/apis/chats';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
-	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { requestPyodideFile, type PyodideFileRequest } from '$lib/pyodide/workerRequest';
 	import { artifactContents, pyodideWorker, user } from '$lib/stores';
 	import { injectCsp } from '$lib/utils/csp';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -38,7 +39,12 @@
 		getWebPreviewExportPath
 	} from './webPreview';
 	import { buildWebPreviewSandbox, resolveWebPreviewCsp } from './webPreviewSandbox';
-	import { createSerializedSaveQueue, registerWorkspaceSaveBarrier } from './serializedSaveQueue';
+	import {
+		createSerializedSaveQueue,
+		registerWorkspaceSaveBarrier,
+		resetWorkspaceSaveVersion,
+		runWorkspaceOptimisticSave
+	} from './serializedSaveQueue';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 	export let artifact: WebPreviewArtifact;
@@ -61,18 +67,17 @@
 	let exporting = false;
 	let lastUpdatedAt = artifact.updatedAt ?? 0;
 	let exportedPath = artifact.exportedPath ?? '';
-	let exportedRuntime = artifact.exportedRuntime ?? '';
-	let workerRequestId = 0;
+	let exportedRuntime: NonNullable<WebPreviewArtifact['exportedRuntime']> | '' =
+		artifact.exportedRuntime ?? '';
+	const exportController = new AbortController();
+	let draftStorageWarning = false;
+	let retryTimer: ReturnType<typeof setTimeout>;
 	let saveFailed = false;
 	let retryCount = 0;
 	let lastArtifact = artifact;
 	let unregisterSaveBarrier = () => {};
 	let localRevision = 0;
-	let lastSaveBaseVersion: number | undefined;
-	let lastSavedVersion: number | undefined;
 	let lastContentHash = artifact.contentHash;
-	let lastSaveBaseHash: string | undefined;
-	let lastSavedHash: string | undefined;
 	let conflict: PreviewSaveSnapshot | null = null;
 	let serverVersion: any = null;
 	let resolving = false;
@@ -124,8 +129,10 @@
 			serverVersion = current;
 			lastUpdatedAt = current.updated_at;
 			lastContentHash = current.contentHash;
-			lastSaveBaseVersion = lastSavedVersion = undefined;
-			lastSaveBaseHash = lastSavedHash = undefined;
+			resetWorkspaceSaveVersion(
+				{ chatId: targetChat, kind: 'web_preview', id: targetId },
+				{ updatedAt: current.updated_at, contentHash: current.contentHash }
+			);
 			conflict = null;
 			if (recover) {
 				queuePreviewSave();
@@ -142,15 +149,15 @@
 				saveFailed = false;
 				lastArtifact = artifact;
 				updateSharedDraft();
-				(artifactContents as any).update((items: any[] | null) =>
+				artifactContents.update((items) =>
 					(items ?? []).map((item) =>
-						item.previewId === targetId
+						item.type === 'web-preview' && item.previewId === targetId
 							? {
 									...item,
 									updatedAt: lastUpdatedAt,
 									contentHash: lastContentHash,
 									exportedPath,
-									exportedRuntime
+									exportedRuntime: exportedRuntime || undefined
 								}
 							: item
 					)
@@ -196,7 +203,7 @@
 		entrypoint: string;
 		files: Record<string, WebPreviewFile>;
 		exportedPath: string;
-		exportedRuntime: string;
+		exportedRuntime: NonNullable<WebPreviewArtifact['exportedRuntime']> | '';
 		expectedUpdatedAt?: number;
 		expectedContentHash?: string;
 		notifyExport?: boolean;
@@ -204,9 +211,9 @@
 	};
 
 	const updateSharedDraft = () => {
-		(artifactContents as any).update((items: any[] | null) =>
+		artifactContents.update((items) =>
 			(items ?? []).map((item) =>
-				item?.previewId === artifact.previewId
+				item.type === 'web-preview' && item.previewId === artifact.previewId
 					? mergeLocalWebPreviewDraft(item, { title, entrypoint, files: structuredClone(files) })
 					: item
 			)
@@ -215,7 +222,7 @@
 
 	const buildSaveSnapshot = (exportMeta?: {
 		path: string;
-		runtime: string;
+		runtime: NonNullable<WebPreviewArtifact['exportedRuntime']>;
 	}): PreviewSaveSnapshot => ({
 		targetChatId: chatId,
 		targetPreviewId: artifact.previewId,
@@ -240,39 +247,34 @@
 		);
 		saving = true;
 		try {
-			const expectedUpdatedAt =
-				snapshot.expectedUpdatedAt === lastSaveBaseVersion
-					? lastSavedVersion
-					: snapshot.expectedUpdatedAt;
-			const expectedContentHash =
-				snapshot.expectedContentHash === lastSaveBaseHash
-					? lastSavedHash
-					: snapshot.expectedContentHash;
-			const updated = await updateTransientWebPreview(
-				localStorage.token,
-				snapshot.targetChatId,
-				snapshot.targetPreviewId,
-				{
-					title: snapshot.title,
-					entrypoint: snapshot.entrypoint,
-					files: snapshot.files,
-					exported_path: snapshot.exportedPath || null,
-					exported_runtime: snapshot.exportedRuntime || null,
-					expected_updated_at: expectedUpdatedAt ?? null,
-					expected_content_hash: expectedContentHash ?? null
+			const updated = await runWorkspaceOptimisticSave(
+				{ chatId: snapshot.targetChatId, kind: 'web_preview', id: snapshot.targetPreviewId },
+				{ updatedAt: snapshot.expectedUpdatedAt, contentHash: snapshot.expectedContentHash },
+				async (version) => {
+					const saved = await updateTransientWebPreview(
+						localStorage.token,
+						snapshot.targetChatId,
+						snapshot.targetPreviewId,
+						{
+							title: snapshot.title,
+							entrypoint: snapshot.entrypoint,
+							files: snapshot.files,
+							exported_path: snapshot.exportedPath || null,
+							exported_runtime: snapshot.exportedRuntime || null,
+							expected_updated_at: version.updatedAt ?? null,
+							expected_content_hash: version.contentHash ?? null
+						}
+					);
+					return { ...saved, updatedAt: saved.updated_at };
 				}
 			);
-			if (snapshot.revision === localRevision) clearConflictDraft(savedDraftKey);
+			clearConflictDraft(savedDraftKey, snapshot);
 			if (
 				disposed ||
 				chatId !== snapshot.targetChatId ||
 				artifact.previewId !== snapshot.targetPreviewId
 			)
 				return;
-			lastSaveBaseVersion = expectedUpdatedAt;
-			lastSavedVersion = updated.updated_at;
-			lastSaveBaseHash = expectedContentHash;
-			lastSavedHash = updated.contentHash;
 			lastContentHash = updated.contentHash;
 			lastUpdatedAt = Number(updated.updated_at ?? Date.now() / 1000);
 			const isLatestRevision = snapshot.revision === localRevision;
@@ -281,9 +283,9 @@
 			retryCount = 0;
 			exportedPath = snapshot.exportedPath;
 			exportedRuntime = snapshot.exportedRuntime;
-			(artifactContents as any).update((items: any[] | null) =>
+			artifactContents.update((items) =>
 				(items ?? []).map((item) =>
-					item?.previewId === artifact.previewId
+					item.type === 'web-preview' && item.previewId === artifact.previewId
 						? isLatestRevision
 							? {
 									...item,
@@ -294,7 +296,7 @@
 									updatedAt: lastUpdatedAt,
 									contentHash: lastContentHash,
 									exportedPath: snapshot.exportedPath,
-									exportedRuntime: snapshot.exportedRuntime
+									exportedRuntime: snapshot.exportedRuntime || undefined
 								}
 							: { ...item, updatedAt: lastUpdatedAt, contentHash: lastContentHash }
 						: item
@@ -303,7 +305,6 @@
 			if (snapshot.notifyExport)
 				toast.success($i18n.t('Saved to Files'), { position: 'bottom-right' });
 		} catch (error: any) {
-			if (error?.status === 409 && disposed) keepConflictDraft(savedDraftKey, snapshot);
 			if (
 				disposed ||
 				chatId !== snapshot.targetChatId ||
@@ -336,8 +337,8 @@
 			}
 			if (retryCount < 1) {
 				retryCount += 1;
-				setTimeout(() => {
-					if (snapshot.revision === localRevision) previewSaveQueue.enqueue(snapshot);
+				retryTimer = setTimeout(() => {
+					if (!disposed && snapshot.revision === localRevision) previewSaveQueue.enqueue(snapshot);
 				}, 1500);
 			} else {
 				toast.error($i18n.t('Preview could not be saved.'));
@@ -347,13 +348,20 @@
 		}
 	};
 	const previewSaveQueue = createSerializedSaveQueue(saveSnapshot);
+	const enqueuePreviewSave = (snapshot: PreviewSaveSnapshot) => {
+		if (!keepConflictDraft(recoveryKey(), snapshot) && !draftStorageWarning) {
+			draftStorageWarning = true;
+			toast.warning($i18n.t('Draft kept in memory only. Keep this browser tab open.'));
+		}
+		previewSaveQueue.enqueue(snapshot);
+	};
 
 	const queuePreviewSave = () => {
 		dirty = true;
 		localRevision += 1;
 		updateSharedDraft();
 		if (conflict) return;
-		previewSaveQueue.enqueue(buildSaveSnapshot());
+		enqueuePreviewSave(buildSaveSnapshot());
 	};
 
 	const setSelectedContent = (content: string) => {
@@ -372,61 +380,25 @@
 			.replace(/[^a-z0-9]+/g, '-')
 			.replace(/^-|-$/g, '') || 'web-preview';
 
-	const sendWorkerMessage = (message: any) => {
+	const sendWorkerMessage = (message: PyodideFileRequest) => {
 		let worker = $pyodideWorker;
 		if (!worker) {
 			worker = createPyodideWorker();
 			pyodideWorker.set(worker);
 		}
-		const id = `preview-export-${++workerRequestId}`;
-		return new Promise<any>((resolve, reject) => {
-			let timeout: ReturnType<typeof setTimeout>;
-			const armTimeout = (milliseconds: number) => {
-				clearTimeout(timeout);
-				timeout = setTimeout(() => {
-					cleanup();
-					if (worker && $pyodideWorker === worker) {
-						terminatePyodideWorker(worker, 'Pyodide stopped after a Web Preview export timed out');
-						pyodideWorker.set(null);
-					}
-					reject(new Error('Pyodide timed out'));
-				}, milliseconds);
-			};
-			const cleanup = () => {
-				clearTimeout(timeout);
-				worker?.removeEventListener('message', handler);
-				worker?.removeEventListener('error', errorHandler);
-			};
-			const handler = (event: MessageEvent) => {
-				if (event.data?.id !== id) return;
-				if (event.data?.type === 'pyodide:progress') {
-					armTimeout(getPyodideRequestTimeout(event.data.stage));
-					return;
+		return requestPyodideFile(worker, message, {
+			signal: exportController.signal,
+			onTimeout: () => {
+				if ($pyodideWorker === worker) {
+					terminatePyodideWorker(worker, 'Pyodide stopped after a Web Preview export timed out');
+					pyodideWorker.set(null);
 				}
-				cleanup();
-				if (event.data?.error || event.data?.stderr) {
-					reject(new Error(event.data.error || event.data.stderr));
-				} else {
-					resolve(event.data);
-				}
-			};
-			const errorHandler = (event: ErrorEvent) => {
-				cleanup();
-				reject(event.error || new Error(event.message));
-			};
-			worker?.addEventListener('message', handler);
-			worker?.addEventListener('error', errorHandler);
-			armTimeout(getPyodideRequestTimeout('request-queued'));
-			try {
-				worker?.postMessage({ ...message, id });
-			} catch (error) {
-				cleanup();
-				reject(error);
 			}
 		});
 	};
 
 	const exportToPyodide = async () => {
+		const exportedFiles = structuredClone(files);
 		const base = getWebPreviewExportPath(
 			'/mnt/uploads',
 			artifact.previewId,
@@ -436,7 +408,7 @@
 		await sendWorkerMessage({ type: 'fs:mkdir', path: '/mnt/uploads/previews' });
 		await sendWorkerMessage({ type: 'fs:mkdir', path: base });
 		const directories = new Set<string>();
-		for (const path of Object.keys(files)) {
+		for (const path of Object.keys(exportedFiles)) {
 			const parts = path.split('/').slice(0, -1);
 			let current = base;
 			for (const part of parts) {
@@ -446,7 +418,7 @@
 		}
 		for (const directory of directories)
 			await sendWorkerMessage({ type: 'fs:mkdir', path: directory });
-		for (const [path, file] of Object.entries(files)) {
+		for (const [path, file] of Object.entries(exportedFiles)) {
 			const segments = path.split('/');
 			const name = segments.pop() ?? path;
 			const dir = segments.length ? `${base}/${segments.join('/')}` : base;
@@ -461,9 +433,11 @@
 		exporting = true;
 		try {
 			const path = await exportToPyodide();
-			previewSaveQueue.enqueue(buildSaveSnapshot({ path, runtime: 'pyodide' }));
+			if (disposed) return;
+			enqueuePreviewSave(buildSaveSnapshot({ path, runtime: 'pyodide' }));
 			await previewSaveQueue.flush();
 		} catch (error) {
+			if (disposed) return;
 			console.error('Web preview export failed', error);
 			toast.error($i18n.t('Files are currently unavailable'));
 		} finally {
@@ -531,6 +505,8 @@
 
 	onDestroy(() => {
 		disposed = true;
+		exportController.abort();
+		clearTimeout(retryTimer);
 		window.removeEventListener('message', diagnosticHandler);
 		void previewSaveQueue.flush().finally(unregisterSaveBarrier);
 	});

@@ -85,7 +85,7 @@ export const runWorkspaceOptimisticSave = async <T extends WorkspaceSaveVersion>
 				: expected;
 		const result = await save(effective);
 		workspaceVersionChains.set(key, {
-			base: effective,
+			base: expected,
 			saved: { updatedAt: result.updatedAt, contentHash: result.contentHash }
 		});
 		return result;

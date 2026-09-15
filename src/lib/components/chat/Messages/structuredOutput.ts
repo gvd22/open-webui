@@ -1,15 +1,12 @@
 import {
-	getCanvasNoteArtifactsFromOutput,
-	getCanvasToolErrorFromOutput,
-	getCanvasToolWarningFromOutput,
-	type CanvasNoteArtifact
-} from '../Artifacts/canvas';
-import {
-	getWebPreviewErrorFromOutput,
-	getWebPreviewWarningFromOutput,
-	getWebPreviewsFromOutput,
-	type WebPreviewArtifact
-} from '../Artifacts/webPreview';
+	getWorkspaceActivity,
+	getWorkspaceResultItems,
+	type WorkspaceDisplayItem
+} from '../Artifacts/workspaceOutput';
+export {
+	dedupeCanvasDisplayItems,
+	dedupeWebPreviewDisplayItems
+} from '../Artifacts/workspaceOutput';
 
 export type OutputContentPart = {
 	type?: string;
@@ -71,70 +68,12 @@ export type OutputDisplayItem =
 			id: string;
 			tokens: OutputDetailToken[];
 	  }
-	| {
-			type: 'canvas';
-			id: string;
-			artifact: CanvasNoteArtifact;
-	  }
-	| {
-			type: 'canvas_activity';
-			id: string;
-			name: string;
-			done: boolean;
-			artifact?: CanvasNoteArtifact;
-			error?: string;
-	  }
-	| {
-			type: 'web_preview';
-			id: string;
-			artifact: WebPreviewArtifact;
-	  }
-	| {
-			type: 'web_preview_activity';
-			id: string;
-			name: string;
-			done: boolean;
-			artifact?: WebPreviewArtifact;
-			error?: string;
-	  }
+	| WorkspaceDisplayItem
 	| {
 			type: 'file';
 			id: string;
 			item: Record<string, unknown>;
 	  };
-
-export function dedupeCanvasDisplayItems(
-	items: OutputDisplayItem[],
-	previousCanvasIds: string[] = []
-): OutputDisplayItem[] {
-	const seenCanvasIds = new Set(previousCanvasIds);
-
-	return items.filter((item) => {
-		if (item.type !== 'canvas') {
-			return true;
-		}
-
-		if (seenCanvasIds.has(item.artifact.canvasId)) {
-			return false;
-		}
-
-		seenCanvasIds.add(item.artifact.canvasId);
-		return true;
-	});
-}
-
-export function dedupeWebPreviewDisplayItems(
-	items: OutputDisplayItem[],
-	previousPreviewIds: string[] = []
-): OutputDisplayItem[] {
-	const seen = new Set(previousPreviewIds);
-	return items.filter((item) => {
-		if (item.type !== 'web_preview') return true;
-		if (seen.has(item.artifact.previewId)) return false;
-		seen.add(item.artifact.previewId);
-		return true;
-	});
-}
 
 type ResponseStreamEvent = {
 	type?: string;
@@ -168,24 +107,6 @@ const OPENAI_TOOL_NAMES: Record<string, string> = {
 	file_search_call: 'File Search',
 	computer_call: 'Computer Use'
 };
-
-const CANVAS_TOOL_NAMES = new Set([
-	'canvas_create_document',
-	'canvas_update_document',
-	'canvas_select_document',
-	'canvas_list_documents',
-	'canvas_read_document',
-	'canvas_replace_text'
-]);
-const WEB_PREVIEW_TOOL_NAMES = new Set([
-	'web_preview_create',
-	'web_preview_update',
-	'web_preview_select',
-	'web_preview_list',
-	'web_preview_read_file',
-	'web_preview_replace_text',
-	'web_preview_import_runtime_file'
-]);
 
 function getTextFromParts(parts: OutputContentPart[] = []): string {
 	return parts
@@ -453,35 +374,11 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	const displayItems: OutputDisplayItem[] = [];
 	const currentDetailTokens: OutputDetailToken[] = [];
 	const toolOutputByCallId: Record<string, OutputItem> = {};
-	const canvasToolCallIds = new Set<string>();
-	const canvasArtifactByCallId: Record<string, CanvasNoteArtifact> = {};
-	const canvasErrorByCallId: Record<string, string> = {};
-	const webPreviewToolCallIds = new Set<string>();
-	const webPreviewByCallId: Record<string, WebPreviewArtifact> = {};
-	const webPreviewErrorByCallId: Record<string, string> = {};
 	const toolCallByCallId: Record<string, OutputItem> = {};
 
 	for (const item of output) {
 		if (item?.type === 'function_call_output' && item.call_id) {
 			toolOutputByCallId[item.call_id] = item;
-			const canvasArtifact = getCanvasNoteArtifactsFromOutput([item])[0];
-			if (canvasArtifact) {
-				canvasToolCallIds.add(item.call_id);
-				if (canvasArtifact) {
-					canvasArtifactByCallId[item.call_id] = canvasArtifact;
-				}
-			}
-			const canvasError = getCanvasToolErrorFromOutput([item]);
-			if (canvasError) {
-				canvasErrorByCallId[item.call_id] = canvasError;
-			}
-			const webPreview = getWebPreviewsFromOutput([item])[0];
-			if (webPreview) {
-				webPreviewToolCallIds.add(item.call_id);
-				webPreviewByCallId[item.call_id] = webPreview;
-			}
-			const webPreviewError = getWebPreviewErrorFromOutput([item]);
-			if (webPreviewError) webPreviewErrorByCallId[item.call_id] = webPreviewError;
 		} else if (item?.type === 'function_call' && (item.call_id || item.id)) {
 			toolCallByCallId[item.call_id ?? item.id ?? ''] = item;
 		}
@@ -508,61 +405,10 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 		if (!item) return;
 
 		if (item?.type === 'function_call_output') {
-			const webPreviews = getWebPreviewsFromOutput([item]);
-			if (webPreviews.length > 0) {
+			const workspaceItems = getWorkspaceResultItems(item, index);
+			if (workspaceItems.length) {
 				flushDetails();
-				for (const artifact of webPreviews) {
-					displayItems.push({ type: 'web_preview', id: artifact.previewId, artifact });
-				}
-			}
-			const webPreviewError = getWebPreviewErrorFromOutput([item]);
-			if (webPreviewError) {
-				flushDetails();
-				displayItems.push({
-					type: 'message',
-					id: item.id ?? `web-preview-error-${index}`,
-					text: webPreviewError
-				});
-			}
-			const webPreviewWarning = getWebPreviewWarningFromOutput([item]);
-			if (webPreviewWarning) {
-				flushDetails();
-				displayItems.push({
-					type: 'message',
-					id: `${item.id ?? `web-preview-${index}`}-warning`,
-					text: webPreviewWarning
-				});
-			}
-			const canvasArtifacts = getCanvasNoteArtifactsFromOutput([item]);
-			if (canvasArtifacts.length > 0) {
-				flushDetails();
-				for (const artifact of canvasArtifacts) {
-					displayItems.push({
-						type: 'canvas',
-						id: artifact.canvasId,
-						artifact
-					});
-				}
-			}
-
-			const canvasError = getCanvasToolErrorFromOutput([item]);
-			if (canvasError) {
-				flushDetails();
-				displayItems.push({
-					type: 'message',
-					id: item.id ?? `canvas-error-${index}`,
-					text: canvasError
-				});
-			}
-
-			const canvasWarning = getCanvasToolWarningFromOutput([item]);
-			if (canvasWarning) {
-				flushDetails();
-				displayItems.push({
-					type: 'message',
-					id: `${item.id ?? `canvas-${index}`}-warning`,
-					text: canvasWarning
-				});
+				displayItems.push(...workspaceItems);
 			}
 			const inlineFile = getInlineFileFromToolOutput(toolCallByCallId[item.call_id ?? ''], item);
 			if (inlineFile) {
@@ -576,42 +422,18 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			return;
 		}
 
-		if (
-			item?.type === 'function_call' &&
-			!['pending', 'requires_approval', 'queued', 'rejected'].includes(item.status ?? '') &&
-			(WEB_PREVIEW_TOOL_NAMES.has(item.name ?? '') ||
-				(item.call_id ? webPreviewToolCallIds.has(item.call_id) : false))
-		) {
-			flushDetails();
-			const token = buildToolCallToken(item, toolOutputByCallId);
-			displayItems.push({
-				type: 'web_preview_activity',
-				id: `web-preview-activity-${item.call_id ?? item.id ?? index}`,
-				name: item.name ?? 'web_preview_update',
-				done: token.attributes.done === 'true',
-				artifact: item.call_id ? webPreviewByCallId[item.call_id] : undefined,
-				error: item.call_id ? webPreviewErrorByCallId[item.call_id] : undefined
-			});
-			return;
-		}
-
-		if (
-			item?.type === 'function_call' &&
-			!['pending', 'requires_approval', 'queued', 'rejected'].includes(item.status ?? '') &&
-			(CANVAS_TOOL_NAMES.has(item.name ?? '') ||
-				(item.call_id ? canvasToolCallIds.has(item.call_id) : false))
-		) {
-			flushDetails();
-			const token = buildToolCallToken(item, toolOutputByCallId);
-			displayItems.push({
-				type: 'canvas_activity',
-				id: `canvas-activity-${item.call_id ?? item.id ?? index}`,
-				name: item.name ?? 'canvas_update_document',
-				done: token.attributes.done === 'true',
-				artifact: item.call_id ? canvasArtifactByCallId[item.call_id] : undefined,
-				error: item.call_id ? canvasErrorByCallId[item.call_id] : undefined
-			});
-			return;
+		if (item.type === 'function_call') {
+			const activity = getWorkspaceActivity(
+				item,
+				index,
+				item.call_id ? toolOutputByCallId[item.call_id] : undefined,
+				() => buildToolCallToken(item, toolOutputByCallId).attributes.done === 'true'
+			);
+			if (activity) {
+				flushDetails();
+				displayItems.push(activity);
+				return;
+			}
 		}
 
 		if (

@@ -12,29 +12,99 @@ import {
 	preserveNewerWebPreview,
 	type WebPreviewArtifact
 } from './webPreview';
+import type { WorkspaceContent } from './workspace';
+import type { Writable } from 'svelte/store';
 
-export type ChatWorkspaceArtifact = {
-	type: string;
-	content: string;
-	title?: string;
-	canvasId?: string;
-	noteId?: string;
-	previewId?: string;
-	entrypoint?: string;
-	files?: Record<string, any>;
-	hasFilePayload?: boolean;
-	contentHash?: string;
-	titleEdited?: boolean;
-	updatedAt?: number;
-	source?: string;
+type WorkspaceDocuments = {
+	_canvas_documents: Record<string, Record<string, unknown>>;
+	_web_preview_documents: Record<string, Record<string, unknown>>;
 };
+
+export const createWorkspaceReferenceHydrator = ({
+	contents,
+	getChatId,
+	loadChat,
+	onLoaded,
+	onError
+}: {
+	contents: Writable<WorkspaceContent[] | null>;
+	getChatId: () => string;
+	loadChat: (id: string) => Promise<{ chat?: Partial<WorkspaceDocuments> } | null>;
+	onLoaded: (documents: WorkspaceDocuments) => void;
+	onError: (error: unknown) => void;
+}) => {
+	let key = '';
+	let generation = 0;
+	let warningShown = false;
+	return {
+		reset() {
+			key = '';
+			generation++;
+			warningShown = false;
+		},
+		async hydrate(items: WorkspaceContent[]) {
+			const chatId = getChatId();
+			if (!chatId) return;
+			const references = items.flatMap((item) => {
+				if (
+					item.type === 'canvas-note' &&
+					item.source === 'tool' &&
+					item.hasContentPayload === false
+				)
+					return [['canvas', item.canvasId, item.updatedAt ?? 0]];
+				if (item.type === 'web-preview' && item.source === 'tool' && !item.hasFilePayload)
+					return [['preview', item.previewId, item.updatedAt ?? 0]];
+				return [];
+			});
+			if (!references.length) return;
+			const nextKey = JSON.stringify([chatId, references]);
+			if (key === nextKey) return;
+			key = nextKey;
+			const requestGeneration = ++generation;
+			const isCurrent = () =>
+				getChatId() === chatId && key === nextKey && generation === requestGeneration;
+			try {
+				const loaded = await loadChat(chatId);
+				if (!isCurrent()) return;
+				if (!loaded?.chat) throw new Error('Workspace chat could not be loaded');
+				const documents: WorkspaceDocuments = {
+					_canvas_documents: loaded.chat._canvas_documents ?? {},
+					_web_preview_documents: loaded.chat._web_preview_documents ?? {}
+				};
+				onLoaded(documents);
+				contents.update((current) =>
+					(current ?? []).map((item) => {
+						if (item.type === 'canvas-note')
+							return mergePersistedCanvasArtifact(item, documents._canvas_documents[item.canvasId]);
+						if (item.type === 'web-preview')
+							return mergePersistedWebPreview(
+								item,
+								documents._web_preview_documents[item.previewId]
+							);
+						return item;
+					})
+				);
+				warningShown = false;
+			} catch (error) {
+				if (!isCurrent()) return;
+				key = '';
+				if (!warningShown) {
+					warningShown = true;
+					onError(error);
+				}
+			}
+		}
+	};
+};
+
+export type ChatWorkspaceArtifact = CanvasNoteArtifact | WebPreviewArtifact;
 
 export type WorkspaceOutputArtifact = CanvasNoteArtifact | WebPreviewArtifact;
 
 // The output catalog includes saved objects even when their message branch is not visible.
 // It does not add tabs or trigger the first-creation auto-open behavior.
 export const getWorkspaceOutputArtifacts = (
-	current: ChatWorkspaceArtifact[],
+	current: WorkspaceContent[],
 	canvases: Record<string, any> = {},
 	previews: Record<string, any> = {}
 ): WorkspaceOutputArtifact[] => {
@@ -71,12 +141,12 @@ export const getWorkspaceOutputArtifacts = (
 		if (item.type === 'canvas-note' && item.canvasId) {
 			items.set(
 				`canvas:${item.canvasId}`,
-				mergePersistedCanvasArtifact(item as CanvasNoteArtifact, canvases[item.canvasId])
+				mergePersistedCanvasArtifact(item, canvases[item.canvasId])
 			);
 		} else if (item.type === 'web-preview' && item.previewId) {
 			items.set(
 				`preview:${item.previewId}`,
-				mergePersistedWebPreview(item as WebPreviewArtifact, previews[item.previewId])
+				mergePersistedWebPreview(item, previews[item.previewId])
 			);
 		}
 	}
@@ -93,7 +163,7 @@ export const buildChatWorkspaceArtifacts = ({
 	selectedArtifactId
 }: {
 	messages: any[];
-	currentArtifacts: ChatWorkspaceArtifact[];
+	currentArtifacts: WorkspaceContent[];
 	persistedCanvasDocuments: Record<string, any>;
 	persistedWebPreviews: Record<string, any>;
 	knownWebPreviewIds: Set<string>;
@@ -102,16 +172,17 @@ export const buildChatWorkspaceArtifacts = ({
 }) => {
 	let contents: ChatWorkspaceArtifact[] = [];
 	const previousCanvases = currentArtifacts.filter((item) => item?.type === 'canvas-note');
-	const previousPreviews = currentArtifacts.filter(
-		(item) => item?.type === 'web-preview'
-	) as WebPreviewArtifact[];
+	const previousPreviews = currentArtifacts.filter((item) => item?.type === 'web-preview');
 
 	const mergePreviews = (previews: WebPreviewArtifact[]) => {
 		for (const preview of previews) {
-			const index = contents.findIndex((item) => item.previewId === preview.previewId);
-			const previous =
+			const index = contents.findIndex(
+				(item) => item.type === 'web-preview' && item.previewId === preview.previewId
+			);
+			const candidate =
 				(index >= 0 ? contents[index] : undefined) ??
 				previousPreviews.find((item) => item.previewId === preview.previewId);
+			const previous = candidate?.type === 'web-preview' ? candidate : undefined;
 			const files = preview.hasFilePayload ? preview.files : (previous?.files ?? {});
 			const merged = preserveNewerWebPreview(
 				{
@@ -119,15 +190,15 @@ export const buildChatWorkspaceArtifacts = ({
 					...preview,
 					files,
 					content: files[preview.entrypoint]?.content ?? previous?.content ?? ''
-				} as WebPreviewArtifact,
-				previous as WebPreviewArtifact | undefined
+				},
+				previous
 			);
 			if (index >= 0) contents[index] = merged;
 			else contents.push(merged);
 		}
 	};
 
-	const mergeCanvases = (artifacts: any[]) => {
+	const mergeCanvases = (artifacts: CanvasNoteArtifact[]) => {
 		for (const artifact of artifacts) {
 			const key = artifact.canvasId || artifact.noteId;
 			const index = key
@@ -135,7 +206,7 @@ export const buildChatWorkspaceArtifacts = ({
 						(item) => item.type === 'canvas-note' && (item.canvasId === key || item.noteId === key)
 					)
 				: -1;
-			const previous =
+			const candidate =
 				index >= 0
 					? contents[index]
 					: previousCanvases.find(
@@ -143,6 +214,7 @@ export const buildChatWorkspaceArtifacts = ({
 								item.canvasId === artifact.canvasId ||
 								(artifact.noteId && item.noteId === artifact.noteId)
 						);
+			const previous = candidate?.type === 'canvas-note' ? candidate : undefined;
 			const merged = preserveNewerCanvas(
 				{
 					...artifact,
@@ -151,7 +223,7 @@ export const buildChatWorkspaceArtifacts = ({
 					titleEdited: previous?.titleEdited ?? false,
 					updatedAt: artifact.updatedAt ?? previous?.updatedAt ?? 0
 				},
-				previous as any
+				previous
 			);
 			if (index >= 0) contents[index] = merged;
 			else contents.push(merged);
@@ -166,18 +238,15 @@ export const buildChatWorkspaceArtifacts = ({
 
 	contents = contents.map((item) => {
 		if (item.type === 'web-preview' && item.previewId) {
-			return mergePersistedWebPreview(
-				item as WebPreviewArtifact,
-				persistedWebPreviews[item.previewId]
-			);
+			return mergePersistedWebPreview(item, persistedWebPreviews[item.previewId]);
 		}
 		if (item.type !== 'canvas-note' || !item.canvasId) return item;
 		const persisted = persistedCanvasDocuments[item.canvasId];
-		return persisted ? mergePersistedCanvasArtifact(item as any, persisted) : item;
+		return persisted ? mergePersistedCanvasArtifact(item, persisted) : item;
 	});
 
 	const canvases = contents.filter((item) => item.type === 'canvas-note');
-	const previews = contents.filter((item) => item.type === 'web-preview') as WebPreviewArtifact[];
+	const previews = contents.filter((item) => item.type === 'web-preview');
 	const latestCanvas = [...canvases]
 		.reverse()
 		.find(

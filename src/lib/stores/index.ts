@@ -4,6 +4,7 @@ import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
 import type { AudioQueue } from '$lib/utils/audio';
+import type { WorkspaceContent } from '$lib/components/chat/Artifacts/workspace';
 
 import emojiShortCodes from '$lib/emoji-shortcodes.json';
 
@@ -157,7 +158,7 @@ export const selectedTerminalId: Writable<string | null> = writable(null);
 export * from './artifactWorkspace';
 
 export const artifactCode: Writable<string | null> = writable(null);
-export const artifactContents = writable(null);
+export const artifactContents = writable<WorkspaceContent[] | null>(null);
 
 export const embed = writable(null);
 

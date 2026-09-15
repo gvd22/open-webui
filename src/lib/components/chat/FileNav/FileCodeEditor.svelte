@@ -11,6 +11,7 @@
 
 	export let value = '';
 	export let filePath: string | null = null;
+	export let readOnly = false;
 	export let onSave: ((content: string) => Promise<void>) | null = null;
 	export let onChange: ((content: string) => void) | null = null;
 	export let searchTarget: {
@@ -24,6 +25,7 @@
 	let editor: EditorView | null = null;
 	let editorTheme = new Compartment();
 	let editorLanguage = new Compartment();
+	let editorReadOnly = new Compartment();
 	let internalValue = '';
 	let lastSearchTargetRequestId = 0;
 
@@ -86,6 +88,14 @@
 	$: if (editor && searchTarget) {
 		revealSearchTarget();
 	}
+	$: if (editor) {
+		editor.dispatch({
+			effects: editorReadOnly.reconfigure([
+				EditorState.readOnly.of(readOnly),
+				EditorView.editable.of(!readOnly)
+			])
+		});
+	}
 
 	onMount(() => {
 		const isDark = document.documentElement.classList.contains('dark');
@@ -98,7 +108,7 @@
 				{
 					key: 'Mod-s',
 					run: () => {
-						if (onSave) {
+						if (onSave && !readOnly) {
 							onSave(editor?.state.doc.toString() ?? '');
 						}
 						return true;
@@ -115,6 +125,7 @@
 			}),
 			editorTheme.of(isDark ? oneDark : []),
 			editorLanguage.of([]),
+			editorReadOnly.of([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
 			EditorView.theme({
 				'&': { fontSize: '0.75rem', height: '100%' },
 				'.cm-content': {

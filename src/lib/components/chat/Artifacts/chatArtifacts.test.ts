@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildChatWorkspaceArtifacts, getWorkspaceOutputArtifacts } from './chatArtifacts';
+import { buildWorkspaceFilesContent, type WorkspaceContent } from './workspace';
 
 const previewOutput = (previewId: string) => ({
 	type: 'function_call_output',
@@ -78,11 +79,12 @@ describe('chat workspace artifact assembly', () => {
 	});
 
 	it('deduplicates current and saved outputs, retaining newer local titles and content', () => {
-		const current = [
+		const current: WorkspaceContent[] = [
 			{
 				type: 'canvas-note',
 				canvasId: 'one',
 				title: 'Local title',
+				source: 'tool',
 				content: 'Local edit',
 				updatedAt: 20
 			},
@@ -90,12 +92,13 @@ describe('chat workspace artifact assembly', () => {
 				type: 'web-preview',
 				previewId: 'two',
 				title: 'Local page',
+				source: 'tool',
 				content: '<h1>Local</h1>',
 				entrypoint: 'index.html',
 				files: {},
 				updatedAt: 20
 			},
-			{ type: 'files', content: '' }
+			buildWorkspaceFilesContent()
 		];
 		const result = getWorkspaceOutputArtifacts(
 			current,
@@ -140,6 +143,7 @@ describe('chat workspace artifact assembly', () => {
 				{
 					type: 'web-preview',
 					previewId: 'preview-1',
+					source: 'tool',
 					title: 'Preview',
 					entrypoint: 'index.html',
 					files: { 'index.html': { content: '<h1>Local</h1>', mime: 'text/html' } },

@@ -1,10 +1,4 @@
-import { getPyodideRequestTimeout } from '$lib/pyodide/runtimeTimeouts';
-
-type PyodideFileWorker = {
-	addEventListener: (type: 'message' | 'error', listener: (event: any) => void) => void;
-	removeEventListener: (type: 'message' | 'error', listener: (event: any) => void) => void;
-	postMessage: (message: { type: 'fs:read'; path: string; id: string; maxBytes: number }) => void;
-};
+import { requestPyodideFile, type PyodideRequestWorker } from '$lib/pyodide/workerRequest';
 
 export const DOCUMENT_TOO_LARGE_ERROR = 'too-large';
 
@@ -20,72 +14,27 @@ export const assertDocumentSize = (data: ArrayBuffer, maxBytes: number): ArrayBu
 	return data;
 };
 
-const createAbortError = () => new DOMException('The operation was aborted.', 'AbortError');
-
-export const readPyodideWorkerFile = (
-	worker: PyodideFileWorker,
+export const readPyodideWorkerFile = async (
+	worker: PyodideRequestWorker,
 	path: string,
 	maxBytes: number,
 	signal: AbortSignal
 ): Promise<ArrayBuffer> => {
-	const id = `document-viewer-${crypto.randomUUID()}`;
-	return new Promise((resolve, reject) => {
-		if (signal.aborted) {
-			reject(createAbortError());
-			return;
-		}
-
-		let settled = false;
-		let timeout: ReturnType<typeof setTimeout> | null = null;
-		const armTimeout = (milliseconds: number) => {
-			if (timeout !== null) globalThis.clearTimeout(timeout);
-			timeout = globalThis.setTimeout(() => {
-				if (cleanup()) reject(new Error('File request timed out'));
-			}, milliseconds);
-		};
-		const cleanup = () => {
-			if (settled) return false;
-			settled = true;
-			if (timeout !== null) globalThis.clearTimeout(timeout);
-			worker.removeEventListener('message', handler);
-			worker.removeEventListener('error', workerError);
-			signal.removeEventListener('abort', abort);
-			return true;
-		};
-		const abort = () => {
-			if (cleanup()) reject(createAbortError());
-		};
-		const handler = (event: MessageEvent) => {
-			if (event.data?.id !== id) return;
-			if (event.data?.type === 'pyodide:progress') {
-				armTimeout(getPyodideRequestTimeout(event.data.stage));
-				return;
-			}
-			if (!cleanup()) return;
-			if (event.data?.error) {
-				reject(normalizePyodideReadError(event.data.error));
-				return;
-			}
-			const bytes = event.data?.data;
-			if (bytes instanceof ArrayBuffer) resolve(bytes);
-			else if (ArrayBuffer.isView(bytes)) {
-				resolve(
-					bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-				);
-			} else reject(new Error('File data was not returned'));
-		};
-		const workerError = (event: ErrorEvent) => {
-			if (cleanup()) reject(event.error || new Error(event.message || 'Pyodide worker failed'));
-		};
-
-		worker.addEventListener('message', handler);
-		worker.addEventListener('error', workerError);
-		signal.addEventListener('abort', abort, { once: true });
-		armTimeout(getPyodideRequestTimeout('request-queued'));
-		try {
-			worker.postMessage({ type: 'fs:read', path, id, maxBytes });
-		} catch (cause) {
-			if (cleanup()) reject(cause);
-		}
-	});
+	try {
+		const { data: bytes } = await requestPyodideFile<{ data: ArrayBuffer | ArrayBufferView }>(
+			worker,
+			{ type: 'fs:read', path, maxBytes },
+			{ signal }
+		);
+		if (bytes instanceof ArrayBuffer) return assertDocumentSize(bytes, maxBytes);
+		if (ArrayBuffer.isView(bytes))
+			return assertDocumentSize(
+				bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+				maxBytes
+			);
+		throw new Error('File data was not returned');
+	} catch (error) {
+		if (error instanceof DOMException && error.name === 'AbortError') throw error;
+		throw normalizePyodideReadError(error);
+	}
 };

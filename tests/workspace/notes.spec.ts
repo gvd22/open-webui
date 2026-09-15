@@ -216,6 +216,12 @@ test.describe('promoted note editor lifecycle', () => {
 		const editor = page.locator('#note-content-container [contenteditable="true"]');
 		await expect(editor).toContainText('Confirm launch assets');
 		await expect(editor).toContainText('Owner: Alex');
+		await expect(
+			page.locator('#note-editor').getByPlaceholder('Title', { exact: true })
+		).toBeVisible();
+		await expect(
+			page.locator('#note-editor').getByRole('button', { name: 'Chat', exact: true })
+		).toBeVisible();
 		const wordCount = page
 			.locator('#note-editor')
 			.getByText(/\d+ words/)
@@ -271,6 +277,11 @@ test.describe('promoted note editor lifecycle', () => {
 		const paragraph = page
 			.locator('#artifacts-container [contenteditable="true"] p')
 			.filter({ hasText: 'Owner: Alex' });
+		await expect(paragraph).toBeVisible();
+		const workspace = page.locator('#artifacts-container');
+		await expect(workspace.getByPlaceholder('Title', { exact: true })).toHaveCount(0);
+		await expect(workspace.getByRole('button', { name: 'Chat', exact: true })).toHaveCount(0);
+		await expect(workspace.getByText(/\d+ words/)).toHaveCount(0);
 		await paragraph.click({ clickCount: 3 });
 		await page.getByLabel('Selection instruction').fill('Change the owner to Sam.');
 		await page.getByRole('button', { name: 'Add to chat', exact: true }).click();

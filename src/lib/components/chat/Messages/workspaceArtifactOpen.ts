@@ -1,4 +1,4 @@
-import { get, type Writable } from 'svelte/store';
+import { get } from 'svelte/store';
 import { selectTransientCanvasDocument, selectTransientWebPreview } from '$lib/apis/chats';
 import {
 	artifactCode,
@@ -13,15 +13,19 @@ import { mergePersistedCanvasArtifact, type CanvasNoteArtifact } from '../Artifa
 import { mergePersistedWebPreview, type WebPreviewArtifact } from '../Artifacts/webPreview';
 import type { WorkspaceContent } from '../Artifacts/workspace';
 
-const workspaceArtifacts = artifactContents as unknown as Writable<WorkspaceContent[] | null>;
+let openGeneration = 0;
+export const cancelPendingWorkspaceOpen = () => {
+	openGeneration += 1;
+};
 
 // Selecting a tab hydrates existing content; only an explicit card open may add it.
 export const selectWorkspaceArtifact = async (
 	artifact: WorkspaceContent,
 	targetChatId: string,
-	addIfMissing = false
+	addIfMissing = false,
+	isCurrent = () => true
 ): Promise<boolean> => {
-	if (get(chatId) !== targetChatId) return false;
+	if (get(chatId) !== targetChatId || !isCurrent()) return false;
 	let matches: (item: WorkspaceContent) => boolean;
 	let merge: (item: WorkspaceContent) => WorkspaceContent;
 	if (targetChatId && artifact.type === 'canvas-note' && artifact.canvasId) {
@@ -32,10 +36,12 @@ export const selectWorkspaceArtifact = async (
 		);
 		matches = (item) => item.type === 'canvas-note' && item.canvasId === artifact.canvasId;
 		merge = (item) =>
-			mergePersistedCanvasArtifact(item as CanvasNoteArtifact, {
-				...document,
-				content_hash: document.contentHash
-			});
+			item.type === 'canvas-note'
+				? mergePersistedCanvasArtifact(item, {
+						...document,
+						content_hash: document.contentHash
+					})
+				: item;
 	} else if (
 		targetChatId &&
 		artifact.type === 'web-preview' &&
@@ -48,12 +54,13 @@ export const selectWorkspaceArtifact = async (
 			artifact.previewId
 		);
 		matches = (item) => item.type === 'web-preview' && item.previewId === artifact.previewId;
-		merge = (item) => mergePersistedWebPreview(item as WebPreviewArtifact, document);
+		merge = (item) =>
+			item.type === 'web-preview' ? mergePersistedWebPreview(item, document) : item;
 	} else {
 		return true;
 	}
-	if (get(chatId) !== targetChatId) return false;
-	workspaceArtifacts.update((items) => {
+	if (get(chatId) !== targetChatId || !isCurrent()) return false;
+	artifactContents.update((items) => {
 		const current = items ?? [];
 		const found = current.some(matches);
 		const updated = current.map((item) => (matches(item) ? merge(item) : item));
@@ -68,16 +75,29 @@ const openWorkspaceArtifact = async (
 	onError: () => void
 ) => {
 	const targetChatId = get(chatId);
+	const generation = ++openGeneration;
+	const isCurrent = () => generation === openGeneration && get(chatId) === targetChatId;
+	const unsubscribe = [chatId, artifactCode, showControls, showArtifacts, showEmbeds].map(
+		(store) => {
+			const initial = get<unknown>(store);
+			return store.subscribe((value) => {
+				if (value !== initial && generation === openGeneration) cancelPendingWorkspaceOpen();
+			});
+		}
+	);
 	try {
-		if (!(await selectWorkspaceArtifact(artifact, targetChatId, true))) return;
-		if (get(chatId) !== targetChatId) return;
+		if (!(await selectWorkspaceArtifact(artifact, targetChatId, true, isCurrent))) return;
+		if (!isCurrent()) return;
+		unsubscribe.forEach((stop) => stop());
 		workspaceOpenRequestId.set(id);
 		artifactCode.set(id);
 		showEmbeds.set(false);
 		showArtifacts.set(true);
 		showControls.set(true);
 	} catch {
-		if (get(chatId) === targetChatId) onError();
+		if (isCurrent()) onError();
+	} finally {
+		unsubscribe.forEach((stop) => stop());
 	}
 };
 

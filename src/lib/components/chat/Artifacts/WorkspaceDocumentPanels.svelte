@@ -7,7 +7,7 @@
 </script>
 
 {#each contents as content, index (getWorkspaceContentId(content, index))}
-	{#if content.type === 'workspace-file' && content.path && content.fileFormat}
+	{#if content.type === 'workspace-file' && content.path}
 		<div
 			id={`workspace-panel-${index}`}
 			role="tabpanel"
@@ -19,7 +19,7 @@
 				<DocumentFileViewer
 					path={content.path}
 					fileId={content.fileId ?? null}
-					format={content.fileFormat}
+					format={content.fileFormat ?? null}
 					targetPage={content.targetPage ?? null}
 				/>
 			{/if}

@@ -48,7 +48,7 @@ describe('readPyodideWorkerFile', () => {
 		await expect(read).rejects.toMatchObject({ name: 'AbortError' });
 		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 		expect(vi.getTimerCount()).toBe(0);
-		emit({ id, data: new ArrayBuffer(8) });
+		emit({ id, type: 'fs:read', data: new ArrayBuffer(8) });
 		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 	});
 
@@ -60,7 +60,7 @@ describe('readPyodideWorkerFile', () => {
 		const [[{ id }]] = worker.postMessage.mock.calls;
 
 		const data = new ArrayBuffer(3);
-		emit({ id, data });
+		emit({ id, type: 'fs:read', data });
 		expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
 
 		await expect(read).resolves.toBe(data);
@@ -140,7 +140,7 @@ describe('readPyodideWorkerFile', () => {
 		);
 		const [[{ id }]] = worker.postMessage.mock.calls;
 
-		emit({ id, error: 'File exceeds the read limit' });
+		emit({ id, type: 'fs:read', error: 'File exceeds the read limit' });
 
 		await expect(read).rejects.toThrow(DOCUMENT_TOO_LARGE_ERROR);
 	});

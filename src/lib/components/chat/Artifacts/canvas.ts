@@ -1,5 +1,4 @@
 import { createMessagesList } from '$lib/utils';
-import { normalizeArtifactChanges, type ArtifactChange } from './artifactChanges';
 
 export type CanvasNoteArtifact = {
 	type: 'canvas-note';
@@ -11,7 +10,6 @@ export type CanvasNoteArtifact = {
 	canUndoAiUpdate?: boolean;
 	updatedAt?: number;
 	contentHash?: string;
-	changes?: ArtifactChange[];
 	hasContentPayload?: boolean;
 	source: 'tool';
 };
@@ -116,7 +114,6 @@ const normalizeToolCanvasDocument = (value: any): CanvasNoteArtifact | null => {
 		canUndoAiUpdate: Boolean(value.canUndoAiUpdate),
 		updatedAt: Number(value.updatedAt ?? 0),
 		contentHash: value.contentHash ?? undefined,
-		changes: normalizeArtifactChanges(value.changes),
 		source: 'tool',
 		...(hasContentPayload ? {} : { hasContentPayload: false })
 	};
@@ -217,6 +214,7 @@ export const mergePersistedCanvasArtifact = (
 	const persistedUpdatedAt = Number(persisted.updated_at ?? 0);
 	const artifactUpdatedAt = Number(artifact.updatedAt ?? 0);
 	const persistedCanHydrate = !artifactUpdatedAt || persistedUpdatedAt >= artifactUpdatedAt;
+	if (!persistedCanHydrate) return artifact;
 	const persistedIsNewer =
 		persistedCanHydrate &&
 		(artifact.hasContentPayload === false ||

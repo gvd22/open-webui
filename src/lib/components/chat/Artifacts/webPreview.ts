@@ -1,5 +1,4 @@
 import { createMessagesList } from '$lib/utils';
-import { normalizeArtifactChanges, type ArtifactChange } from './artifactChanges';
 
 export type WebPreviewFile = { content: string; mime: string };
 export type WebPreviewArtifact = {
@@ -11,7 +10,6 @@ export type WebPreviewArtifact = {
 	files: Record<string, WebPreviewFile>;
 	updatedAt?: number;
 	contentHash?: string;
-	changes?: ArtifactChange[];
 	exportedPath?: string;
 	exportedRuntime?: 'terminal' | 'pyodide';
 	hasFilePayload?: boolean;
@@ -74,7 +72,6 @@ const normalizeDocument = (value: any): WebPreviewArtifact | null => {
 		files,
 		updatedAt: Number(value.updatedAt ?? 0),
 		contentHash: value.contentHash ?? undefined,
-		changes: normalizeArtifactChanges(value.changes),
 		exportedPath: value.exportedPath ?? undefined,
 		exportedRuntime: value.exportedRuntime ?? undefined,
 		hasFilePayload,
@@ -168,13 +165,13 @@ const dataUrl = (file: WebPreviewFile) =>
 
 const resolvePreviewPath = (reference: string, fromPath: string) => {
 	if (/^(?:[a-z]+:|\/\/|#|data:|blob:)/i.test(reference)) return null;
-	const base = fromPath.split('/').slice(0, -1);
-	for (const part of reference.split(/[?#]/, 1)[0].replace(/^\.\//, '').split('/')) {
-		if (!part || part === '.') continue;
-		if (part === '..') base.pop();
-		else base.push(part);
+	try {
+		const base = new URL(fromPath, 'https://web-preview.invalid/');
+		const url = new URL(reference, base);
+		return url.origin === base.origin ? decodeURIComponent(url.pathname.slice(1)) : null;
+	} catch {
+		return null;
 	}
-	return base.join('/');
 };
 
 const replaceLocalReferences = (
@@ -182,10 +179,10 @@ const replaceLocalReferences = (
 	fromPath: string,
 	files: Record<string, WebPreviewFile>
 ) =>
-	value.replace(/(src|href)=(['"])([^'"]+)\2/gi, (match, attribute, quote, reference) => {
+	value.replace(/\b(src|href)\s*=\s*(['"])([^'"]+)\2/gi, (match, attribute, quote, reference) => {
 		const path = resolvePreviewPath(reference, fromPath);
 		const file = path ? files[path] : undefined;
-		return file && !['text/css', 'text/javascript'].includes(file.mime)
+		return file && file.mime !== 'text/css' && !isJavaScriptMime(file.mime)
 			? `${attribute}=${quote}${dataUrl(file)}${quote}`
 			: match;
 	});
@@ -235,29 +232,45 @@ export const composeWebPreviewHtml = (
 ) => {
 	let html = files[entrypoint]?.content ?? '';
 	if (!html) return '';
+	html = replaceLocalReferences(html, entrypoint, files);
+	const attributeValue = (value: string) =>
+		value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 	html = html.replace(
-		/<link\b([^>]*?)href=(['"])([^'"]+)\2([^>]*)>/gi,
+		/<link\b([^>]*?)href\s*=\s*(['"])([^'"]+)\2([^>]*)>/gi,
 		(match, before, _quote, reference, after) => {
 			const path = resolvePreviewPath(reference, entrypoint);
 			const file = path ? files[path] : undefined;
 			return path && file?.mime === 'text/css'
-				? `<style data-preview-file="${path}">${inlineCssAssets(file.content, path, files)}</style>`
+				? `<style data-preview-file="${attributeValue(path)}">${inlineCssAssets(file.content, path, files).replace(/<(?=\/style)/gi, '\\3c ')}</style>`
 				: match;
 		}
 	);
 	html = html.replace(
-		/<script\b([^>]*?)src=(['"])([^'"]+)\2([^>]*)><\/script>/gi,
+		/<script\b([^>]*?)src\s*=\s*(['"])([^'"]+)\2([^>]*)>\s*<\/script>/gi,
 		(match, before, _quote, reference, after) => {
 			const path = resolvePreviewPath(reference, entrypoint);
 			const file = path ? files[path] : undefined;
-			const attributes = `${before}${after}`.trim();
-			return file && isJavaScriptMime(file.mime)
-				? `<script${attributes ? ` ${attributes}` : ''} data-preview-file="${path}">${file.content}<\/script>`
-				: match;
+			if (!file || !isJavaScriptMime(file.mime)) return match;
+			let attributes = `${before}${after}`.trim();
+			let script = file.content;
+			if (/<\/script/i.test(script)) {
+				// Insert raw script text through the DOM so even String.raw keeps its exact value.
+				const moduleType = /(^|\s)type\s*=\s*(['"]?)module\2(?=\s|$)/i;
+				const isModule = moduleType.test(attributes);
+				attributes = attributes.replace(moduleType, '$1type="text/javascript"');
+				script = `(() => {
+  const source = document.currentScript;
+  const script = document.createElement('script');
+  for (const {name, value} of source.attributes) script.setAttribute(name, value);
+  ${isModule ? "script.type = 'module';" : ''}
+  script.textContent = ${JSON.stringify(file.content).replace(/</g, '\\u003c')};
+  source.replaceWith(script);
+})();`;
+			}
+			return `<script${attributes ? ` ${attributes}` : ''} data-preview-file="${attributeValue(path!)}">${script}<\/script>`;
 		}
 	);
-	html = replaceLocalReferences(html, entrypoint, files);
 	const runtime = virtualFetchScript(files, entrypoint);
 	return /<head\b[^>]*>/i.test(html)
 		? html.replace(/<head\b[^>]*>/i, (head) => head + runtime)

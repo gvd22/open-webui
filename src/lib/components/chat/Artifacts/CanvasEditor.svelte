@@ -26,7 +26,7 @@
 		selectTransientCanvasDocument,
 		updateTransientCanvasDocument
 	} from '$lib/apis/chats';
-	import { canUseNotes, generateCanvasTitle } from './canvas';
+	import { canUseNotes, generateCanvasTitle, type CanvasNoteArtifact } from './canvas';
 	import {
 		createSerializedSaveQueue,
 		registerWorkspaceSaveBarrier,
@@ -71,6 +71,7 @@
 	let resolving = false;
 	let disposed = false;
 	let localPending = false;
+	let draftStorageWarning = false;
 	let selection = '';
 	let selectionEditor: any = null;
 	const recoveryKey = () => draftKey($user?.id ?? '', chatId, 'canvas', canvasId);
@@ -180,12 +181,18 @@
 		}
 	}
 
-	const updateCanvasState = (updates: Record<string, unknown>) => {
-		(artifactContents as any).update((contents: any[]) => {
+	const updateCanvasState = (
+		updates: Partial<Omit<CanvasNoteArtifact, 'type' | 'canvasId' | 'source'>>
+	) => {
+		artifactContents.update((contents) => {
 			let changed = false;
-			const nextContents = ((contents ?? []) as any[]).map((item) => {
-				if (item.canvasId !== canvasId) return item;
-				if (!Object.entries(updates).some(([key, nextValue]) => item[key] !== nextValue)) {
+			const nextContents = (contents ?? []).map((item) => {
+				if (item.type !== 'canvas-note' || item.canvasId !== canvasId) return item;
+				if (
+					!(Object.keys(updates) as (keyof typeof updates)[]).some(
+						(key) => item[key] !== updates[key]
+					)
+				) {
 					return item;
 				}
 				changed = true;
@@ -238,8 +245,11 @@
 					return { ...saved, updatedAt: saved.updated_at };
 				}
 			);
-			if (nextSave.content === md && nextSave.title === titleValue)
-				clearConflictDraft(savedDraftKey);
+			clearConflictDraft(savedDraftKey, {
+				title: nextSave.title,
+				content: nextSave.content,
+				titleEdited: nextSave.titleEdited
+			});
 			if (disposed || chatId !== nextSave.targetChatId || canvasId !== nextSave.targetCanvasId)
 				return;
 			updateCanvasState({
@@ -250,15 +260,8 @@
 			transientSaveError = false;
 			if (nextSave.content === md && nextSave.title === titleValue) {
 				localPending = false;
-				clearConflictDraft(recoveryKey());
 			}
 		} catch (error: any) {
-			if (error?.status === 409 && disposed)
-				keepConflictDraft(savedDraftKey, {
-					title: nextSave.title,
-					content: nextSave.content,
-					titleEdited: nextSave.titleEdited
-				});
 			if (disposed || chatId !== nextSave.targetChatId || canvasId !== nextSave.targetCanvasId)
 				return;
 			transientSaveError = true;
@@ -289,9 +292,17 @@
 			return;
 		}
 		localPending = true;
+		if (
+			!keepConflictDraft(recoveryKey(), { title: nextTitle, content: nextContent, titleEdited }) &&
+			!draftStorageWarning
+		) {
+			draftStorageWarning = true;
+			toast.warning($i18n.t('Draft kept in memory only. Keep this browser tab open.'));
+		}
 		if (conflict) return;
-		const current = ((get(artifactContents) ?? []) as any[]).find(
-			(item) => item?.canvasId === canvasId
+		const current = (get(artifactContents) ?? []).find(
+			(item): item is CanvasNoteArtifact =>
+				item.type === 'canvas-note' && item.canvasId === canvasId
 		);
 		transientSaveQueue.enqueue({
 			targetChatId: chatId,
@@ -340,8 +351,9 @@
 		try {
 			await transientSaveQueue.flush();
 			if (transientSaveError) return;
-			const current = ((get(artifactContents) ?? []) as any[]).find(
-				(item) => item?.canvasId === canvasId
+			const current = (get(artifactContents) ?? []).find(
+				(item): item is CanvasNoteArtifact =>
+					item.type === 'canvas-note' && item.canvasId === canvasId
 			);
 			const promotion = {
 				title: titleValue || generatedTitle,

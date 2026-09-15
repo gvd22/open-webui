@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
 	buildWorkspaceFileContent,
@@ -24,10 +24,24 @@ import {
 	shouldShowWorkspaceTabs,
 	upsertWorkspaceFileContent,
 	WORKSPACE_FILES_ID,
-	type WorkspaceContent
+	type WorkspaceContent,
+	type WorkspaceFileContent
 } from './workspace';
 
 describe('Pyodide workspace', () => {
+	it('requires the fields belonging to each workspace kind', () => {
+		expectTypeOf<{ type: 'canvas-note'; content: string }>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf<{
+			type: 'web-preview';
+			previewId: string;
+			content: string;
+		}>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf<{
+			type: 'workspace-file';
+			content: string;
+		}>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf(buildWorkspaceFileContent('/report.pdf')).toMatchTypeOf<WorkspaceContent>();
+	});
 	it('uses Files as the only runtime-backed workspace entry', () => {
 		expect(getDefaultWorkspaceContentId()).toBe(WORKSPACE_FILES_ID);
 		expect(buildWorkspaceFilesContent()).toMatchObject({
@@ -53,10 +67,24 @@ describe('Pyodide workspace', () => {
 	});
 
 	it('keeps model focus limited to the visible Canvas or Web Preview', () => {
-		const contents = [
-			{ type: 'canvas-note', content: '# Plan', canvasId: 'canvas-1' },
-			{ type: 'web-preview', content: '<h1>App</h1>', previewId: 'preview-1' },
-			{ type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID }
+		const contents: WorkspaceContent[] = [
+			{
+				type: 'canvas-note',
+				content: '# Plan',
+				canvasId: 'canvas-1',
+				title: 'Plan',
+				source: 'tool'
+			},
+			{
+				type: 'web-preview',
+				content: '<h1>App</h1>',
+				previewId: 'preview-1',
+				title: 'App',
+				source: 'tool',
+				entrypoint: 'index.html',
+				files: {}
+			},
+			buildWorkspaceFilesContent()
 		];
 		expect(getWorkspaceModelFocus(contents, 'canvas-1', true)).toEqual({
 			kind: 'canvas',
@@ -71,9 +99,15 @@ describe('Pyodide workspace', () => {
 	});
 
 	it('builds stable tabs and legacy renderer ids', () => {
-		const contents = [
+		const contents: WorkspaceContent[] = [
 			{ type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID, title: 'Files' },
-			{ type: 'canvas-note', content: '# Breakfast', canvasId: 'canvas-1', title: 'Breakfast' },
+			{
+				type: 'canvas-note',
+				content: '# Breakfast',
+				canvasId: 'canvas-1',
+				title: 'Breakfast',
+				source: 'tool'
+			},
 			{ type: 'iframe', content: '<main></main>' }
 		];
 		const tabs = buildWorkspaceTabs(contents);
@@ -102,11 +136,11 @@ describe('Pyodide workspace', () => {
 		expect(shouldResetWorkspaceForChatChange('', 'chat-1')).toBe(false);
 		expect(shouldResetWorkspaceForChatChange('chat-1', 'chat-2')).toBe(true);
 		expect(shouldShowWorkspaceTabs([])).toBe(false);
-		expect(shouldShowWorkspaceTabs([{ type: 'canvas-note', content: '' }])).toBe(true);
+		expect(shouldShowWorkspaceTabs([buildWorkspaceFilesContent()])).toBe(true);
 	});
 
 	it('keeps at most four open documents without evicting the active one', () => {
-		let contents: WorkspaceContent[] = [];
+		let contents: WorkspaceFileContent[] = [];
 		let recency: string[] = [];
 		const activeId = 'workspace:file:/mnt/uploads/0.pdf';
 		for (let index = 0; index < 10; index += 1) {
@@ -171,14 +205,42 @@ describe('Pyodide workspace', () => {
 		}
 		for (const path of ['/mnt/uploads/report.odt']) {
 			expect(isWorkspaceDocumentPath(path)).toBe(false);
-			expect(getWorkspaceFileOpenTarget(path)).toBe('files');
+			expect(getWorkspaceFileOpenTarget(path)).toBe('file-preview');
 		}
 	});
 
+	it('appends text, Markdown and images as individual, deduplicated file tabs', () => {
+		const paths = ['/mnt/uploads/notes.md', '/mnt/uploads/readme.txt', '/mnt/uploads/image.png'];
+		let contents: WorkspaceFileContent[] = [];
+		for (const path of paths) {
+			expect(getWorkspaceFileOpenTarget(path)).toBe('file-preview');
+			contents = upsertWorkspaceFileContent(contents, path);
+		}
+		expect(upsertWorkspaceFileContent(contents, paths[0])).toBe(contents);
+		expect(contents.map((content) => content.path)).toEqual(paths);
+		expect(buildWorkspaceSourceContents(true, true, false, [], contents).slice(1)).toEqual(
+			contents
+		);
+	});
+
 	it('reorders and closes views without changing source content', () => {
-		const files = { type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID };
-		const canvas = { type: 'canvas-note', content: '', canvasId: 'canvas-1' };
-		const preview = { type: 'web-preview', content: '', previewId: 'preview-1' };
+		const files = buildWorkspaceFilesContent();
+		const canvas: WorkspaceContent = {
+			type: 'canvas-note',
+			content: '',
+			canvasId: 'canvas-1',
+			title: 'Canvas',
+			source: 'tool'
+		};
+		const preview: WorkspaceContent = {
+			type: 'web-preview',
+			content: '',
+			previewId: 'preview-1',
+			title: 'Preview',
+			source: 'tool',
+			entrypoint: 'index.html',
+			files: {}
+		};
 		expect(orderWorkspaceContents([files, canvas, preview], ['canvas-1'])).toEqual([
 			canvas,
 			files,

@@ -540,7 +540,11 @@ und Anzeigepfade, nicht pauschal saemtliche Modell-/Konfigurationskombinationen.
   dezent rot und durchgestrichen, hinzugefuegte Texte dezent gruen markiert.
   Die vorhandene Dokumentformatierung bleibt erhalten. Keine Vergleichsbox im
   Chat und kein Aenderungsschalter bei Web Preview. Alte gespeicherte Chat-Diffs
-  werden ebenfalls nicht angezeigt.
+  werden ebenfalls nicht angezeigt und bei der Tool-History-Kompaktierung entfernt.
+  Tools erzeugen keine separaten Vergleichsauszuege mehr; Canvas verwendet den
+  vorherigen Dokumentstand. Web Preview besitzt keine Undo-API und erzeugt keine
+  Undo-Dateisnapshots. Alte Snapshots werden beim naechsten Speichern entfernt,
+  ohne Migration oder Aenderung exportierter Dateien.
 - Canvas hat keine eigene Kopfzeile, keinen zusaetzlichen Titel und keine
   Wort-/Zeichenzaehler, auch nicht bei verknuepften Notes. Der Dokumenttext beginnt
   direkt oben; Dokumentueberschrift und gespeicherter Objektname bleiben erhalten.

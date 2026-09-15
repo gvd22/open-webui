@@ -148,7 +148,15 @@ test('renders CSV data in the shared spreadsheet viewer', async ({ page }) => {
 			expect(layout.covered).toBe(false);
 			expect(layout.fontMatches).toBe(true);
 			expect(layout.overflow).toBe(false);
-			expect(layout.background).toBe(theme === 'dark' ? 'rgb(23, 23, 23)' : 'rgb(255, 255, 255)');
+			const themeBackground = await page.evaluate((dark) => {
+				const sample = document.createElement('div');
+				sample.style.backgroundColor = dark ? 'var(--color-gray-850)' : 'white';
+				document.body.appendChild(sample);
+				const color = getComputedStyle(sample).backgroundColor;
+				sample.remove();
+				return color;
+			}, theme === 'dark');
+			expect(layout.background).toBe(themeBackground);
 		}
 	}
 });
@@ -292,7 +300,6 @@ test('workspace document panels have one active owner and restore tab focus on c
 
 	const tabs = page.getByRole('tab');
 	const panels = page.locator('[role="tabpanel"]');
-	await expect(page.getByTestId('files-fallback-state')).toBeVisible();
 	await expect(tabs).toHaveCount(2);
 	await expect(tabs.nth(0).locator('[data-workspace-icon="pdf-logo"]')).toBeVisible();
 	await expect(tabs.nth(1).locator('[data-workspace-icon="docx-logo"]')).toBeVisible();
@@ -400,19 +407,43 @@ test('commits only the latest delayed refresh candidate for rendering and downlo
 	expect(downloaded.toString()).not.toContain('KOBY-REFRESH-VERSION-A');
 });
 
-test('keeps unsupported office and data formats in the visible Files fallback', async ({
-	page
-}) => {
+test('opens unsupported binary files in their own download-only tab', async ({ page }) => {
 	for (const extension of ['odt', 'ods', 'odp', 'doc', 'ppt']) {
 		await page.goto(`/?unsupported=${extension}`);
-		await expect(page.getByTestId('files-fallback-state')).toHaveAttribute(
-			'data-file-open-target',
-			'files'
+		await expect(page.getByRole('tab', { name: `example.${extension}` })).toHaveAttribute(
+			'aria-selected',
+			'true'
 		);
-		await expect(page.getByTestId('files-fallback-state')).toContainText(`example.${extension}`);
-		await expect(page.getByTestId('document-file-viewer')).toHaveCount(0);
-		await expect(page.locator('[role="tabpanel"]')).toHaveCount(0);
+		await expect(page.getByText('Preview not available')).toBeVisible();
+		const downloaded = page.waitForEvent('download');
+		await page.getByLabel('Download displayed version').click();
+		expect(await readFile(await (await downloaded).path())).toEqual(Buffer.from([0, 1, 2, 255]));
 	}
+});
+
+test('renders Markdown and code in file tabs and refreshes text without stale downloads', async ({
+	page
+}) => {
+	await page.goto('/?unsupported=md');
+	await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
+	await expect(page.locator('strong')).toContainText(['Viewer harness', 'formatted']);
+	await page.goto('/?unsupported=py');
+	await expect(page.locator('.cm-content')).toHaveAttribute('contenteditable', 'false');
+	await expect(page.locator('.cm-content')).toContainText('Read only');
+	await setRuntime(page, '/mnt/uploads/example.txt', { mode: 'valid', revision: 'a' });
+	await page.goto('/?unsupported=txt');
+	await expect(page.getByText('KOBY-REFRESH-VERSION-A')).toBeVisible();
+	await setRuntime(page, '/mnt/uploads/example.txt', { mode: 'valid', revision: 'b' });
+	await page.getByTestId('refresh-viewer').click();
+	await expect(page.getByText('KOBY-REFRESH-VERSION-B')).toBeVisible();
+	const downloaded = page.waitForEvent('download');
+	await page.getByLabel('Download displayed version').click();
+	expect((await readFile(await (await downloaded).path())).toString()).toBe(
+		'KOBY-REFRESH-VERSION-B'
+	);
+	await page.getByTestId('delete-viewer').click();
+	await expect(page.getByText('This file is no longer available.')).toBeVisible();
+	await expect(page.getByLabel('Download displayed version')).toHaveCount(0);
 });
 
 test('rejects an oversized Pyodide response from its header before rendering', async ({ page }) => {

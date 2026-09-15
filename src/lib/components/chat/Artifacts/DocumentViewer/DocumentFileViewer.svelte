@@ -7,6 +7,7 @@
 	import { pyodideWorker, workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
 	import OfficeDocumentPreview from '$lib/components/common/OfficeDocumentPreview.svelte';
+	import FilePreview from '../../FileNav/FilePreview.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Download from '$lib/components/icons/Download.svelte';
 	import ArrowsPointingOut from '$lib/components/icons/ArrowsPointingOut.svelte';
@@ -25,7 +26,7 @@
 
 	export let path: string;
 	export let fileId: string | null = null;
-	export let format: WorkspaceDocumentFormat;
+	export let format: WorkspaceDocumentFormat | null = null;
 	export let targetPage: number | null = null;
 
 	let root: HTMLDivElement;
@@ -46,6 +47,10 @@
 	let pendingPyodideRefresh = false;
 	let restoringAfterRenderFailure = false;
 	let loadedSourceKey = '';
+	let fileContent: string | null = null;
+	let fileImageUrl: string | null = null;
+	let binaryFile = false;
+	$: maxBytes = format ? maxDocumentBytes[format] : 16 * 1024 * 1024;
 	$: if (format === 'pdf' && candidateData !== copiedPdfSource) {
 		copiedPdfSource = candidateData;
 		pdfData = candidateData?.slice(0) ?? null;
@@ -81,7 +86,7 @@
 			worker = createPyodideWorker();
 			pyodideWorker.set(worker);
 		}
-		return readPyodideWorkerFile(worker, path, maxDocumentBytes[format], signal);
+		return readPyodideWorkerFile(worker, path, maxBytes, signal);
 	};
 
 	const getLoadError = (cause: unknown) => {
@@ -111,10 +116,27 @@
 		try {
 			const nextData = await readPyodideFile(abortController.signal);
 			if (generation !== loadGeneration) return;
-			assertDocumentSize(nextData, maxDocumentBytes[format]);
+			assertDocumentSize(nextData, maxBytes);
 			candidateData = nextData;
 			candidateGeneration = generation;
 			error = '';
+			if (!format) {
+				clearFilePreview();
+				if (/\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i.test(path)) {
+					fileImageUrl = URL.createObjectURL(new Blob([nextData]));
+				} else {
+					try {
+						fileContent = new TextDecoder('utf-8', { fatal: true }).decode(nextData);
+						binaryFile = fileContent.includes('\0');
+					} catch {
+						binaryFile = true;
+					}
+				}
+				displayedData = nextData;
+				displayedGeneration = generation;
+				loading = false;
+				refreshing = false;
+			}
 		} catch (cause) {
 			if (generation !== loadGeneration || abortController.signal.aborted) return;
 			console.error('Document file load failed:', cause);
@@ -180,7 +202,11 @@
 
 	const download = () => {
 		if (!displayedData) return;
-		const url = URL.createObjectURL(new Blob([displayedData], { type: mimeTypes[format] }));
+		const url = URL.createObjectURL(
+			new Blob([displayedData], {
+				type: format ? mimeTypes[format] : 'application/octet-stream'
+			})
+		);
 		const anchor = document.createElement('a');
 		anchor.href = url;
 		anchor.download = path.split('/').pop() ?? `document.${format}`;
@@ -195,6 +221,13 @@
 		if (!root) return;
 		if (document.fullscreenElement === root) await document.exitFullscreen();
 		else await root.requestFullscreen();
+	};
+
+	const clearFilePreview = () => {
+		if (fileImageUrl) URL.revokeObjectURL(fileImageUrl);
+		fileImageUrl = null;
+		fileContent = null;
+		binaryFile = false;
 	};
 
 	const refreshPyodideFile = (event: Event) => {
@@ -222,7 +255,7 @@
 		const action = getWorkspaceFileRefreshAction(
 			changedPaths,
 			path,
-			$workspaceActiveFile?.path === path
+			!format || $workspaceActiveFile?.path === path
 		);
 		if (action === 'refresh') scheduleLoad(true);
 		else if (action === 'defer') pendingPyodideRefresh = true;
@@ -236,7 +269,11 @@
 		} | null
 	) => {
 		if (!update) return;
-		const action = getWorkspaceFileUpdateAction(update, path, $workspaceActiveFile?.path === path);
+		const action = getWorkspaceFileUpdateAction(
+			update,
+			path,
+			!format || $workspaceActiveFile?.path === path
+		);
 		if (action === 'deleted') {
 			loadGeneration += 1;
 			loadAbortController?.abort();
@@ -281,6 +318,7 @@
 			if (refreshTimer) window.clearTimeout(refreshTimer);
 			unsubscribeUpdate();
 			window.removeEventListener('pyodide:files', refreshPyodideFile);
+			clearFilePreview();
 		};
 	});
 
@@ -297,7 +335,7 @@
 
 <div
 	bind:this={root}
-	class="document-viewer relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-gray-800 dark:bg-[#171717] dark:text-gray-200"
+	class="document-viewer relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-gray-800 dark:bg-gray-850 dark:text-gray-200"
 	data-testid="document-file-viewer"
 	data-document-path={path}
 	data-rendered-generation={displayedGeneration || undefined}
@@ -337,16 +375,16 @@
 		{/if}
 	</div>
 
-	<div class="relative min-h-0 flex-1 overflow-hidden">
+	<div class="relative min-h-0 flex-1 overflow-hidden bg-gray-50 dark:bg-gray-850">
 		{#if format === 'pdf' && candidateData}
 			<PDFViewer
 				data={pdfData}
 				{targetPage}
 				on:preview-rendered={handlePreviewRendered}
 				on:preview-failed={handlePreviewFailed}
-				className="w-full h-full bg-gray-50 dark:bg-[#171717] px-3 pt-4 pb-16 sm:px-6"
+				className="w-full h-full px-3 pt-4 pb-16 sm:px-6"
 			/>
-		{:else if candidateData}
+		{:else if candidateData && format}
 			<OfficeDocumentPreview
 				data={candidateData}
 				format={format as Exclude<WorkspaceDocumentFormat, 'pdf'>}
@@ -354,6 +392,14 @@
 				on:preview-rendered={handlePreviewRendered}
 				on:preview-failed={handlePreviewFailed}
 			/>
+		{:else if candidateData && binaryFile}
+			<div
+				class="flex h-full items-center justify-center p-8 text-center text-sm text-gray-500 dark:text-gray-400"
+			>
+				{$i18n.t('Preview not available')}
+			</div>
+		{:else if candidateData}
+			<FilePreview selectedFile={path} {fileContent} {fileImageUrl} readOnly />
 		{/if}
 
 		{#if loading && !displayedData}
@@ -392,11 +438,8 @@
 </div>
 
 <style>
-	.document-viewer:fullscreen {
-		background: white;
-	}
-
-	:global(.dark) .document-viewer:fullscreen {
-		background: #171717;
+	.document-viewer :global(.cm-editor),
+	.document-viewer :global(.cm-gutters) {
+		background: transparent;
 	}
 </style>

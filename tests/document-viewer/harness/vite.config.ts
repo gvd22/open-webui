@@ -13,7 +13,16 @@ const fixtureByPath: Record<string, string> = {
 	'/mnt/uploads/basic.pptx': 'pptx/basic.pptx'
 };
 const inlineFixtureByPath: Record<string, Buffer> = {
-	'/mnt/uploads/basic.csv': Buffer.from('city,value\nBasel,1\nBern,2\n')
+	'/mnt/uploads/basic.csv': Buffer.from('city,value\nBasel,1\nBern,2\n'),
+	'/mnt/uploads/example.md': Buffer.from('# Notes\n\nA **formatted** document.'),
+	'/mnt/uploads/example.txt': Buffer.from('KOBY-BASIC-PDF-2-PAGES'),
+	'/mnt/uploads/example.py': Buffer.from('print("Read only")'),
+	...Object.fromEntries(
+		['odt', 'ods', 'odp', 'doc', 'ppt'].map((extension) => [
+			`/mnt/uploads/example.${extension}`,
+			Buffer.from([0, 1, 2, 255])
+		])
+	)
 };
 type RuntimeMode = 'valid' | 'corrupt' | 'missing' | 'unavailable' | 'oversized';
 type RuntimeState = { mode: RuntimeMode; revision?: 'a' | 'b'; delayMs?: number };

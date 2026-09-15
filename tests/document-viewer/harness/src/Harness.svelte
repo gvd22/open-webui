@@ -7,12 +7,10 @@
 		buildWorkspaceFileContent,
 		buildWorkspaceTabs,
 		getWorkspaceContentId,
-		getWorkspaceDocumentFormatForViewer,
-		getWorkspaceFileOpenTarget,
 		getWorkspaceFileId,
 		limitWorkspaceFileContents,
 		upsertWorkspaceFileContent,
-		type WorkspaceContent,
+		type WorkspaceFileContent,
 		type WorkspaceTab
 	} from '$lib/components/chat/Artifacts/workspace';
 	import { workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
@@ -39,22 +37,18 @@
 	const unsupportedPath = unsupportedExtension
 		? `/mnt/uploads/example.${unsupportedExtension}`
 		: '';
-	const unsupportedFileOpenTarget = unsupportedPath
-		? getWorkspaceFileOpenTarget(unsupportedPath)
-		: null;
-	const hasDedicatedDocument = Boolean(
-		unsupportedPath ? getWorkspaceDocumentFormatForViewer(unsupportedPath, true) : document
-	);
-	let workspaceContents: WorkspaceContent[] = workspaceLru
+	let workspaceContents: WorkspaceFileContent[] = workspaceLru
 		? []
 		: workspacePanels
 			? [
 					buildWorkspaceFileContent(documents.pdf.path),
 					buildWorkspaceFileContent(documents.docx.path)
 				]
-			: hasDedicatedDocument && document
-				? [buildWorkspaceFileContent(document.path, targetPage)]
-				: [];
+			: unsupportedPath
+				? [buildWorkspaceFileContent(unsupportedPath)]
+				: document
+					? [buildWorkspaceFileContent(document.path, targetPage)]
+					: [];
 	let selectedIndex = 0;
 	let openedFileRecency: string[] = [];
 	let evictedFileIds: string[] = [];
@@ -124,20 +118,6 @@
 			</button>
 		{/if}
 	</header>
-	{#if unsupportedPath || workspacePanels}
-		<div
-			class="files-state"
-			data-testid="files-fallback-state"
-			data-file-open-target={unsupportedFileOpenTarget ?? undefined}
-		>
-			{#if unsupportedPath}
-				Files keeps {unsupportedPath.split('/').at(-1)} in its existing preview or download path.
-			{:else}
-				Files keeps unsupported formats in its existing preview; supported files open this tab
-				panel.
-			{/if}
-		</div>
-	{/if}
 	{#if workspaceLru}
 		<div class="lru-controls" aria-label="Workspace document sequence">
 			{#each Array(10) as _, index}
@@ -153,7 +133,7 @@
 		<output data-testid="lru-active-file-id">{selectedContentId}</output>
 		<output data-testid="lru-evicted-file-ids">{evictedFileIds.join(',')}</output>
 	{/if}
-	{#if workspacePanels || workspaceLru}
+	{#if workspacePanels || workspaceLru || unsupportedPath}
 		<WorkspaceTabs
 			tabs={workspaceTabs}
 			bind:selectedIndex
@@ -190,11 +170,6 @@
 	}
 	button {
 		font: inherit;
-	}
-	.files-state {
-		padding: 0 12px 8px;
-		font-size: 12px;
-		color: #5f5f5f;
 	}
 	.lru-controls {
 		display: flex;

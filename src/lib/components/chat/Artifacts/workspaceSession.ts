@@ -1,5 +1,3 @@
-import { isWorkspaceDocumentPath } from './workspace';
-
 const WORKSPACE_STATE_VERSION = 2;
 const MAX_WORKSPACE_ID_CHARS = 2048;
 const MAX_WORKSPACE_PATH_CHARS = 1024;
@@ -23,7 +21,8 @@ const normalizeIds = (value: unknown) =>
 
 const normalizeOpenedFile = (item: unknown): PersistedWorkspaceFile | null => {
 	const path = typeof item === 'string' ? item : (item as { path?: unknown } | null)?.path;
-	if (!isBoundedText(path, MAX_WORKSPACE_PATH_CHARS) || !isWorkspaceDocumentPath(path)) return null;
+	if (!isBoundedText(path, MAX_WORKSPACE_PATH_CHARS) || !path.startsWith('/') || path.endsWith('/'))
+		return null;
 	const fileId = typeof item === 'object' && item ? (item as { fileId?: unknown }).fileId : null;
 	return {
 		path,

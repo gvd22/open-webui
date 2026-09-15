@@ -231,6 +231,51 @@ describe('Web Preview contract', () => {
 		expect(composeWebPreviewHtml(edited)).not.toContain('status.textContent = "Before";');
 	});
 
+	it('resolves root-relative and encoded assets from a nested entrypoint', () => {
+		const html = composeWebPreviewHtml(
+			{
+				'pages/index.html': {
+					mime: 'text/html',
+					content:
+						'<link href = "/css/site.css"><script src = "/app.js"></script><img src="/logo%20small.svg">'
+				},
+				'css/site.css': {
+					mime: 'text/css',
+					content: 'body { background: url(/logo%20small.svg); }'
+				},
+				'app.js': { mime: 'text/javascript', content: 'window.ready = true;' },
+				'logo small.svg': { mime: 'image/svg+xml', content: '<svg></svg>' }
+			},
+			'pages/index.html'
+		);
+		expect(html).toContain('data-preview-file="css/site.css"');
+		expect(html).toContain('data-preview-file="app.js"');
+		expect(html).toContain('url("data:image/svg+xml');
+		expect(html).toContain('src="data:image/svg+xml');
+	});
+
+	it('embeds closing tags without altering raw JavaScript text', () => {
+		const source = 'window.raw = String.raw`</script><div>not markup</div>`;';
+		const html = composeWebPreviewHtml({
+			'index.html': {
+				mime: 'text/html',
+				content: '<script src="app.js"></script><link href="style.css">'
+			},
+			'app.js': { mime: 'text/javascript', content: source },
+			'style.css': { mime: 'text/css', content: 'body::after { content: "</style>"; }' }
+		});
+		const script = html.match(/<script data-preview-file="app.js">([\s\S]*?)<\/script>/)?.[1];
+		const target = { setAttribute: () => {}, textContent: '' };
+		const replaceWith = (element: typeof target) => {
+			expect(element.textContent).toBe(source);
+		};
+		vm.runInNewContext(script!, {
+			document: { currentScript: { attributes: [], replaceWith }, createElement: () => target }
+		});
+		expect(html).not.toContain('content: "</style>');
+		expect(html).not.toContain('</script><div>');
+	});
+
 	it('recovers the newest state for each preview from chat history', () => {
 		const history = {
 			currentId: 'assistant-2',

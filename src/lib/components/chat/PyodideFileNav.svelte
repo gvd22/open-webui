@@ -9,7 +9,8 @@
 	import { toast } from 'svelte-sonner';
 	import { chatId, pyodideWorker, showFileNavPath } from '$lib/stores';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
-	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { requestPyodideFile, type PyodideFileRequest } from '$lib/pyodide/workerRequest';
 	import {
 		asPyodideWorkspaceDirectory,
 		getPyodideWorkspaceBreadcrumbs,
@@ -25,7 +26,7 @@
 	import Spinner from '../common/Spinner.svelte';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
-	import { getWorkspaceFileOpenTarget, isWorkspaceOpenRequestForChat } from './Artifacts/workspace';
+	import { isWorkspaceOpenRequestForChat } from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
@@ -109,7 +110,6 @@
 		navigatingHistory = false;
 	};
 
-	let _reqId = 0;
 	let directoryRequestId = 0;
 	let fileRequestId = 0;
 	let filesChangedRequestId = 0;
@@ -147,65 +147,26 @@
 		return worker;
 	}
 
-	function sendWorkerMessage(msg: any): Promise<any> {
+	async function sendWorkerMessage(msg: PyodideFileRequest) {
 		const worker = ensureWorker();
-		const id = `fs-${++_reqId}`;
-		return new Promise((resolve, reject) => {
-			let timeout: ReturnType<typeof setTimeout>;
-			const armTimeout = (milliseconds: number) => {
-				clearTimeout(timeout);
-				timeout = setTimeout(() => {
-					cleanup();
+		try {
+			return await requestPyodideFile(worker, msg, {
+				onProgress: (stage) => {
+					startupStage = stage;
+				},
+				onWorkerError: () => {
+					if ($pyodideWorker === worker) pyodideWorker.set(null);
+				},
+				onTimeout: () => {
 					if ($pyodideWorker === worker) {
 						terminatePyodideWorker(worker, 'Pyodide stopped after a file request timed out');
 						pyodideWorker.set(null);
 					}
-					startupStage = null;
-					reject(new Error('Pyodide timed out'));
-				}, milliseconds);
-			};
-			const cleanup = () => {
-				clearTimeout(timeout);
-				worker.removeEventListener('message', handler);
-				worker.removeEventListener('error', errorHandler);
-			};
-
-			function handler(event: MessageEvent) {
-				if (event.data?.type === 'pyodide:progress') {
-					if (event.data.id === id) {
-						startupStage = event.data.stage;
-						armTimeout(getPyodideRequestTimeout(event.data.stage));
-					}
-					return;
 				}
-				if (event.data?.id !== id) return;
-				cleanup();
-				startupStage = null;
-				if (event.data?.error || event.data?.stderr) {
-					reject(new Error(event.data.error || event.data.stderr));
-					return;
-				}
-				resolve(event.data);
-			}
-
-			function errorHandler(event: Event) {
-				cleanup();
-				if ($pyodideWorker === worker) pyodideWorker.set(null);
-				startupStage = null;
-				const workerError = event as ErrorEvent;
-				reject(workerError.error || new Error(workerError.message || 'Pyodide worker failed'));
-			}
-
-			worker.addEventListener('message', handler);
-			worker.addEventListener('error', errorHandler);
-			armTimeout(getPyodideRequestTimeout('request-queued'));
-			try {
-				worker.postMessage({ ...msg, id });
-			} catch (error) {
-				cleanup();
-				reject(error);
-			}
-		});
+			});
+		} finally {
+			startupStage = null;
+		}
 	}
 
 	// ── Breadcrumbs ───────────────────────────────────────────────────────
@@ -288,9 +249,7 @@
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
-		const fileOpenTarget = getWorkspaceFileOpenTarget(filePath);
-		if (notifyWorkspace && fileOpenTarget === 'document-viewer' && onOpenFile(filePath)) return;
-		if (notifyWorkspace && fileOpenTarget === 'files') onOpenFile(filePath);
+		if (notifyWorkspace && onOpenFile(filePath)) return;
 		pushNavHistory(currentPath, filePath);
 		const requestId = ++fileRequestId;
 		selectedFile = filePath;
@@ -343,21 +302,11 @@
 		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
 		const name = normalized.slice(separator + 1);
 		if (!name) return;
-		if (
-			typeof request !== 'string' &&
-			request.fileId &&
-			onOpenFile(normalized, { page: request.page, fileId: request.fileId })
-		) {
+		if (onOpenFile(normalized, typeof request === 'string' ? {} : request)) {
 			return;
 		}
 		await loadDir(directory);
-		if (
-			typeof request !== 'string' &&
-			onOpenFile(normalized, { page: request.page, fileId: request.fileId })
-		) {
-			return;
-		}
-		await openEntry({ name, type: 'file', size: 0 });
+		await openEntry({ name, type: 'file', size: 0 }, false);
 	};
 
 	const clearPreview = () => {
@@ -723,58 +672,62 @@
 		{/if}
 
 		{#if !loading && !error && !selectedFile}
-			{#if creatingFolder}
-				<div class="flex items-center gap-2 px-3 py-1.5">
-					<Folder className="size-4 shrink-0 text-blue-400 dark:text-blue-300" />
-					<input
-						bind:this={newFolderInput}
-						bind:value={newFolderName}
-						class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
-						placeholder={$i18n.t('Folder name')}
-						on:keydown={(e) => {
-							if (e.key === 'Enter') submitNewFolder();
-							if (e.key === 'Escape') {
-								creatingFolder = false;
-								newFolderName = '';
-							}
-						}}
-						on:blur={submitNewFolder}
-					/>
-				</div>
-			{/if}
-			{#if creatingFile}
-				<div class="flex items-center gap-2 px-3 py-1.5">
-					<Document className="size-4 shrink-0 text-gray-400 dark:text-gray-500" />
-					<input
-						bind:this={newFileInput}
-						bind:value={newFileName}
-						class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
-						placeholder={$i18n.t('File name')}
-						on:keydown={(e) => {
-							if (e.key === 'Enter') submitNewFile();
-							if (e.key === 'Escape') {
-								creatingFile = false;
-								newFileName = '';
-							}
-						}}
-						on:blur={submitNewFile}
-					/>
-				</div>
-			{/if}
-
 			{#if visibleEntries.length > 0 || creatingFolder || creatingFile}
-				<ul class="overflow-y-auto flex-1 min-h-0">
-					{#each visibleEntries as entry (entry.name)}
-						<FileEntryRow
-							{entry}
-							{currentPath}
-							draggableEnabled={false}
-							onOpen={openEntry}
-							onDownload={downloadFile}
-							onDelete={confirmDelete}
-						/>
-					{/each}
-				</ul>
+				<div class="min-h-0 flex-1 overflow-y-auto">
+					<div class="mx-auto w-full max-w-3xl px-4 pt-2 pb-4">
+						{#if creatingFolder}
+							<div class="flex min-h-7 items-center gap-2.5 px-2.5 py-1">
+								<Folder className="size-4 shrink-0 text-blue-400 dark:text-blue-300" />
+								<input
+									bind:this={newFolderInput}
+									bind:value={newFolderName}
+									class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+									placeholder={$i18n.t('Folder name')}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') submitNewFolder();
+										if (e.key === 'Escape') {
+											creatingFolder = false;
+											newFolderName = '';
+										}
+									}}
+									on:blur={submitNewFolder}
+								/>
+							</div>
+						{/if}
+						{#if creatingFile}
+							<div class="flex min-h-7 items-center gap-2.5 px-2.5 py-1">
+								<Document className="size-4 shrink-0 text-gray-400 dark:text-gray-500" />
+								<input
+									bind:this={newFileInput}
+									bind:value={newFileName}
+									class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+									placeholder={$i18n.t('File name')}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') submitNewFile();
+										if (e.key === 'Escape') {
+											creatingFile = false;
+											newFileName = '';
+										}
+									}}
+									on:blur={submitNewFile}
+								/>
+							</div>
+						{/if}
+
+						<ul>
+							{#each visibleEntries as entry (entry.name)}
+								<FileEntryRow
+									{entry}
+									{currentPath}
+									draggableEnabled={false}
+									onOpen={openEntry}
+									onDownload={downloadFile}
+									onDelete={confirmDelete}
+								/>
+							{/each}
+						</ul>
+					</div>
+				</div>
 			{/if}
 		{/if}
 	</div>

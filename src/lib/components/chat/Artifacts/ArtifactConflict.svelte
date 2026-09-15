@@ -15,7 +15,7 @@
 	aria-label={$i18n.t('Unsaved draft')}
 >
 	<p role="status">
-		{$i18n.t('This document changed elsewhere. Your draft is kept; saving is paused.')}
+		{$i18n.t('Your draft is kept; saving is paused.')}
 	</p>
 	<div class="mt-2 flex flex-wrap gap-3">
 		<button

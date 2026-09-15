@@ -91,15 +91,12 @@
 	import ArrowUturnRight from '../icons/ArrowUturnRight.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
 	import ChatBubbleOval from '../icons/ChatBubbleOval.svelte';
-	import XMark from '../icons/XMark.svelte';
 
 	export let id: null | string = null;
 	export let canvas = false;
-	export let onClose: () => void = () => {};
 	export let onTitleChange: (title: string) => void = () => {};
 	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
 	export let onUnavailable: () => void = () => {};
-	export let showCanvasClose = true;
 
 	let editor: any = null;
 	let note: any = null;
@@ -1037,33 +1034,35 @@ ${content}
 				</div>
 			{:else}
 				<div class=" w-full flex flex-col {loading ? 'opacity-20' : ''}">
-					<div
-						class={canvas
-							? 'absolute end-3 top-2 z-20 rounded-lg bg-white/90 p-0.5 shadow-sm dark:bg-gray-950/90'
-							: 'shrink-0 w-full flex justify-between items-center px-3'}
-					>
-						<div class="w-full min-w-0 flex items-center">
-							{#if $mobile && !canvas}
-								<Tooltip
-									content={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
-								>
-									<button
-										id="sidebar-toggle-button"
-										class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition cursor-"
-										aria-label={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
-										type="button"
-										on:click={() => {
-											showSidebar.set(!$showSidebar);
-										}}
+					{#if canvas}
+						<slot
+							name="canvas-actions"
+							{editor}
+							editable={Boolean(editor && versionIdx === null && note?.write_access)}
+						/>
+					{:else}
+						<div class="shrink-0 w-full flex justify-between items-center px-3">
+							<div class="w-full min-w-0 flex items-center">
+								{#if $mobile}
+									<Tooltip
+										content={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
 									>
-										<div class=" self-center p-1.5">
-											<Sidebar className="size-4" />
-										</div>
-									</button>
-								</Tooltip>
-							{/if}
+										<button
+											id="sidebar-toggle-button"
+											class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition cursor-"
+											aria-label={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
+											type="button"
+											on:click={() => {
+												showSidebar.set(!$showSidebar);
+											}}
+										>
+											<div class=" self-center p-1.5">
+												<Sidebar className="size-4" />
+											</div>
+										</button>
+									</Tooltip>
+								{/if}
 
-							{#if !canvas}
 								<input
 									class="w-full min-w-0 text-sm font-normal bg-transparent outline-hidden {$mobile
 										? 'ml-1'
@@ -1092,70 +1091,66 @@ ${content}
 										changeDebounceHandler();
 									}}
 								/>
-							{/if}
-							{#if !canvas && titleInputFocused && !titleGenerating}
-								<div
-									class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
-								>
-									<Tooltip content={$i18n.t('Generate')}>
-										<button
-											class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
-											id="generate-title-button"
-											disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
-												titleGenerating}
-											on:mouseenter={() => {
-												ignoreBlur = true;
-											}}
-											on:click={(e) => {
-												e.preventDefault();
-												e.stopImmediatePropagation();
-												e.stopPropagation();
 
-												generateTitleHandler();
-												titleInputFocused = false;
-											}}
-										>
-											<Sparkles strokeWidth="1.5" />
-										</button>
-									</Tooltip>
-								</div>
-							{/if}
+								{#if titleInputFocused && !titleGenerating}
+									<div
+										class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
+									>
+										<Tooltip content={$i18n.t('Generate')}>
+											<button
+												class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+												id="generate-title-button"
+												disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
+													titleGenerating}
+												on:mouseenter={() => {
+													ignoreBlur = true;
+												}}
+												on:click={(e) => {
+													e.preventDefault();
+													e.stopImmediatePropagation();
+													e.stopPropagation();
 
-							<div class="flex items-center gap-0.5 shrink-0">
-								{#if canvas && editor && versionIdx === null && note?.write_access}
-									<slot name="canvas-actions" {editor} />
+													generateTitleHandler();
+													titleInputFocused = false;
+												}}
+											>
+												<Sparkles strokeWidth="1.5" />
+											</button>
+										</Tooltip>
+									</div>
 								{/if}
-								{#if note?.write_access && !canvas}
-									{#if editor}
-										<div>
-											<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
-												<button
-													class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
-													on:click={() => {
-														editor.chain().focus().undo().run();
-														// versionNavigateHandler('prev');
-													}}
-													disabled={!editor.can().undo()}
-												>
-													<ArrowUturnLeft className="size-4" />
-												</button>
 
-												<button
-													class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
-													on:click={() => {
-														editor.chain().focus().redo().run();
-														// versionNavigateHandler('next');
-													}}
-													disabled={!editor.can().redo()}
-												>
-													<ArrowUturnRight className="size-4" />
-												</button>
+								<div class="flex items-center gap-0.5 shrink-0">
+									{#if note?.write_access}
+										{#if editor}
+											<div>
+												<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
+													<button
+														class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
+														on:click={() => {
+															editor.chain().focus().undo().run();
+															// versionNavigateHandler('prev');
+														}}
+														disabled={!editor.can().undo()}
+													>
+														<ArrowUturnLeft className="size-4" />
+													</button>
+
+													<button
+														class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
+														on:click={() => {
+															editor.chain().focus().redo().run();
+															// versionNavigateHandler('next');
+														}}
+														disabled={!editor.can().redo()}
+													>
+														<ArrowUturnRight className="size-4" />
+													</button>
+												</div>
 											</div>
-										</div>
+										{/if}
 									{/if}
-								{/if}
 
-								{#if !canvas}
 									<Tooltip content={$i18n.t('Chat')} placement="top">
 										<button
 											type="button"
@@ -1166,65 +1161,63 @@ ${content}
 											<ChatBubbleOval className="size-4" strokeWidth="1.8" />
 										</button>
 									</Tooltip>
-								{/if}
 
-								{#if note?.write_access && !canvas}
-									<RecordMenu
-										onRecord={async () => {
-											displayMediaRecord = false;
+									{#if note?.write_access}
+										<RecordMenu
+											onRecord={async () => {
+												displayMediaRecord = false;
 
-											try {
-												let stream = await navigator.mediaDevices
-													.getUserMedia({ audio: true })
-													.catch(function (err) {
-														toast.error(
-															$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
-																error: err
-															})
-														);
-														return null;
-													});
+												try {
+													let stream = await navigator.mediaDevices
+														.getUserMedia({ audio: true })
+														.catch(function (err) {
+															toast.error(
+																$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
+																	error: err
+																})
+															);
+															return null;
+														});
 
-												if (stream) {
-													recording = true;
-													const tracks = stream.getTracks();
-													tracks.forEach((track) => track.stop());
+													if (stream) {
+														recording = true;
+														const tracks = stream.getTracks();
+														tracks.forEach((track) => track.stop());
+													}
+													stream = null;
+												} catch {
+													toast.error($i18n.t('Permission denied when accessing microphone'));
 												}
-												stream = null;
-											} catch {
-												toast.error($i18n.t('Permission denied when accessing microphone'));
-											}
-										}}
-										onCaptureAudio={async () => {
-											displayMediaRecord = true;
+											}}
+											onCaptureAudio={async () => {
+												displayMediaRecord = true;
 
-											recording = true;
-										}}
-										onUpload={async () => {
-											const input = document.createElement('input');
-											input.type = 'file';
-											input.accept = 'audio/*';
-											input.multiple = false;
-											input.click();
+												recording = true;
+											}}
+											onUpload={async () => {
+												const input = document.createElement('input');
+												input.type = 'file';
+												input.accept = 'audio/*';
+												input.multiple = false;
+												input.click();
 
-											input.onchange = async (e) => {
-												const files = e.target.files;
+												input.onchange = async (e) => {
+													const files = e.target.files;
 
-												if (files && files.length > 0) {
-													await uploadFileHandler(files[0]);
-												}
-											};
-										}}
-									>
-										<Tooltip content={$i18n.t('Record')} placement="top">
-											<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
-												<Mic className="size-4" />
-											</div>
-										</Tooltip>
-									</RecordMenu>
-								{/if}
+													if (files && files.length > 0) {
+														await uploadFileHandler(files[0]);
+													}
+												};
+											}}
+										>
+											<Tooltip content={$i18n.t('Record')} placement="top">
+												<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
+													<Mic className="size-4" />
+												</div>
+											</Tooltip>
+										</RecordMenu>
+									{/if}
 
-								{#if !canvas}
 									<NoteMenu
 										onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
 										onDownload={(type) => {
@@ -1268,38 +1261,25 @@ ${content}
 											<EllipsisHorizontal className="size-5" />
 										</div>
 									</NoteMenu>
-								{/if}
 
-								{#if canvas}
-									{#if showCanvasClose}
-										<Tooltip content={$i18n.t('Close')}>
-											<button
-												type="button"
-												class="p-1 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 transition rounded-lg"
-												aria-label={$i18n.t('Close')}
-												on:click={onClose}
-											>
-												<XMark className="size-4" />
-											</button>
-										</Tooltip>
+									{#if note?.write_access}
+										<div class="ml-1.5">
+											<AccessButton
+												on:click={() => {
+													showAccessControlModal = true;
+												}}
+												disabled={note?.user_id !== $user?.id && $user?.role !== 'admin'}
+											/>
+										</div>
+									{:else}
+										<div class="shrink-0 text-xs text-gray-500 px-2 py-1">
+											{$i18n.t('Read-Only Access')}
+										</div>
 									{/if}
-								{:else if note?.write_access}
-									<div class="ml-1.5">
-										<AccessButton
-											on:click={() => {
-												showAccessControlModal = true;
-											}}
-											disabled={note?.user_id !== $user?.id && $user?.role !== 'admin'}
-										/>
-									</div>
-								{:else}
-									<div class="shrink-0 text-xs text-gray-500 px-2 py-1">
-										{$i18n.t('Read-Only Access')}
-									</div>
-								{/if}
+								</div>
 							</div>
 						</div>
-					</div>
+					{/if}
 
 					{#if !canvas}
 						<div class="  px-1.5">
