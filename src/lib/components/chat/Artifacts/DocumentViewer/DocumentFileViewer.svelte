@@ -4,6 +4,7 @@
 	import type { i18n as i18nType } from 'i18next';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import { getFileContentById } from '$lib/apis/files';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { pyodideWorker, workspaceActiveFile, workspaceFileUpdate } from '$lib/stores';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
 	import OfficeDocumentPreview from '$lib/components/common/OfficeDocumentPreview.svelte';
@@ -38,6 +39,10 @@
 	let loading = true;
 	let refreshing = false;
 	let error = '';
+	let tooLarge = false;
+	let downloadError = '';
+	let downloadAbortController: AbortController | null = null;
+	$: downloading = downloadAbortController !== null;
 	let mounted = false;
 	let loadGeneration = 0;
 	let loadAbortController: AbortController | null = null;
@@ -73,7 +78,7 @@
 		csv: 16 * 1024 * 1024
 	};
 
-	const readPyodideFile = (signal: AbortSignal): Promise<ArrayBuffer> => {
+	const readPyodideFile = (signal: AbortSignal, maximumBytes = maxBytes): Promise<ArrayBuffer> => {
 		if (fileId) {
 			return getFileContentById(fileId).then((data) => {
 				if (signal.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
@@ -86,7 +91,13 @@
 			worker = createPyodideWorker();
 			pyodideWorker.set(worker);
 		}
-		return readPyodideWorkerFile(worker, path, maxBytes, signal);
+		return readPyodideWorkerFile(worker, path, maximumBytes, signal);
+	};
+
+	const cancelDownload = () => {
+		downloadAbortController?.abort();
+		downloadAbortController = null;
+		downloadError = '';
 	};
 
 	const getLoadError = (cause: unknown) => {
@@ -107,6 +118,8 @@
 	const loadFile = async (isRefresh = false) => {
 		if (!mounted) return;
 		const generation = ++loadGeneration;
+		cancelDownload();
+		tooLarge = false;
 		loadAbortController?.abort();
 		const abortController = new AbortController();
 		loadAbortController = abortController;
@@ -139,6 +152,7 @@
 			}
 		} catch (cause) {
 			if (generation !== loadGeneration || abortController.signal.aborted) return;
+			tooLarge = cause instanceof Error && cause.message === DOCUMENT_TOO_LARGE_ERROR;
 			console.error('Document file load failed:', cause);
 			if (cause instanceof Error && cause.message === 'missing') {
 				candidateData = null;
@@ -173,8 +187,8 @@
 				? (detail as { data?: ArrayBuffer | Uint8Array | null }).data
 				: (detail as ArrayBuffer | Uint8Array | null);
 		// PDF.js receives a defensive clone because it may transfer its input buffer.
-		// Its acknowledgement still maps back to the original candidate, which remains
-		// the only buffer that can become available for download.
+		// Its acknowledgement maps back to the original candidate used by
+		// "Download displayed version", separately from an explicit original-file download.
 		return bytes === candidateData || bytes === pdfData ? candidateData : null;
 	};
 
@@ -200,13 +214,7 @@
 		refreshing = false;
 	};
 
-	const download = () => {
-		if (!displayedData) return;
-		const url = URL.createObjectURL(
-			new Blob([displayedData], {
-				type: format ? mimeTypes[format] : 'application/octet-stream'
-			})
-		);
+	const startDownload = (url: string) => {
 		const anchor = document.createElement('a');
 		anchor.href = url;
 		anchor.download = path.split('/').pop() ?? `document.${format}`;
@@ -214,7 +222,40 @@
 		document.body.appendChild(anchor);
 		anchor.click();
 		anchor.remove();
+	};
+
+	const download = (data: ArrayBuffer | null) => {
+		if (!data) return;
+		const url = URL.createObjectURL(
+			new Blob([data], { type: format ? mimeTypes[format] : 'application/octet-stream' })
+		);
+		startDownload(url);
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+	};
+
+	const downloadOriginal = async () => {
+		if (downloadAbortController) return;
+		downloadError = '';
+		if (fileId) {
+			// Let the browser stream saved files without allocating another preview buffer.
+			startDownload(
+				`${WEBUI_API_BASE_URL}/files/${encodeURIComponent(fileId)}/content?attachment=true`
+			);
+			return;
+		}
+		const controller = new AbortController();
+		downloadAbortController = controller;
+		const sourcePath = path;
+		try {
+			// Only an explicit download bypasses the preview budget, as in the file browser.
+			const data = await readPyodideFile(controller.signal, Number.MAX_SAFE_INTEGER);
+			if (!mounted || controller.signal.aborted || path !== sourcePath) return;
+			download(data);
+		} catch {
+			if (!controller.signal.aborted) downloadError = $i18n.t('Download failed');
+		} finally {
+			if (downloadAbortController === controller) downloadAbortController = null;
+		}
 	};
 
 	const toggleFullscreen = async () => {
@@ -275,6 +316,8 @@
 			!format || $workspaceActiveFile?.path === path
 		);
 		if (action === 'deleted') {
+			cancelDownload();
+			tooLarge = false;
 			loadGeneration += 1;
 			loadAbortController?.abort();
 			candidateData = null;
@@ -287,6 +330,8 @@
 			return;
 		}
 		if (action === 'renamed') {
+			cancelDownload();
+			tooLarge = false;
 			loadGeneration += 1;
 			loadAbortController?.abort();
 			candidateData = null;
@@ -313,6 +358,7 @@
 
 		return () => {
 			mounted = false;
+			cancelDownload();
 			loadGeneration += 1;
 			loadAbortController?.abort();
 			if (refreshTimer) window.clearTimeout(refreshTimer);
@@ -328,6 +374,8 @@
 	}
 
 	$: if (mounted && `${path}:${fileId ?? 'runtime'}` !== loadedSourceKey) {
+		cancelDownload();
+		tooLarge = false;
 		loadedSourceKey = `${path}:${fileId ?? 'runtime'}`;
 		scheduleLoad(Boolean(displayedData));
 	}
@@ -341,41 +389,46 @@
 	data-rendered-generation={displayedGeneration || undefined}
 	aria-busy={loading || refreshing}
 >
-	<div
-		role="group"
-		aria-label={$i18n.t('Document actions')}
-		class="flex h-10 shrink-0 items-center justify-end gap-1 border-b border-gray-100 px-2 dark:border-gray-800"
-	>
-		{#if refreshing}
-			<span class="mr-auto px-2" role="status" aria-label={$i18n.t('Loading')}>
-				<Spinner className="size-3.5" />
-			</span>
-		{/if}
-		{#if displayedData}
-			<Tooltip content={$i18n.t('Download displayed version')}>
-				<button
-					type="button"
-					class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-					aria-label={$i18n.t('Download displayed version')}
-					on:click={download}
-				>
-					<Download className="size-4" />
-				</button>
-			</Tooltip>
-			<Tooltip content={$i18n.t('Fullscreen')}>
-				<button
-					type="button"
-					class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-					aria-label={$i18n.t('Fullscreen')}
-					on:click={() => void toggleFullscreen()}
-				>
-					<ArrowsPointingOut className="size-4" />
-				</button>
-			</Tooltip>
-		{/if}
-	</div>
+	{#if displayedData || refreshing}
+		<div
+			role="group"
+			aria-label={$i18n.t('Document actions')}
+			class="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white/95 p-1 shadow-sm backdrop-blur-sm dark:border-gray-700/80 dark:bg-gray-850/95"
+		>
+			{#if refreshing}
+				<span class="mr-auto px-2" role="status" aria-label={$i18n.t('Loading')}>
+					<Spinner className="size-3.5" />
+				</span>
+			{/if}
+			{#if displayedData}
+				<Tooltip content={$i18n.t('Download displayed version')}>
+					<button
+						type="button"
+						class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+						aria-label={$i18n.t('Download displayed version')}
+						on:click={() => download(displayedData)}
+					>
+						<Download className="size-4" />
+					</button>
+				</Tooltip>
+				<Tooltip content={$i18n.t('Fullscreen')}>
+					<button
+						type="button"
+						class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+						aria-label={$i18n.t('Fullscreen')}
+						on:click={() => void toggleFullscreen()}
+					>
+						<ArrowsPointingOut className="size-4" />
+					</button>
+				</Tooltip>
+			{/if}
+		</div>
+	{/if}
 
-	<div class="relative min-h-0 flex-1 overflow-hidden bg-gray-50 dark:bg-gray-850">
+	<div
+		class="relative min-h-0 flex-1 overflow-hidden bg-gray-50 dark:bg-gray-850"
+		data-testid="document-viewer-content"
+	>
 		{#if format === 'pdf' && candidateData}
 			<PDFViewer
 				data={pdfData}
@@ -414,12 +467,18 @@
 			>
 				<div class="space-y-3">
 					<div>{error}</div>
+					{#if downloadError}<div>{downloadError}</div>{/if}
 					<button
 						type="button"
-						class="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-gray-100 dark:text-gray-900"
-						on:click={() => scheduleLoad(true)}
+						class="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900"
+						disabled={downloading}
+						aria-busy={downloading}
+						on:click={() => (tooLarge ? downloadOriginal() : scheduleLoad(true))}
 					>
-						{$i18n.t('Try again')}
+						{#if downloading}<Spinner className="size-4" />{:else if tooLarge}<Download
+								className="size-4"
+							/>{/if}
+						{$i18n.t(tooLarge ? 'Download' : 'Try again')}
 					</button>
 				</div>
 			</div>
@@ -428,9 +487,20 @@
 				role="status"
 				class="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs text-red-700 shadow-sm dark:bg-red-950/90 dark:text-red-200"
 			>
-				<span>{error}</span>
-				<button type="button" class="font-semibold underline" on:click={() => scheduleLoad(true)}>
-					{$i18n.t('Try again')}
+				<span
+					>{error}{#if downloadError}<br />{downloadError}{/if}</span
+				>
+				<button
+					type="button"
+					class="inline-flex shrink-0 items-center gap-1 font-semibold underline disabled:opacity-50"
+					disabled={downloading}
+					aria-busy={downloading}
+					on:click={() => (tooLarge ? downloadOriginal() : scheduleLoad(true))}
+				>
+					{#if downloading}<Spinner className="size-3.5" />{:else if tooLarge}<Download
+							className="size-3.5"
+						/>{/if}
+					{$i18n.t(tooLarge ? 'Download' : 'Try again')}
 				</button>
 			</div>
 		{/if}
@@ -438,6 +508,10 @@
 </div>
 
 <style>
+	.document-viewer :global(*::-webkit-scrollbar-corner) {
+		background: transparent;
+	}
+
 	.document-viewer :global(.cm-editor),
 	.document-viewer :global(.cm-gutters) {
 		background: transparent;

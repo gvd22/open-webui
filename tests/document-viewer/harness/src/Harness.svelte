@@ -8,7 +8,6 @@
 		buildWorkspaceTabs,
 		getWorkspaceContentId,
 		getWorkspaceFileId,
-		limitWorkspaceFileContents,
 		upsertWorkspaceFileContent,
 		type WorkspaceFileContent,
 		type WorkspaceTab
@@ -19,17 +18,23 @@
 	setContext('i18n', i18n);
 
 	const format = new URLSearchParams(window.location.search).get('format') ?? 'pdf';
+	const fileId = new URLSearchParams(window.location.search).get('fileId');
 	const targetPage =
 		Number(new URLSearchParams(window.location.search).get('targetPage')) || undefined;
 	const runtimeSessionId =
 		localStorage.getItem('viewer-runtime-session') ?? `viewer-browser-test-${crypto.randomUUID()}`;
 	localStorage.setItem('viewer-runtime-session', runtimeSessionId);
 	const unsupportedExtension = new URLSearchParams(window.location.search).get('unsupported');
-	const documents: Record<string, { path: string; format: 'pdf' | 'docx' | 'pptx' | 'csv' }> = {
+	const documents: Record<
+		string,
+		{ path: string; format: 'pdf' | 'docx' | 'pptx' | 'csv' | 'xlsx' | 'xls' }
+	> = {
 		pdf: { path: '/mnt/uploads/basic.pdf', format: 'pdf' },
 		docx: { path: '/mnt/uploads/basic.docx', format: 'docx' },
 		pptx: { path: '/mnt/uploads/basic.pptx', format: 'pptx' },
-		csv: { path: '/mnt/uploads/basic.csv', format: 'csv' }
+		csv: { path: '/mnt/uploads/basic.csv', format: 'csv' },
+		xlsx: { path: '/mnt/uploads/basic.xlsx', format: 'xlsx' },
+		xls: { path: '/mnt/uploads/basic.xls', format: 'xls' }
 	};
 	const document = documents[format];
 	const workspacePanels = new URLSearchParams(window.location.search).has('workspace-panels');
@@ -47,11 +52,9 @@
 			: unsupportedPath
 				? [buildWorkspaceFileContent(unsupportedPath)]
 				: document
-					? [buildWorkspaceFileContent(document.path, targetPage)]
+					? [buildWorkspaceFileContent(document.path, targetPage, fileId ?? undefined)]
 					: [];
 	let selectedIndex = 0;
-	let openedFileRecency: string[] = [];
-	let evictedFileIds: string[] = [];
 	$: selectedContent = workspaceContents[selectedIndex];
 	$: selectedContentId = selectedContent
 		? getWorkspaceContentId(selectedContent, selectedIndex)
@@ -87,16 +90,7 @@
 	};
 	const openWorkspaceFile = (path: string) => {
 		const id = getWorkspaceFileId(path);
-		const nextContents = upsertWorkspaceFileContent(workspaceContents, path);
-		const limited = limitWorkspaceFileContents(
-			nextContents,
-			[...openedFileRecency.filter((candidate) => candidate !== id), id],
-			selectedContentId,
-			4
-		);
-		workspaceContents = limited.contents;
-		openedFileRecency = limited.recency;
-		evictedFileIds = [...evictedFileIds, ...limited.evictedIds];
+		workspaceContents = upsertWorkspaceFileContent(workspaceContents, path);
 		selectedIndex = workspaceContents.findIndex(
 			(content, index) => getWorkspaceContentId(content, index) === id
 		);
@@ -131,7 +125,6 @@
 		</div>
 		<output data-testid="lru-open-file-ids">{openFileIds.join(',')}</output>
 		<output data-testid="lru-active-file-id">{selectedContentId}</output>
-		<output data-testid="lru-evicted-file-ids">{evictedFileIds.join(',')}</output>
 	{/if}
 	{#if workspacePanels || workspaceLru || unsupportedPath}
 		<WorkspaceTabs

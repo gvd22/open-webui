@@ -162,7 +162,7 @@
 
 <li class="group" data-file-row>
 	<div
-		class="file-entry w-full min-w-0 flex items-center rounded-md pr-2.5 transition-colors duration-100
+		class="file-entry w-full min-w-0 flex items-center rounded-md pr-2 transition-colors duration-100
 			{selected || menuOpen ? 'bg-gray-100 dark:bg-white/10' : 'hover:bg-gray-100 dark:hover:bg-white/5'}
 			{dragOverFolder
 			? 'bg-blue-50 dark:bg-blue-500/10 ring-1 ring-blue-400 dark:ring-blue-500 ring-inset'

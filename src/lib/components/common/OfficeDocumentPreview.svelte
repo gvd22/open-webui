@@ -78,7 +78,10 @@
 
 			if (candidateFormat === 'xlsx') await validateSpreadsheetArchive(candidate);
 			const XLSX = await import('xlsx');
-			workbook = XLSX.read(new Uint8Array(candidate), { type: 'array' });
+			workbook = XLSX.read(new Uint8Array(candidate), {
+				type: 'array',
+				raw: candidateFormat === 'csv'
+			});
 			if (currentGeneration !== generation) return;
 			sheetNames = workbook.SheetNames;
 			if (sheetNames.length === 0) throw new Error('Workbook contains no sheets');
@@ -175,21 +178,24 @@
 
 <style>
 	.office-sheet {
-		padding: 0.75rem;
+		isolation: isolate;
 		font-family: inherit;
 		font-size: 0.8125rem;
 		line-height: 1.5;
 	}
 	.office-sheet :global(table) {
 		width: max-content;
-		border-collapse: collapse;
+		border-collapse: separate;
+		border-spacing: 0;
 		font: inherit;
 	}
 	.office-sheet :global(td),
 	.office-sheet :global(th) {
 		min-width: 8rem;
 		max-width: 28rem;
-		border: 1px solid rgba(128, 128, 128, 0.2);
+		border: 0;
+		border-right: 1px solid rgba(128, 128, 128, 0.2);
+		border-bottom: 1px solid rgba(128, 128, 128, 0.2);
 		padding: 0.4rem 0.75rem;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
@@ -208,6 +214,7 @@
 	}
 	.office-sheet :global(th.excel-col-hdr) {
 		top: 0;
+		z-index: 2;
 	}
 	.office-sheet :global(.excel-row-num) {
 		left: 0;
@@ -215,7 +222,7 @@
 	}
 	.office-sheet :global(thead .excel-row-num) {
 		top: 0;
-		z-index: 2;
+		z-index: 3;
 	}
 	:global(.dark) .office-sheet :global(th.excel-col-hdr),
 	:global(.dark) .office-sheet :global(.excel-row-num) {

@@ -17,7 +17,6 @@ import {
 	isKeyboardActivationClick,
 	isWorkspaceOpenRequestForChat,
 	isWorkspaceDocumentPath,
-	limitWorkspaceFileContents,
 	moveWorkspaceContent,
 	orderWorkspaceContents,
 	shouldResetWorkspaceForChatChange,
@@ -139,26 +138,16 @@ describe('Pyodide workspace', () => {
 		expect(shouldShowWorkspaceTabs([buildWorkspaceFilesContent()])).toBe(true);
 	});
 
-	it('keeps at most four open documents without evicting the active one', () => {
+	it('keeps every opened document without duplicate tabs', () => {
 		let contents: WorkspaceFileContent[] = [];
-		let recency: string[] = [];
-		const activeId = 'workspace:file:/mnt/uploads/0.pdf';
 		for (let index = 0; index < 10; index += 1) {
 			const path = `/mnt/uploads/${index}.pdf`;
-			const id = `workspace:file:${path}`;
 			contents = upsertWorkspaceFileContent(contents, path);
-			recency = [...recency.filter((candidate) => candidate !== id), id];
-			const limited = limitWorkspaceFileContents(contents, recency, activeId, 4);
-			expect(limited.evictedIds).not.toContain(activeId);
-			contents = limited.contents;
-			recency = limited.recency;
 		}
-		expect(contents.map((content) => content.path)).toEqual([
-			'/mnt/uploads/0.pdf',
-			'/mnt/uploads/7.pdf',
-			'/mnt/uploads/8.pdf',
-			'/mnt/uploads/9.pdf'
-		]);
+		contents = upsertWorkspaceFileContent(contents, '/mnt/uploads/0.pdf');
+		expect(contents.map((content) => content.path)).toEqual(
+			Array.from({ length: 10 }, (_, index) => `/mnt/uploads/${index}.pdf`)
+		);
 	});
 
 	it('updates one open document tab and preserves target pages', () => {

@@ -45,7 +45,6 @@
 		buildWorkspaceFileContent,
 		buildWorkspaceSourceContents,
 		upsertWorkspaceFileContent,
-		limitWorkspaceFileContents,
 		getWorkspaceDocumentFormatForViewer,
 		getWorkspaceFileOpenTarget,
 		isWorkspaceOpenRequestForChat,
@@ -74,8 +73,6 @@
 	let selectedContentIdx = 0;
 	let closedWorkspaceContentIds = new Set<string>();
 	let activeFileContextKey = '';
-	let openedFileRecency: string[] = [];
-	let activeOpenedFileId = '';
 	let queuedFileFocusId = '';
 	let fileFocusQueued = false;
 	let workspacePersistenceWarningShown = false;
@@ -109,9 +106,6 @@
 		openedFileContents = (state?.openedFiles ?? []).map((file) =>
 			buildWorkspaceFileContent(file.path, null, file.fileId)
 		);
-		openedFileRecency = openedFileContents.map((content, index) =>
-			getWorkspaceContentId(content, index)
-		);
 	};
 	$: selectedContent = contents[selectedContentIdx];
 	$: selectedContentId = selectedContent
@@ -124,7 +118,6 @@
 
 	let copied = false;
 	let iframeElement: HTMLIFrameElement;
-	const MAX_OPEN_DOCUMENTS = 4;
 	$: if (
 		workspaceStateRestored &&
 		showFiles &&
@@ -261,46 +254,18 @@
 			return false;
 		}
 		const id = `workspace:file:${path}`;
-		const nextContents = upsertWorkspaceFileContent(
+		openedFileContents = upsertWorkspaceFileContent(
 			openedFileContents,
 			path,
 			options.page,
 			options.fileId
 		);
-		const nextRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
-		const limited = limitWorkspaceFileContents(
-			nextContents,
-			nextRecency,
-			selectedContent?.type === 'workspace-file' ? selectedContentId : '',
-			MAX_OPEN_DOCUMENTS
-		);
-		openedFileContents = limited.contents;
-		openedFileRecency = limited.recency;
-		workspaceContentOrder = workspaceContentOrder.filter(
-			(candidate) => !limited.evictedIds.includes(candidate)
-		);
-		for (const evictedId of limited.evictedIds) {
-			const evicted = nextContents.find(
-				(content, index) => getWorkspaceContentId(content, index) === evictedId
-			);
-			if (evicted) {
-				toast.message(
-					$i18n.t('Closed {{name}} to keep the workspace responsive.', {
-						name: evicted.title ?? 'document'
-					})
-				);
-			}
-		}
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds);
 		closedWorkspaceContentIds.delete(id);
 		rebuildWorkspaceContents();
 		persistWorkspaceState();
 		scheduleWorkspaceFileFocus(id);
 		return true;
-	}
-
-	function touchOpenedFile(id: string) {
-		openedFileRecency = [...openedFileRecency.filter((candidate) => candidate !== id), id];
 	}
 
 	function scheduleWorkspaceFileFocus(id: string) {
@@ -348,7 +313,6 @@
 			? getWorkspaceContentId(selectedContent, selectedContentIdx)
 			: '';
 		closedWorkspaceContentIds = new Set(closedWorkspaceContentIds).add(tab.id);
-		openedFileRecency = openedFileRecency.filter((id) => id !== tab.id);
 		syncVisibleWorkspaceContents();
 
 		if (contents.length === 0) {
@@ -494,11 +458,6 @@
 			rebuildWorkspaceContents();
 		}
 		workspaceChatContextId.set(nextWorkspaceChatId);
-	}
-
-	$: if (selectedContentId !== activeOpenedFileId) {
-		activeOpenedFileId = selectedContentId;
-		if (selectedContent?.type === 'workspace-file') touchOpenedFile(selectedContentId);
 	}
 
 	$: rebuildWorkspaceContents(showFiles, documentViewerEnabled);

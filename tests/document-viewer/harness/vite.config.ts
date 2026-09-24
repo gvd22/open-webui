@@ -56,6 +56,16 @@ const viewerRuntime = (): Plugin => ({
 	configureServer(server) {
 		server.middlewares.use(async (request, response, next) => {
 			const url = new URL(request.url ?? '/', 'http://viewer.test');
+			if (url.pathname === '/api/v1/files/oversized-test/content') {
+				const bytes = Buffer.alloc(16 * 1024 * 1024 + 1, 'x');
+				response.setHeader('Content-Type', 'text/csv');
+				response.setHeader('Content-Length', bytes.byteLength);
+				if (url.searchParams.get('attachment') === 'true') {
+					response.setHeader('Content-Disposition', 'attachment; filename="basic.csv"');
+				}
+				response.end(bytes);
+				return;
+			}
 			if (url.pathname === '/__viewer-runtime' && request.method === 'POST') {
 				const chunks: Buffer[] = [];
 				for await (const chunk of request) chunks.push(Buffer.from(chunk));

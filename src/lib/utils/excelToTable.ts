@@ -35,11 +35,16 @@ export interface ExcelTableResult {
 
 /**
  * Render a worksheet as an HTML table string.
- * Uses sheet_to_json with header:1 for a raw 2D array.
+ * Uses stored cell formats for display, without changing the source values.
  */
 export async function excelToTable(worksheet: WorkSheet): Promise<ExcelTableResult> {
 	const XLSX = await import('xlsx');
-	const rows: unknown[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+	const rows: unknown[][] = XLSX.utils.sheet_to_json(worksheet, {
+		header: 1,
+		defval: '',
+		raw: false
+	});
+	const origin = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1').s;
 
 	if (rows.length === 0) {
 		return {
@@ -72,7 +77,8 @@ export async function excelToTable(worksheet: WorkSheet): Promise<ExcelTableResu
 		parts.push(`<td class="excel-row-num">${r + 1}</td>`);
 		for (let c = 0; c < colCount; c++) {
 			const val = c < row.length ? row[c] : '';
-			const isNum = typeof val === 'number';
+			const cell = worksheet[XLSX.utils.encode_cell({ r: origin.r + r, c: origin.c + c })];
+			const isNum = cell?.t === 'n';
 			parts.push(`<td${isNum ? ' class="excel-num"' : ''}>${esc(val)}</td>`);
 		}
 		parts.push('</tr>');

@@ -674,7 +674,7 @@
 		{#if !loading && !error && !selectedFile}
 			{#if visibleEntries.length > 0 || creatingFolder || creatingFile}
 				<div class="min-h-0 flex-1 overflow-y-auto">
-					<div class="mx-auto w-full max-w-3xl px-4 pt-2 pb-4">
+					<div class="w-full px-1 pt-2 pb-4">
 						{#if creatingFolder}
 							<div class="flex min-h-7 items-center gap-2.5 px-2.5 py-1">
 								<Folder className="size-4 shrink-0 text-blue-400 dark:text-blue-300" />

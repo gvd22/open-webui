@@ -99,11 +99,17 @@
 						{$i18n.t('Files')}
 					</div>
 					{#each outputs as file (file.path)}
-						<button type="button" on:click={() => openFile(file)} title={file.path}>
+						<button
+							type="button"
+							class="h-auto! min-h-11 py-1.5!"
+							data-testid="workspace-output-menu-file"
+							on:click={() => openFile(file)}
+							title={file.path}
+						>
 							<FileTypeIcon name={file.name} type="file" size={16} />
 							<span class="min-w-0 flex-1 text-left">
-								<span class="block truncate">{file.name}</span>
-								<span class="block text-xs text-gray-500 dark:text-gray-400"
+								<span class="block truncate leading-4">{file.name}</span>
+								<span class="block text-xs leading-4 text-gray-500 dark:text-gray-400"
 									>{$i18n.t(
 										getWorkspaceOutputStorageLabel(
 											file,

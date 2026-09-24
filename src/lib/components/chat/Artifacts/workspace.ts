@@ -157,38 +157,6 @@ export const upsertWorkspaceFileContent = (
 	);
 };
 
-export const limitWorkspaceFileContents = <T extends WorkspaceContent>(
-	contents: T[],
-	recency: string[],
-	activeId: string,
-	maximum: number
-) => {
-	const ids = contents.map((content, index) => getWorkspaceContentId(content, index));
-	const contentIds = new Set(ids);
-	const orderedIds = [
-		...new Set(recency.filter((id) => contentIds.has(id))),
-		...ids.filter((id) => !recency.includes(id))
-	];
-	const remainingIds = new Set(ids);
-	const evictedIds: string[] = [];
-
-	for (const id of orderedIds) {
-		if (remainingIds.size <= Math.max(1, maximum)) break;
-		if (id !== activeId) {
-			remainingIds.delete(id);
-			evictedIds.push(id);
-		}
-	}
-
-	return {
-		contents: contents.filter((content, index) =>
-			remainingIds.has(getWorkspaceContentId(content, index))
-		),
-		recency: orderedIds.filter((id) => remainingIds.has(id)),
-		evictedIds
-	};
-};
-
 export const getWorkspaceFileRefreshAction = (
 	changedPaths: string[] | undefined,
 	path: string,

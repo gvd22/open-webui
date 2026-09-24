@@ -21,6 +21,25 @@ const storage = (initial: Record<string, string> = {}): Storage => {
 };
 
 describe('workspace session persistence', () => {
+	it('restores more than four open files without losing their saved references', () => {
+		const target = storage();
+		const openedFiles = Array.from({ length: 10 }, (_, index) => ({
+			path: `/report-${index}.pdf`,
+			fileId: `file-${index}`
+		}));
+		writeWorkspaceState(
+			'chat-many-files',
+			{
+				order: openedFiles.map(({ path }) => `workspace:file:${path}`),
+				closed: [],
+				filesOpened: true,
+				openedFiles
+			},
+			target
+		);
+		expect(readWorkspaceState('chat-many-files', target)?.openedFiles).toEqual(openedFiles);
+	});
+
 	it('round-trips bounded per-chat state', () => {
 		const target = storage();
 		expect(

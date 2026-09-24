@@ -58,7 +58,7 @@ export const readWorkspaceState = (
 						const file = normalizeOpenedFile(item);
 						return file ? [file] : [];
 					})
-					.slice(-4)
+					.slice(-100)
 			: [];
 
 		return {

@@ -727,10 +727,20 @@
 						{#if message?.files && message.files?.filter( (f) => ['image', 'file'].includes(f.type) ).length > 0}
 							<div
 								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+								class:max-w-[40rem]={message.files.every(
+									(file) => file.source === 'workspace-output'
+								)}
 								dir={$settings?.chatDirection ?? 'auto'}
 							>
 								{#each message.files.filter((f) => ['image', 'file'].includes(f.type)) as file}
-									<div>
+									<div
+										class={file.source === 'workspace-output' &&
+										file.workspace_path &&
+										!(file?.content_type ?? '').startsWith('image/') &&
+										file.type !== 'image'
+											? 'min-w-0 w-full max-w-[19.5rem] flex-[0_1_19.5rem]'
+											: ''}
+									>
 										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											<Image src={file.url} alt={file.name || $i18n.t('Generated Image')} />
 										{:else if file.source === 'workspace-output' && file.workspace_path}

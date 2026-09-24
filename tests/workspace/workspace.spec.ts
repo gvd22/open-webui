@@ -881,7 +881,13 @@ test.describe('seeded workspace lifecycle', () => {
 				await dismissReleaseNotes(page);
 				await reopen('E2E Canvas Alpha');
 				await workspace.getByRole('button', { name: 'Show changes', exact: true }).click();
+				const undone = page.waitForResponse(
+					(response) =>
+						response.url().endsWith(`/canvas/${CANVAS_ALPHA}/undo-ai`) &&
+						response.request().method() === 'POST'
+				);
 				await workspace.getByRole('button', { name: 'Undo AI change', exact: true }).click();
+				expect((await undone).ok()).toBe(true);
 				const data = await readChat(page.request, changed);
 				const doc =
 					kind === 'canvas'
@@ -1207,6 +1213,51 @@ test.describe('seeded workspace lifecycle', () => {
 	});
 });
 
+test('restores ten file tabs after reload and remembers a closed tab', async ({ page }) => {
+	const seeded = await seedWorkspaceChat(page.request);
+	try {
+		await openSeededWorkspace(page, seeded);
+		const paths = Array.from({ length: 10 }, (_, index) => `/mnt/uploads/reload-${index}.txt`);
+		await page.evaluate(
+			({ chatId, paths }) => {
+				localStorage.setItem(
+					`open-webui.workspace.tabs.v2:${chatId}`,
+					JSON.stringify({
+						version: 2,
+						filesOpened: true,
+						closed: [],
+						order: paths.map((path) => `workspace:file:${path}`),
+						openedFiles: paths.map((path) => ({ path }))
+					})
+				);
+			},
+			{ chatId: seeded.chatId, paths }
+		);
+		const reopen = async () => {
+			await page.reload();
+			await dismissReleaseNotes(page);
+			await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+			await page
+				.getByRole('menu')
+				.getByRole('button', { name: 'E2E Canvas Alpha', exact: true })
+				.click();
+		};
+		await reopen();
+		const fileTabs = page.getByRole('tab', { name: /^reload-\d+\.txt$/ });
+		await expect(fileTabs).toHaveCount(10);
+		await page.getByRole('button', { name: 'Close: reload-0.txt', exact: true }).click();
+		await expect(fileTabs).toHaveCount(9);
+		await reopen();
+		await expect(fileTabs).toHaveCount(9);
+		await expect(page.getByRole('tab', { name: 'reload-0.txt', exact: true })).toHaveCount(0);
+		await expect(page.getByRole('tab', { name: 'Files', exact: true })).toBeVisible();
+	} finally {
+		await page.request.delete(`/api/v1/chats/${seeded.chatId}`, {
+			headers: authHeaders(seeded.token)
+		});
+	}
+});
+
 test('uploads a CSV through the visible composer chooser without a managed Terminal', async ({
 	page
 }) => {
@@ -1269,6 +1320,23 @@ test('opens and reopens Files in a new session without a page reload', async ({ 
 	await page.getByRole('button', { name: 'Workspace', exact: true }).click();
 	await expect(page.getByRole('tab', { name: 'Files', exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Close: Files', exact: true })).toHaveCount(0);
+	const filesTab = page.getByRole('tab', { name: 'Files', exact: true });
+	await expect(filesTab).toHaveText('');
+	await expect(filesTab).not.toHaveAttribute('data-workspace-id');
+	const filesBounds = await filesTab.boundingBox();
+	const headerBounds = await page.getByTestId('workspace-tabs').boundingBox();
+	expect(filesBounds!.width).toBe(40);
+	expect(filesBounds!.x).toBe(headerBounds!.x);
+	await filesTab.focus();
+	await page.keyboard.press('ArrowRight');
+	await expect(filesTab).toBeFocused();
+	await filesTab.evaluate((element) => (element as HTMLElement).blur());
+	await page.screenshot({ path: '.tmp/workspace-files-edge-light.png' });
+	await page.evaluate(() => {
+		document.documentElement.classList.remove('light');
+		document.documentElement.classList.add('dark');
+	});
+	await page.screenshot({ path: '.tmp/workspace-files-edge-dark.png' });
 	await expect
 		.poll(() => page.evaluate(() => (window as any).__workspacePageSentinel))
 		.toBe(sentinel);
@@ -1319,13 +1387,22 @@ test('keeps Files rows inset and stable through focus and menu selection', async
 			const bounds = await files.boundingBox();
 			const before = await row.boundingBox();
 			expect(before!.height).toBe(28);
-			expect(before!.x - bounds!.x).toBeGreaterThanOrEqual(16);
-			expect(bounds!.x + bounds!.width - before!.x - before!.width).toBeGreaterThanOrEqual(16);
+			expect(before!.x - bounds!.x).toBe(4);
+			expect(bounds!.x + bounds!.width - before!.x - before!.width).toBe(4);
 			expect(before!.y - bounds!.y).toBe(44);
 			const label = row.getByTitle(name, { exact: true });
 			const labelBefore = await label.boundingBox();
 			const open = row.getByRole('button', { name: new RegExp(name) });
 			const more = row.locator('button').last();
+			const home = await files.getByRole('button', { name: 'Home', exact: true }).boundingBox();
+			const icon = await open.locator('svg').first().boundingBox();
+			expect(icon!.x).toBe(home!.x + 4);
+			const actions = await files
+				.getByRole('button', { name: 'Actions', exact: true })
+				.last()
+				.boundingBox();
+			const moreBounds = await more.boundingBox();
+			expect(moreBounds!.x + moreBounds!.width / 2).toBe(actions!.x + actions!.width / 2);
 			await open.focus();
 			await open.press('Tab');
 			await expect(more).toBeFocused();
@@ -1349,6 +1426,9 @@ test('keeps Files rows inset and stable through focus and menu selection', async
 			expect(await files.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
 				true
 			);
+			await files.screenshot({
+				path: `.tmp/files-alignment-${width}-${dark ? 'dark' : 'light'}.png`
+			});
 		}
 	}
 });
@@ -1414,7 +1494,18 @@ test('reopens a durable output card after its Pyodide file is no longer catalogu
 										status: 'uploaded',
 										source: 'workspace-output',
 										workspace_path: workspacePath
-									}
+									},
+									...[1, 2, 3].map((index) => ({
+										type: 'file',
+										id: fileId,
+										url: fileId,
+										name: `additional-long-output-document-${index}.csv`,
+										content_type: 'text/csv',
+										size: 4,
+										status: 'uploaded',
+										source: 'workspace-output',
+										workspace_path: `/mnt/uploads/additional-${index}.csv`
+									}))
 								]
 							}
 						}
@@ -1430,10 +1521,78 @@ test('reopens a durable output card after its Pyodide file is no longer catalogu
 		await page.addInitScript((value) => localStorage.setItem('token', value), token);
 		await page.goto(`/c/${chatId}`);
 		await dismissReleaseNotes(page);
+		const chips = page.getByTestId('workspace-output-chip');
+		await expect(chips).toHaveCount(4);
+		for (const width of [1440, 390]) {
+			await page.setViewportSize({ width, height: 900 });
+			const boxes = await chips.evaluateAll((elements) =>
+				elements.map((element) => {
+					const { x, y, width, height } = element.getBoundingClientRect();
+					return { x, y, width, height };
+				})
+			);
+			for (const box of boxes) {
+				expect(box.height).toBe(36);
+				expect(box.x + box.width).toBeLessThanOrEqual(width);
+			}
+			expect(boxes[1].y === boxes[0].y).toBe(width === 1440);
+			expect(boxes[2].y).toBeGreaterThan(boxes[0].y);
+			await page.screenshot({ path: `.tmp/output-chips-${width}.png` });
+		}
+		await page.setViewportSize({ width: 1440, height: 900 });
 		await page.getByRole('button', { name: `Open: ${name}`, exact: true }).click();
 
 		await expect(page.getByRole('tab', { name, exact: true })).toBeVisible();
 		await expect(page.getByRole('tabpanel', { name })).toContainText('x');
+		// Populate only this page's menu; the fresh-page reopen below keeps an empty catalog.
+		await page.route(`**/api/v1/chats/${chatId}`, async (route) => {
+			const response = await route.fetch();
+			const data = await response.json();
+			data.chat._workspace_outputs = [
+				workspacePath,
+				...[1, 2, 3].map((index) => `/mnt/uploads/additional-long-output-document-${index}.csv`)
+			].map((path) => ({ path, fileId, updatedAt: 1, persistedAt: 1 }));
+			await route.fulfill({ response, json: data });
+		});
+		await page.reload();
+		await dismissReleaseNotes(page);
+		for (const width of [1440, 390]) {
+			await page.setViewportSize({ width, height: 900 });
+			await page.getByRole('button', { name: 'Outputs', exact: true }).last().click();
+			const rows = page.getByTestId('workspace-output-menu-file');
+			await expect(rows).toHaveCount(4);
+			await expect
+				.poll(async () => (await rows.first().boundingBox())?.height ?? 0)
+				.toBeGreaterThanOrEqual(44);
+			const layout = await rows.evaluateAll((elements) =>
+				elements.map((element) => {
+					const row = element.getBoundingClientRect();
+					const lines = element.querySelectorAll('span.block');
+					const title = lines[0].getBoundingClientRect();
+					const status = lines[1].getBoundingClientRect();
+					return {
+						top: row.top,
+						bottom: row.bottom,
+						height: row.height,
+						titleTop: title.top,
+						titleBottom: title.bottom,
+						statusTop: status.top,
+						statusBottom: status.bottom,
+						right: row.right
+					};
+				})
+			);
+			for (const [index, row] of layout.entries()) {
+				expect(row.height).toBeGreaterThanOrEqual(44);
+				expect(row.titleTop).toBeGreaterThanOrEqual(row.top);
+				expect(row.statusTop).toBeGreaterThanOrEqual(row.titleBottom);
+				expect(row.statusBottom).toBeLessThanOrEqual(row.bottom);
+				expect(row.right).toBeLessThanOrEqual(width);
+				if (index > 0) expect(row.top).toBeGreaterThanOrEqual(layout[index - 1].bottom);
+			}
+			await page.screenshot({ path: `.tmp/output-menu-${width}.png` });
+			await page.keyboard.press('Escape');
+		}
 		const url = page.url();
 		await page.close();
 		const reopened = await browser.newPage();
