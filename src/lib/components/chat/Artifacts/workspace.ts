@@ -54,10 +54,6 @@ export type WorkspaceModelFocus = {
 export const WORKSPACE_FILES_ID = 'workspace:files';
 export const getWorkspaceFileId = (path: string) => `workspace:file:${path}`;
 
-// Pointer actions run on mousedown so a Svelte rerender cannot swallow the click.
-// Keyboard activation has no preceding mousedown and reports click detail 0.
-export const isKeyboardActivationClick = (detail: number) => detail === 0;
-
 export const shouldResetWorkspaceForChatChange = (previousId: string, nextId: string) =>
 	Boolean(previousId && previousId !== nextId);
 

@@ -17,7 +17,6 @@
 		workspaceChatContextId,
 		workspaceOpenRequestId,
 		workspaceActiveFile,
-		workspaceOpenFilePaths,
 		showFileNavPath
 	} from '$lib/stores';
 	import { copyToClipboard } from '$lib/utils';
@@ -173,12 +172,6 @@
 
 	function syncVisibleWorkspaceContents() {
 		const newContents = getVisibleWorkspaceContents(sourceContents, closedWorkspaceContentIds);
-		workspaceOpenFilePaths.set(
-			newContents
-				.filter((content) => content.type === 'workspace-file')
-				.map((content) => content.path)
-		);
-
 		if (newContents.length === 0) {
 			contents = [];
 			selectedContentIdx = 0;
@@ -448,7 +441,6 @@
 
 	onDestroy(() => {
 		workspaceActiveFile.set(null);
-		workspaceOpenFilePaths.set([]);
 	});
 
 	$: {

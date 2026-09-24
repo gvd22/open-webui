@@ -66,27 +66,6 @@
 		markExternalDocumentUpdate();
 	}
 
-	const updateWorkspaceTitle = (nextTitle: string) => {
-		const isManualChange = !isApplyingExternalDocument && nextTitle !== linkedTitle;
-		linkedTitle = nextTitle;
-		if (!isManualChange) {
-			return;
-		}
-		artifactContents.update((items) =>
-			(items ?? []).map((item) =>
-				item.type === 'canvas-note' && (item.canvasId === canvasId || item.noteId === noteId)
-					? {
-							...item,
-							title: nextTitle,
-							titleEdited: true,
-							canUndoAiUpdate: isManualChange ? false : item.canUndoAiUpdate
-						}
-					: item
-			)
-		);
-		queueWorkspaceSave();
-	};
-
 	const saveCanvasContext = async (documentToSave: {
 		targetChatId: string;
 		canvasId: string;
@@ -284,7 +263,6 @@
 		<NoteEditor
 			id={noteId}
 			canvas={true}
-			onTitleChange={updateWorkspaceTitle}
 			onDocumentChange={updateWorkspaceDocument}
 			onUnavailable={markLinkedNoteUnavailable}
 		>

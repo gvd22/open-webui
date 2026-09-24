@@ -4,7 +4,7 @@
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
-	import { decodeRuntimeText, readWorkspaceText } from '$lib/pyodide/readWorkspaceText';
+	import { readWorkspaceText } from '$lib/pyodide/readWorkspaceText';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -41,7 +41,6 @@
 		showFileNavPath,
 		showFileNavDir,
 		workspaceFileUpdate,
-		workspaceOpenFilePaths,
 		pyodideWorker,
 		desktopEvent
 	} from '$lib/stores';
@@ -79,7 +78,6 @@
 		removeAllDetails
 	} from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
-	import { isWorkspaceDocumentPath } from '$lib/components/chat/Artifacts/workspace';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';

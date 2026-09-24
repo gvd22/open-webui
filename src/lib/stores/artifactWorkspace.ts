@@ -27,7 +27,6 @@ export type WorkspaceOutputFile = {
 export const workspaceFileUpdate: Writable<WorkspaceFileUpdate | null> = writable(null);
 export const workspaceActiveFile: Writable<{ path: string; format: string } | null> =
 	writable(null);
-export const workspaceOpenFilePaths: Writable<string[]> = writable([]);
 export const workspaceOutputFiles: Writable<WorkspaceOutputFile[]> = writable([]);
 export const workspaceOutputSaveStates = writable<
 	Record<string, 'saving' | 'failed' | 'too-large'>

@@ -14,7 +14,6 @@ import {
 	getWorkspaceFileRefreshAction,
 	getWorkspaceFileUpdateAction,
 	getWorkspaceModelFocus,
-	isKeyboardActivationClick,
 	isWorkspaceOpenRequestForChat,
 	isWorkspaceDocumentPath,
 	moveWorkspaceContent,
@@ -130,8 +129,6 @@ describe('Pyodide workspace', () => {
 	});
 
 	it('keeps workspace state and tabs stable', () => {
-		expect(isKeyboardActivationClick(0)).toBe(true);
-		expect(isKeyboardActivationClick(1)).toBe(false);
 		expect(shouldResetWorkspaceForChatChange('', 'chat-1')).toBe(false);
 		expect(shouldResetWorkspaceForChatChange('chat-1', 'chat-2')).toBe(true);
 		expect(shouldShowWorkspaceTabs([])).toBe(false);

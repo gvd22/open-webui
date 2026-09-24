@@ -94,7 +94,6 @@
 
 	export let id: null | string = null;
 	export let canvas = false;
-	export let onTitleChange: (title: string) => void = () => {};
 	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
 	export let onUnavailable: () => void = () => {};
 
@@ -1070,7 +1069,6 @@ ${content}
 									type="text"
 									bind:value={note.title}
 									on:input={() => {
-										onTitleChange(note.title);
 										onDocumentChange({ title: note.title });
 									}}
 									placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
