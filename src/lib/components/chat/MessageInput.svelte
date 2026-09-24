@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import DOMPurify from 'dompurify';
 	import { toast } from 'svelte-sonner';
 
@@ -95,6 +96,7 @@
 
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
+	import TerminalMenu from './MessageInput/TerminalMenu.svelte';
 	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
 	import Component from '../icons/Component.svelte';
 	import PlusAlt from '../icons/PlusAlt.svelte';
@@ -195,6 +197,8 @@
 		authType?: string | null;
 	}[] = [];
 	export let oauthRedirectHandler: Function = () => {};
+
+	let showTerminalMenu = false;
 
 	export let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
 	export let onQueueSendNow: (id: string) => void = () => {};
@@ -801,7 +805,12 @@
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
 
 	// Clear selected terminal when model doesn't support terminal
-	$: if ($selectedTerminalId && selectedModelIds.length > 0 && terminalCapableModels.length === 0) {
+	$: if (
+		ENABLE_CHAT_TERMINALS &&
+		$selectedTerminalId &&
+		selectedModelIds.length > 0 &&
+		terminalCapableModels.length === 0
+	) {
 		selectedTerminalId.set(null);
 	}
 
@@ -856,7 +865,7 @@
 		servers: any[] | null = $terminalServers,
 		settingsValue: any = $settings
 	) => {
-		if (!selectedId) return null;
+		if (!ENABLE_CHAT_TERMINALS || !selectedId) return null;
 
 		const systemTerminal = (servers ?? []).find(
 			(t: any) => t.id && t.id === selectedId && t.config?.chat_uploads === 'filesystem'
@@ -2451,6 +2460,16 @@
 													</button>
 												</Tooltip>
 											{/each}
+
+											<!-- Terminal Server Selector -->
+											{#if ENABLE_CHAT_TERMINALS && showTerminalSelector}
+												<TerminalMenu
+													bind:show={showTerminalMenu}
+													disabled={generating ||
+														(!!history?.currentId &&
+															history.messages[history.currentId]?.done != true)}
+												/>
+											{/if}
 										</div>
 									</div>
 								</div>

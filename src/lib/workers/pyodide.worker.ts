@@ -1,6 +1,8 @@
 import { loadPyodide, type PyodideInterface } from 'pyodide';
 import {
 	getWorkspaceFileChanges,
+	MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
+	type WorkspaceOutputSnapshot,
 	isValidPyodideEntryName,
 	PYODIDE_WORKSPACE_ROOT,
 	requirePyodideWorkspacePath
@@ -234,23 +236,23 @@ function fsListWorkspaceOutputs(limit = 100): Map<string, string> {
 }
 
 function fsSnapshotWorkspaceOutputs(paths: string[]) {
-	const snapshots: { path: string; data: ArrayBuffer }[] = [];
+	const snapshots: WorkspaceOutputSnapshot[] = [];
 	let remainingBytes = MAX_OUTPUT_SNAPSHOT_BYTES;
 	for (const path of paths) {
 		try {
 			const stat = self.pyodide.FS.stat(path);
-			if (
-				self.pyodide.FS.isDir(stat.mode) ||
-				!Number.isSafeInteger(stat.size) ||
-				stat.size < 0 ||
-				stat.size > remainingBytes
-			) {
+			if (self.pyodide.FS.isDir(stat.mode) || !Number.isSafeInteger(stat.size) || stat.size < 0) {
 				continue;
 			}
+			if (stat.size > MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES) {
+				snapshots.push({ path, size: stat.size });
+				continue;
+			}
+			if (stat.size > remainingBytes) continue;
 			const data = fsRead(path);
 			if (data.byteLength > remainingBytes) continue;
 			remainingBytes -= data.byteLength;
-			snapshots.push({ path, data });
+			snapshots.push({ path, size: data.byteLength, data });
 		} catch {
 			// The path remains visible in Files even if its durable snapshot cannot be captured.
 		}
@@ -342,7 +344,7 @@ matplotlib.pyplot.show = show`);
 			workspaceDeletedFiles: workspaceFileChanges.deleted,
 			workspaceFileSnapshots
 		},
-		{ transfer: workspaceFileSnapshots.map(({ data }) => data) }
+		{ transfer: workspaceFileSnapshots.flatMap(({ data }) => (data ? [data] : [])) }
 	);
 }
 

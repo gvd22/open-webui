@@ -9,7 +9,15 @@ import {
 } from '$lib/stores';
 import { deleteFileById, uploadFile } from '$lib/apis/files';
 import { isTemporaryChatId } from '$lib/utils/chatId';
-import { readPyodideWorkerFile } from './DocumentViewer/pyodideFileRead';
+import {
+	assertDocumentSize,
+	DOCUMENT_TOO_LARGE_ERROR,
+	readPyodideWorkerFile
+} from './DocumentViewer/pyodideFileRead';
+import {
+	MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
+	type WorkspaceOutputSnapshot
+} from '$lib/pyodide/workspace';
 import {
 	createWorkspaceOutputCatalog,
 	createWorkspaceOutputFile,
@@ -30,7 +38,11 @@ export const createWorkspaceOutputPersistence = (
 ) => {
 	const outputSnapshotQueue = new Map<string, Promise<void>>();
 	const outputSnapshotVersions = new Map<string, number>();
-	const setSaveState = (key: string, version: number, state?: 'saving' | 'failed') => {
+	const setSaveState = (
+		key: string,
+		version: number,
+		state?: 'saving' | 'failed' | 'too-large'
+	) => {
 		if (outputSnapshotVersions.get(key) !== version) return;
 		workspaceOutputSaveStates.update((states) => {
 			const next = { ...states };
@@ -64,13 +76,16 @@ export const createWorkspaceOutputPersistence = (
 		path: string,
 		messageId: string | undefined,
 		expectedVersion: number,
-		snapshotData?: ArrayBuffer,
+		snapshot?: WorkspaceOutputSnapshot,
 		allowRuntimeRead = true
 	) => {
 		const key = `${chatContextId}\u0000${path}`;
 		const extension = path.split('.').pop()?.toLowerCase() ?? '';
 		const contentType = outputMimeTypes[extension] ?? 'application/octet-stream';
-		let data = snapshotData;
+		if (snapshot && snapshot.size > MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES) {
+			throw new Error(DOCUMENT_TOO_LARGE_ERROR);
+		}
+		let data = snapshot?.data;
 		if (data === undefined) {
 			if (!allowRuntimeRead) {
 				throw new Error('The execution-time output snapshot is unavailable.');
@@ -80,11 +95,12 @@ export const createWorkspaceOutputPersistence = (
 			data = await readPyodideWorkerFile(
 				worker,
 				path,
-				64 * 1024 * 1024,
+				MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
 				new AbortController().signal
 			);
 		}
 		if (outputSnapshotVersions.get(key) !== expectedVersion) return;
+		assertDocumentSize(data, MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES);
 		const name = path.split('/').filter(Boolean).at(-1) || `output.${extension || 'bin'}`;
 		const uploadedFile = await uploadFile(
 			localStorage.token,
@@ -152,7 +168,7 @@ export const createWorkspaceOutputPersistence = (
 		path: string,
 		messageId: string | undefined,
 		expectedVersion: number,
-		snapshotData?: ArrayBuffer,
+		snapshot?: WorkspaceOutputSnapshot,
 		allowRuntimeRead = true
 	) => {
 		const key = `${chatContextId}\u0000${path}`;
@@ -165,11 +181,18 @@ export const createWorkspaceOutputPersistence = (
 					path,
 					messageId,
 					expectedVersion,
-					snapshotData,
+					snapshot,
 					allowRuntimeRead
 				)
 			)
 			.catch((error) => {
+				if (
+					(error instanceof Error && error.message === DOCUMENT_TOO_LARGE_ERROR) ||
+					error?.code === 'workspace_output_too_large'
+				) {
+					setSaveState(key, expectedVersion, 'too-large');
+					return;
+				}
 				setSaveState(key, expectedVersion, 'failed');
 				console.error('Workspace output snapshot could not be saved', error);
 				if (get(chatId) === chatContextId) {
@@ -189,7 +212,7 @@ export const createWorkspaceOutputPersistence = (
 		path: string,
 		messageId?: string,
 		deleted = false,
-		snapshotData?: ArrayBuffer,
+		snapshot?: WorkspaceOutputSnapshot,
 		allowRuntimeRead = true
 	) => {
 		const key = `${chatContextId}\u0000${path}`;
@@ -202,7 +225,7 @@ export const createWorkspaceOutputPersistence = (
 				path,
 				messageId,
 				version,
-				snapshotData,
+				snapshot,
 				allowRuntimeRead
 			);
 		} else {

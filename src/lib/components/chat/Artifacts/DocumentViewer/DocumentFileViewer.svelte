@@ -204,12 +204,15 @@
 	};
 
 	const handlePreviewFailed = (event: CustomEvent<unknown>) => {
-		if (!getRenderedCandidate(event.detail)) return;
-		restoringAfterRenderFailure = Boolean(displayedData);
+		const rejectedCandidate = getRenderedCandidate(event.detail);
+		if (!rejectedCandidate) return;
+		const cause = (event.detail as { error?: unknown })?.error;
+		tooLarge = cause instanceof Error && cause.message === DOCUMENT_TOO_LARGE_ERROR;
+		restoringAfterRenderFailure = Boolean(displayedData && rejectedCandidate !== displayedData);
 		candidateData = displayedData;
-		error = displayedData
+		error = restoringAfterRenderFailure
 			? $i18n.t('The latest update could not be displayed. Showing the previous version.')
-			: $i18n.t('This document could not be opened.');
+			: getLoadError(cause);
 		loading = false;
 		refreshing = false;
 	};

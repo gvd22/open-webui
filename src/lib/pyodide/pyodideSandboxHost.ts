@@ -1,3 +1,5 @@
+import { MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES } from './workspace';
+
 type MessageListener = (event: MessageEvent) => void;
 type ErrorListener = (event: Event) => void;
 type QueuedMessage = { message: unknown; transfer: Transferable[] };
@@ -153,6 +155,7 @@ const sandboxScript = String.raw`
 
 	const outputExtensions = new Set(['csv', 'doc', 'docx', 'ods', 'odt', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx']);
 	const maxOutputSnapshotBytes = 64 * 1024 * 1024;
+	const maxOutputUploadBytes = ${MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES};
 
 	function listWorkspaceOutputs() {
 		const outputs = new Map();
@@ -182,12 +185,17 @@ const sandboxScript = String.raw`
 			try {
 				const safePath = requireWorkspacePath(path);
 				const stat = pyodide.FS.stat(safePath);
-				if (pyodide.FS.isDir(stat.mode) || !Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > remainingBytes) continue;
+				if (pyodide.FS.isDir(stat.mode) || !Number.isSafeInteger(stat.size) || stat.size < 0) continue;
+				if (stat.size > maxOutputUploadBytes) {
+					snapshots.push({ path: safePath, size: stat.size });
+					continue;
+				}
+				if (stat.size > remainingBytes) continue;
 				const bytes = pyodide.FS.readFile(safePath);
 				const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 				if (data.byteLength > remainingBytes) continue;
 				remainingBytes -= data.byteLength;
-				snapshots.push({ path: safePath, data: data });
+				snapshots.push({ path: safePath, size: data.byteLength, data: data });
 			} catch {}
 		}
 		return snapshots;
@@ -267,7 +275,7 @@ const sandboxScript = String.raw`
 			workspaceFiles: workspaceFiles,
 			workspaceDeletedFiles: workspaceDeletedFiles,
 			workspaceFileSnapshots: workspaceFileSnapshots
-		}, workspaceFileSnapshots.map(function (snapshot) { return snapshot.data; }));
+		}, workspaceFileSnapshots.filter(function (snapshot) { return snapshot.data; }).map(function (snapshot) { return snapshot.data; }));
 	}
 
 	async function handleMessage(data) {

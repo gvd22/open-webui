@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { dismissReleaseNotes } from './ui';
 
@@ -589,6 +590,90 @@ test.describe('seeded workspace lifecycle', () => {
 		await expect(page.getByRole('tab', { name: /^Terminal(?: \d+)?$/ })).toHaveCount(0);
 		await expect(page.getByRole('tab', { name: /^Browser(?: \d+)?$/ })).toHaveCount(0);
 	});
+
+	for (const width of [1280, 390]) {
+		test(`keeps restored upstream controls and terminal integrations dormant at ${width}px`, async ({
+			page
+		}) => {
+			await page.setViewportSize({ width, height: 900 });
+			const terminalUrl = 'https://disabled-terminal.test';
+			await page.addInitScript(
+				(url) => localStorage.setItem('selectedTerminalId', url),
+				terminalUrl
+			);
+			let terminalRequests = 0;
+			await page.route(`${terminalUrl}/**`, async (route) => {
+				terminalRequests++;
+				await route.fulfill({ json: { openapi: '3.1.0', paths: {} } });
+			});
+			await page.route('**/api/v1/users/user/settings*', async (route) => {
+				const response = await route.fetch();
+				const saved = await response.json();
+				await route.fulfill({
+					json: {
+						...saved,
+						ui: {
+							...saved.ui,
+							showUpdateToast: false,
+							terminalServers: [{ url: terminalUrl, name: 'Dormant terminal', enabled: true }]
+						}
+					}
+				});
+			});
+			// Keep the seeded preference local to this browser test.
+			await page.route('**/api/v1/users/user/settings/update', async (route) => {
+				await route.fulfill({ json: route.request().postDataJSON() });
+			});
+			await page.route('**/api/models*', async (route) => {
+				const response = await route.fetch();
+				const catalog = await response.json();
+				await route.fulfill({
+					json: {
+						...catalog,
+						data: catalog.data.map((model: any) => ({
+							...model,
+							info: {
+								...model.info,
+								meta: { ...model.info?.meta, terminalId: terminalUrl }
+							}
+						}))
+					}
+				});
+			});
+			await openSeededWorkspace(page, seeded);
+			await expect(page.getByRole('button', { name: 'Controls', exact: true })).toHaveCount(0);
+			await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveCount(0);
+			await expect(page.locator('#artifacts-container .canvas-document-content')).toContainText(
+				'Seeded canvas alpha body.'
+			);
+			await page
+				.getByTestId('workspace-tabs')
+				.getByRole('button', { name: 'Close', exact: true })
+				.click();
+			await expect(page.getByText('Dormant terminal', { exact: true })).toHaveCount(0);
+			await expect(page.getByRole('button', { name: 'Code Interpreter', exact: true })).toHaveCount(
+				0
+			);
+			let completion: any;
+			await page.route('**/api/chat/completions', async (route) => {
+				completion = route.request().postDataJSON();
+				await route.fulfill({ contentType: 'text/event-stream', body: 'data: [DONE]\n\n' });
+			});
+			await page.locator('#chat-input').fill('Check disabled integrations.');
+			await page.locator('#send-message-button').click();
+			await expect.poll(() => Boolean(completion)).toBe(true);
+			expect(completion.terminal_id).toBeUndefined();
+			expect(completion.tool_servers.some((server: any) => server.url === terminalUrl)).toBe(false);
+
+			await page.goto(`/c/${seeded.chatId}?settings=tools`);
+			await dismissReleaseNotes(page);
+			const settings = page.getByRole('dialog');
+			await expect(settings.getByText('External Tool Servers', { exact: true })).toBeVisible();
+			await expect(settings.getByText('Terminal', { exact: true })).toHaveCount(0);
+			await expect(settings.getByText('Dormant terminal', { exact: true })).toHaveCount(0);
+			expect(terminalRequests).toBe(0);
+		});
+	}
 
 	for (const kind of ['canvas', 'web-preview'] as const) {
 		test(`${kind} retains a conflicted draft across reload and recovers explicitly`, async ({
@@ -1258,56 +1343,244 @@ test('restores ten file tabs after reload and remembers a closed tab', async ({ 
 	}
 });
 
-test('uploads a CSV through the visible composer chooser without a managed Terminal', async ({
+test('registers oversized outputs without uploading and saves a later smaller version', async ({
 	page
 }) => {
-	const uploadChat = await createUploadChat(page.request);
-	let uploadedFileId: string | null = null;
-	const name = `workspace-e2e-upload-${Date.now()}.csv`;
-
+	const seeded = await createUploadChat(page.request);
+	let uploadedFileId: string | undefined;
+	const path = '/mnt/uploads/workspace-e2e-output-size.csv';
+	const executeOutput = async (code: string) => {
+		const modulePath = await page.evaluate(() =>
+			performance
+				.getEntriesByType('resource')
+				.map(({ name }) => name)
+				.find((name) => new URL(name).pathname === '/src/lib/stores/index.ts')
+		);
+		if (!modulePath) throw new Error('The application stores were not loaded');
+		await expect
+			.poll(() =>
+				page.evaluate(async (modulePath) => {
+					const { socket } = await import(/* @vite-ignore */ modulePath);
+					let connected = false;
+					socket.subscribe((value) => {
+						connected = !!value?.connected;
+					})();
+					return connected;
+				}, modulePath)
+			)
+			.toBe(true);
+		const result = await page.evaluate(
+			async ({ chatId, code, modulePath }) => {
+				const { socket } = await import(/* @vite-ignore */ modulePath);
+				let client;
+				socket.subscribe((value) => {
+					client = value;
+				})();
+				// Invoke the real session RPC handler without an external model request.
+				return new Promise<{ stderr: string | null; error?: string }>((resolve, reject) => {
+					const timer = setTimeout(() => reject(new Error('Python RPC timed out')), 30_000);
+					const event = {
+						chat_id: chatId,
+						data: {
+							type: 'execute:python',
+							data: {
+								session_id: client.id,
+								id: crypto.randomUUID(),
+								code
+							}
+						}
+					};
+					for (const listener of client.listeners('events'))
+						listener(event, (result) => {
+							clearTimeout(timer);
+							resolve(result);
+						});
+				});
+			},
+			{ chatId: seeded.chatId, code, modulePath }
+		);
+		expect(result.error).toBeUndefined();
+		expect(result.stderr).toBeNull();
+	};
+	let uploads = 0;
+	page.on('request', (request) => {
+		if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/files/')
+			uploads += 1;
+	});
 	try {
-		await page.addInitScript((token) => localStorage.setItem('token', token), uploadChat.token);
-		await page.goto(`/c/${uploadChat.chatId}`);
+		await page.addInitScript((token) => localStorage.setItem('token', token), seeded.token);
+		await page.goto(`/c/${seeded.chatId}`);
 		await dismissReleaseNotes(page);
-		const moreButton = page.locator('#input-menu-button');
-		await expect(moreButton).toBeVisible();
-		await moreButton.click();
-		const uploadButton = page.getByRole('button', { name: 'Upload Files', exact: true });
-		await expect(uploadButton).toBeVisible();
-
-		const chooserPromise = page.waitForEvent('filechooser');
-		await uploadButton.click();
-		const chooser = await chooserPromise;
+		const outputs = page.getByRole('button', { name: 'Outputs', exact: true }).last();
+		await expect(outputs).toBeVisible();
+		await executeOutput(
+			`with open(${JSON.stringify(path)}, 'wb') as file:\n    file.truncate(25 * 1024 * 1024 + 1)\n0`
+		);
+		await outputs.click();
+		const item = page
+			.getByTestId('workspace-output-menu-file')
+			.filter({ hasText: 'workspace-e2e-output-size.csv' });
+		await expect(item).toContainText('File size should not exceed 25 MB.');
+		await expect
+			.poll(async () => (await readChat(page.request, seeded)).chat._workspace_outputs)
+			.toEqual([expect.objectContaining({ path, size: 25 * 1024 * 1024 + 1 })]);
+		expect(uploads).toBe(0);
+		expect(
+			(await readChat(page.request, seeded)).chat._workspace_outputs[0].fileId
+		).toBeUndefined();
+		for (const width of [1280, 390]) {
+			await page.setViewportSize({ width, height: 800 });
+			await expect(item).toBeVisible();
+			await page.screenshot({
+				path: test.info().outputPath(`output-size-limit-${width}.png`),
+				animations: 'disabled'
+			});
+		}
+		await page.reload();
+		await dismissReleaseNotes(page);
+		await outputs.click();
+		await expect(item).toContainText('File size should not exceed 25 MB.');
+		expect(uploads).toBe(0);
 		const uploadResponse = page.waitForResponse(
 			(response) =>
 				response.request().method() === 'POST' &&
-				new URL(response.url()).pathname === '/api/v1/files/',
-			{ timeout: 20_000 }
+				new URL(response.url()).pathname === '/api/v1/files/'
 		);
-		await chooser.setFiles({
-			name,
-			mimeType: 'text/csv',
-			buffer: Buffer.from('city,value\nBasel,1\nBern,2\n')
-		});
-
+		await executeOutput(
+			`from pathlib import Path\nPath(${JSON.stringify(path)}).write_text('city,value\\nBasel,1\\n')\n0`
+		);
 		const response = await uploadResponse;
+		uploadedFileId = (await response.json()).id;
 		expect(response.ok()).toBeTruthy();
-		uploadedFileId = (await response.json()).id ?? null;
 		expect(uploadedFileId).toEqual(expect.any(String));
-		await expect(page.getByRole('button', { name: new RegExp(name) })).toBeVisible({
-			timeout: 20_000
-		});
+		await expect(item).toContainText('Saved to chat');
+		expect(uploads).toBe(1);
+		await expect
+			.poll(async () => (await readChat(page.request, seeded)).chat._workspace_outputs[0].fileId)
+			.toBe(uploadedFileId);
+		const savedSize = (await readChat(page.request, seeded)).chat._workspace_outputs[0].size;
+		await executeOutput(
+			`with open(${JSON.stringify(path)}, 'wb') as file:\n    file.truncate(25 * 1024 * 1024 + 1)\n0`
+		);
+		await expect(item).toContainText('File size should not exceed 25 MB.');
+		await expect
+			.poll(async () => {
+				const output = (await readChat(page.request, seeded)).chat._workspace_outputs[0];
+				return output.updatedAt > output.persistedAt;
+			})
+			.toBe(true);
+		const olderVersion = (await readChat(page.request, seeded)).chat._workspace_outputs[0];
+		expect(olderVersion.fileId).toBe(uploadedFileId);
+		expect(olderVersion.size).toBe(savedSize);
+		expect(uploads).toBe(1);
 	} finally {
-		if (uploadedFileId) {
+		if (uploadedFileId)
 			await page.request.delete(`/api/v1/files/${uploadedFileId}`, {
-				headers: authHeaders(uploadChat.token)
+				headers: authHeaders(seeded.token)
 			});
-		}
-		await page.request.delete(`/api/v1/chats/${uploadChat.chatId}`, {
-			headers: authHeaders(uploadChat.token)
+		await page.request.delete(`/api/v1/chats/${seeded.chatId}`, {
+			headers: authHeaders(seeded.token)
 		});
 	}
 });
+
+test('rejects an oversized output at the actual upload endpoint', async ({ request }) => {
+	const token = await signInForNoAuth(request);
+	let fileId: string | undefined;
+	try {
+		const response = await request.post('/api/v1/files/?process=false', {
+			headers: authHeaders(token),
+			multipart: {
+				metadata: JSON.stringify({ source: 'workspace-output', size: 1 }),
+				file: {
+					name: 'workspace-e2e-too-large.csv',
+					mimeType: 'text/csv',
+					buffer: Buffer.alloc(25 * 1024 * 1024 + 1)
+				}
+			}
+		});
+		const result = await response.json();
+		fileId = result.id;
+		expect(response.status()).toBe(413);
+		expect(result.detail.code).toBe('workspace_output_too_large');
+	} finally {
+		if (fileId) await request.delete(`/api/v1/files/${fileId}`, { headers: authHeaders(token) });
+	}
+});
+
+for (const oversized of [false, true]) {
+	test(`uploads a CSV through the visible composer chooser and ${oversized ? 'offers download above the cell budget' : 'renders it below the cell budget'}`, async ({
+		page
+	}) => {
+		const uploadChat = await createUploadChat(page.request);
+		let uploadedFileId: string | null = null;
+		const name = `workspace-e2e-upload-${Date.now()}.csv`;
+		const bytes = Buffer.from(
+			oversized ? ('1,'.repeat(29) + '1\n').repeat(3340) : 'city,value\nBasel,1\nBern,2\n'
+		);
+
+		try {
+			await page.addInitScript((token) => localStorage.setItem('token', token), uploadChat.token);
+			await page.goto(`/c/${uploadChat.chatId}`);
+			await dismissReleaseNotes(page);
+			const moreButton = page.locator('#input-menu-button');
+			await expect(moreButton).toBeVisible();
+			await moreButton.click();
+			const uploadButton = page.getByRole('button', { name: 'Upload Files', exact: true });
+			await expect(uploadButton).toBeVisible();
+
+			const chooserPromise = page.waitForEvent('filechooser');
+			await uploadButton.click();
+			const chooser = await chooserPromise;
+			const uploadResponse = page.waitForResponse(
+				(response) =>
+					response.request().method() === 'POST' &&
+					new URL(response.url()).pathname === '/api/v1/files/',
+				{ timeout: 20_000 }
+			);
+			await chooser.setFiles({
+				name,
+				mimeType: 'text/csv',
+				buffer: bytes
+			});
+
+			const response = await uploadResponse;
+			expect(response.ok()).toBeTruthy();
+			uploadedFileId = (await response.json()).id ?? null;
+			expect(uploadedFileId).toEqual(expect.any(String));
+			await expect(page.getByRole('button', { name: new RegExp(name) })).toBeVisible({
+				timeout: 20_000
+			});
+			await page.getByRole('button', { name: new RegExp(name) }).click();
+			await page.getByRole('button', { name: 'Preview', exact: true }).click();
+			if (oversized) {
+				await expect(page.getByText('This document is too large to display here.')).toBeVisible();
+				await expect(page.locator('.office-preview table')).toHaveCount(0);
+				const downloaded = page.waitForEvent('download');
+				await page.getByRole('link', { name: 'Download', exact: true }).click();
+				expect(
+					createHash('sha256')
+						.update(await readFile(await (await downloaded).path()))
+						.digest('hex')
+				).toBe(createHash('sha256').update(bytes).digest('hex'));
+			} else {
+				await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
+			}
+			await page.screenshot({
+				path: test.info().outputPath(`upload-cell-budget-${oversized}.png`)
+			});
+		} finally {
+			if (uploadedFileId) {
+				await page.request.delete(`/api/v1/files/${uploadedFileId}`, {
+					headers: authHeaders(uploadChat.token)
+				});
+			}
+			await page.request.delete(`/api/v1/chats/${uploadChat.chatId}`, {
+				headers: authHeaders(uploadChat.token)
+			});
+		}
+	});
+}
 
 test('opens and reopens Files in a new session without a page reload', async ({ page }) => {
 	const token = await signInForNoAuth(page.request);

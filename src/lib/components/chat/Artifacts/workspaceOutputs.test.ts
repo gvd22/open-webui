@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { get, writable } from 'svelte/store';
 import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
+import { MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES } from '$lib/pyodide/workspace';
 import {
 	createWorkspaceOutputCatalog,
 	createWorkspaceOutputFile,
 	createWorkspaceOutputOpenDetail,
+	getWorkspaceOutputStorageLabel,
 	isKnownWorkspaceOutputPath,
 	isWorkspaceOutputPath,
 	mergeWorkspaceOutputFiles,
@@ -79,7 +81,10 @@ describe('chat-scoped Pyodide output catalog', () => {
 			persistedAt: 20,
 			updatedAt: 10
 		})!;
-		const refresh = createWorkspaceOutputFile('/mnt/uploads/deck.pptx', { updatedAt: 30 })!;
+		const refresh = createWorkspaceOutputFile('/mnt/uploads/deck.pptx', {
+			size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1,
+			updatedAt: 30
+		})!;
 
 		expect(mergeWorkspaceOutputFiles([snapshot], [refresh])).toEqual([
 			expect.objectContaining({ fileId: 'file-1', size: 42, updatedAt: 30 })
@@ -102,12 +107,66 @@ describe('chat-scoped Pyodide output catalog', () => {
 		]);
 
 		expect(atomic.atomic).toBe(true);
-		expect(atomic.files.get('/mnt/uploads/report.pdf')).toBe(data);
+		expect(atomic.files.get('/mnt/uploads/report.pdf')).toEqual({
+			path: '/mnt/uploads/report.pdf',
+			size: data.byteLength,
+			data
+		});
 		expect(atomic.files.size).toBe(1);
 		expect(parseWorkspaceOutputSnapshots(undefined)).toEqual({
 			atomic: false,
 			files: new Map()
 		});
+	});
+
+	it('accepts size-only oversized snapshots and derives actual byte lengths for normal snapshots', () => {
+		const data = new ArrayBuffer(4);
+		const snapshots = parseWorkspaceOutputSnapshots([
+			{ path: '/mnt/uploads/large.csv', size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1 },
+			{ path: '/mnt/uploads/normal.csv', size: 1, data },
+			{ path: '/mnt/uploads/missing.csv', size: 1 },
+			{ path: '/mnt/uploads/invalid.csv', size: Infinity },
+			{ path: '/etc/private.pdf', size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1 }
+		]);
+		expect([...snapshots.files.values()]).toEqual([
+			{ path: '/mnt/uploads/large.csv', size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1 },
+			{ path: '/mnt/uploads/normal.csv', size: 4, data }
+		]);
+	});
+
+	it('preserves oversized output registration and its storage explanation after reload', async () => {
+		const files = writable<WorkspaceOutputFile[]>([]);
+		const persist = vi.fn(async (_chatId, mutation) => mutation.upsert ?? []);
+		const catalog = createWorkspaceOutputCatalog(files, persist, vi.fn());
+		catalog.sync('chat-1', []);
+		const path = '/mnt/uploads/large.csv';
+		catalog.applyPyodideChange('chat-1', {
+			chatId: 'chat-1',
+			paths: [path],
+			snapshots: [{ path, size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1 }]
+		});
+		await tick();
+		const [registered] = get(files);
+		expect(registered.size).toBe(MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1);
+		expect(registered.fileId).toBeUndefined();
+		expect(persist).toHaveBeenCalledWith('chat-1', { upsert: [registered] });
+		catalog.sync('chat-1', JSON.parse(JSON.stringify([registered])));
+		expect(getWorkspaceOutputStorageLabel(get(files)[0])).toBe(
+			'File size should not exceed {{maxSize}} MB.'
+		);
+	});
+
+	it('does not relabel already saved large files but identifies a newer oversized version', () => {
+		const saved = createWorkspaceOutputFile('/mnt/uploads/large.csv', {
+			size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1,
+			fileId: 'existing-file',
+			updatedAt: 10,
+			persistedAt: 10
+		})!;
+		expect(getWorkspaceOutputStorageLabel(saved)).toBe('Saved to chat');
+		expect(getWorkspaceOutputStorageLabel({ ...saved, updatedAt: 20 })).toBe(
+			'File size should not exceed {{maxSize}} MB.'
+		);
 	});
 
 	it('moves a persisted output reference to exactly one message', () => {

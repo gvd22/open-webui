@@ -18,6 +18,7 @@
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import FileTypeIcon from './FileNav/FileTypeIcon.svelte';
 	import type { WorkspaceOutputFile } from '$lib/stores';
+	import { MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES } from '$lib/pyodide/workspace';
 	import {
 		getWorkspaceOutputArtifacts,
 		type WorkspaceOutputArtifact
@@ -114,7 +115,8 @@
 										getWorkspaceOutputStorageLabel(
 											file,
 											$workspaceOutputSaveStates[workspaceOutputKey($chatId, file.path)]
-										)
+										),
+										{ maxSize: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES / (1024 * 1024) }
 									)}</span
 								>
 							</span>

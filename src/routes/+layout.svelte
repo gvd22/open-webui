@@ -1,5 +1,6 @@
 <script>
 	import { io } from 'socket.io-client';
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
@@ -413,9 +414,7 @@
 				? data.workspaceDeletedFiles.filter(isString)
 				: [];
 			const workspaceFileSnapshots = Array.isArray(data.workspaceFileSnapshots)
-				? data.workspaceFileSnapshots.filter(
-						(snapshot) => isString(snapshot?.path) && snapshot?.data instanceof ArrayBuffer
-					)
+				? data.workspaceFileSnapshots
 				: [];
 			window.dispatchEvent(
 				new CustomEvent('pyodide:files', {
@@ -499,8 +498,25 @@
 
 	const resolveToolServer = (serverUrl) => {
 		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
+		if (ENABLE_CHAT_TERMINALS && !toolServer) {
+			const terminalServer = ($settings?.terminalServers ?? []).find(
+				(server) => server.url === serverUrl
+			);
+			if (terminalServer) {
+				toolServer = {
+					url: terminalServer.url,
+					auth_type: terminalServer.auth_type ?? 'bearer',
+					key: terminalServer.key ?? '',
+					path: terminalServer.path ?? '/openapi.json'
+				};
+			}
+		}
 
-		let toolServerData = $toolServers?.find((server) => server.url === serverUrl);
+		let toolServerData =
+			$toolServers?.find((server) => server.url === serverUrl) ??
+			(ENABLE_CHAT_TERMINALS
+				? $terminalServers?.find((server) => server.url === serverUrl)
+				: undefined);
 
 		let token = null;
 		if (toolServer) {

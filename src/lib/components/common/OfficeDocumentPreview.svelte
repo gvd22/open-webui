@@ -12,7 +12,7 @@
 	const i18n = getContext<Readable<I18n>>('i18n');
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': { data: ArrayBuffer };
-		'preview-failed': { data: ArrayBuffer };
+		'preview-failed': { data: ArrayBuffer; error?: unknown };
 	}>();
 
 	export let data: ArrayBuffer | null = null;
@@ -22,6 +22,7 @@
 
 	let mounted = false;
 	let generation = 0;
+	let sheetGeneration = 0;
 	let attemptedData: ArrayBuffer | null = null;
 	let attemptedFormat: OfficeDocumentFormat | null = null;
 	let docxData: ArrayBuffer | null = null;
@@ -46,12 +47,23 @@
 	};
 
 	const renderSheet = async (sheet: string, currentGeneration = generation) => {
-		if (!workbook?.Sheets[sheet]) return;
-		const { excelToTable } = await import('$lib/utils/excelToTable');
-		const result = await excelToTable(workbook.Sheets[sheet]);
-		if (currentGeneration !== generation) return;
-		selectedSheet = sheet;
-		sheetHtml = result.html;
+		const worksheet = workbook?.Sheets[sheet];
+		const candidate = data;
+		if (!worksheet || !candidate) return;
+		const request = ++sheetGeneration;
+		try {
+			const { excelToTable } = await import('$lib/utils/excelToTable');
+			const result = await excelToTable(worksheet);
+			if (currentGeneration !== generation || request !== sheetGeneration) return;
+			selectedSheet = sheet;
+			sheetHtml = result.html;
+			error = '';
+			dispatch('preview-rendered', { data: candidate });
+		} catch (cause) {
+			if (currentGeneration !== generation || request !== sheetGeneration) return;
+			if (!sheetHtml) error = $i18n.t('This document could not be opened.');
+			dispatch('preview-failed', { data: candidate, error: cause });
+		}
 	};
 
 	const load = async (candidate: ArrayBuffer, candidateFormat: OfficeDocumentFormat) => {
@@ -86,8 +98,6 @@
 			sheetNames = workbook.SheetNames;
 			if (sheetNames.length === 0) throw new Error('Workbook contains no sheets');
 			await renderSheet(sheetNames[0], currentGeneration);
-			if (currentGeneration !== generation) return;
-			dispatch('preview-rendered', { data: candidate });
 		} catch (cause) {
 			if (currentGeneration !== generation) return;
 			console.error('Office document render failed:', cause);

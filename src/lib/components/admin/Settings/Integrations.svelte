@@ -83,7 +83,11 @@
 		if (res) {
 			toast.success($i18n.t('Terminal servers saved'));
 
-			// Refresh the managed Terminal catalog so Workspace availability changes immediately.
+			// Refresh the terminalServers store so changes are reflected immediately
+			// Preserve user direct terminals, refresh system terminals from backend
+			const existingDirectTerminals = (($terminalServers ?? []) as TerminalConnection[]).filter(
+				(t) => !t.id
+			);
 			const systemTerminals = await getTerminalServers(localStorage.token);
 			const systemEntries = systemTerminals.map((t) => ({
 				id: t.id,
@@ -93,7 +97,7 @@
 				contexts: t.contexts ?? {},
 				config: t.config ?? {}
 			}));
-			terminalServers.set(systemEntries as any);
+			terminalServers.set([...existingDirectTerminals, ...systemEntries] as any);
 		}
 	};
 

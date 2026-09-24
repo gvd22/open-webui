@@ -10,6 +10,8 @@
 
 import type { WorkSheet } from 'xlsx';
 
+export const MAX_SPREADSHEET_PREVIEW_CELLS = 100_000;
+
 /** Convert column index (0-based) to Excel-style letter (A, B, …, Z, AA, AB, …) */
 const colLetter = (i: number): string => {
 	let s = '';
@@ -39,12 +41,24 @@ export interface ExcelTableResult {
  */
 export async function excelToTable(worksheet: WorkSheet): Promise<ExcelTableResult> {
 	const XLSX = await import('xlsx');
+	const range = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1');
+	const height = range.e.r - range.s.r + 1;
+	const width = range.e.c - range.s.c + 1;
+	// Sparse sheets can declare huge ranges even when their file is tiny.
+	if (
+		height < 1 ||
+		width < 1 ||
+		!Number.isSafeInteger(height * width) ||
+		height * width > MAX_SPREADSHEET_PREVIEW_CELLS
+	) {
+		throw new Error('too-large');
+	}
 	const rows: unknown[][] = XLSX.utils.sheet_to_json(worksheet, {
 		header: 1,
 		defval: '',
 		raw: false
 	});
-	const origin = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1').s;
+	const origin = range.s;
 
 	if (rows.length === 0) {
 		return {

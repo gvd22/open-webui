@@ -5,6 +5,7 @@ import { uploadFile, deleteFileById } from '$lib/apis/files';
 import { readPyodideWorkerFile } from './DocumentViewer/pyodideFileRead';
 import { createWorkspaceOutputPersistence } from './workspaceOutputPersistence';
 import { createWorkspaceOutputCatalog } from './workspaceOutputs';
+import { MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES } from '$lib/pyodide/workspace';
 
 vi.mock('$lib/stores', async () => {
 	const { writable } = await import('svelte/store');
@@ -17,10 +18,13 @@ vi.mock('$lib/stores', async () => {
 	};
 });
 vi.mock('$lib/apis/files', () => ({ uploadFile: vi.fn(), deleteFileById: vi.fn() }));
-vi.mock('./DocumentViewer/pyodideFileRead', () => ({ readPyodideWorkerFile: vi.fn() }));
+vi.mock('./DocumentViewer/pyodideFileRead', async (importOriginal) => ({
+	...(await importOriginal<typeof import('./DocumentViewer/pyodideFileRead')>()),
+	readPyodideWorkerFile: vi.fn()
+}));
 
 const path = '/mnt/uploads/report.pdf';
-const data = new TextEncoder().encode('snapshot').buffer;
+const data = { path, data: new TextEncoder().encode('snapshot').buffer, size: 8 };
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const setup = () => {
 	const catalog = { record: vi.fn(), applyPyodideChange: vi.fn() };
@@ -176,4 +180,67 @@ it('keeps simultaneous same-path uploads in different chats isolated', async () 
 	expect(onSaved.mock.calls[0][0].originChatId).toBe('chat-1');
 	expect(deleteFileById).not.toHaveBeenCalled();
 	expect(get(workspaceOutputSaveStates)).toEqual({});
+});
+
+it('registers oversized outputs without reading or uploading their bytes', async () => {
+	const { handleChange, catalog, onError, onSaved } = setup();
+	handleChange(
+		new CustomEvent('pyodide:files', {
+			detail: {
+				chatId: 'chat-1',
+				paths: [path],
+				snapshots: [{ path, size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1 }]
+			}
+		})
+	);
+	await flush();
+	expect(catalog.applyPyodideChange).toHaveBeenCalledOnce();
+	expect(uploadFile).not.toHaveBeenCalled();
+	expect(readPyodideWorkerFile).not.toHaveBeenCalled();
+	expect(catalog.record).not.toHaveBeenCalled();
+	expect(onSaved).not.toHaveBeenCalled();
+	expect(onError).not.toHaveBeenCalled();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('too-large');
+});
+
+it('checks actual snapshot bytes, accepts the exact limit, and recovers on a smaller revision', async () => {
+	const { schedule, catalog, onError } = setup();
+	schedule('chat-1', path, undefined, false, {
+		path,
+		size: 1,
+		data: new ArrayBuffer(MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES + 1)
+	});
+	await flush();
+	expect(uploadFile).not.toHaveBeenCalled();
+	expect(onError).not.toHaveBeenCalled();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('too-large');
+	schedule('chat-1', path, undefined, false, {
+		path,
+		size: MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
+		data: new ArrayBuffer(MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES)
+	});
+	await flush();
+	expect(uploadFile).toHaveBeenCalledOnce();
+	catalog.record.mock.calls[0][3].onConfirmed();
+	expect(get(workspaceOutputSaveStates)).toEqual({});
+});
+
+it('bounds legacy runtime reads and handles server size rejection without generic error toasts', async () => {
+	const { schedule, onError } = setup();
+	vi.mocked(readPyodideWorkerFile).mockRejectedValueOnce(new Error('too-large'));
+	schedule('chat-1', path);
+	await flush();
+	expect(readPyodideWorkerFile).toHaveBeenCalledWith(
+		expect.anything(),
+		path,
+		MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
+		expect.any(AbortSignal)
+	);
+	expect(uploadFile).not.toHaveBeenCalled();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('too-large');
+	vi.mocked(uploadFile).mockRejectedValueOnce({ code: 'workspace_output_too_large' });
+	schedule('chat-1', path, undefined, false, data);
+	await flush();
+	expect(get(workspaceOutputSaveStates)[`chat-1\u0000${path}`]).toBe('too-large');
+	expect(onError).not.toHaveBeenCalled();
 });

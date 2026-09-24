@@ -29,6 +29,8 @@ export const workspaceActiveFile: Writable<{ path: string; format: string } | nu
 	writable(null);
 export const workspaceOpenFilePaths: Writable<string[]> = writable([]);
 export const workspaceOutputFiles: Writable<WorkspaceOutputFile[]> = writable([]);
-export const workspaceOutputSaveStates = writable<Record<string, 'saving' | 'failed'>>({});
+export const workspaceOutputSaveStates = writable<
+	Record<string, 'saving' | 'failed' | 'too-large'>
+>({});
 export const workspaceChatContextId: Writable<string> = writable('');
 export const workspaceOpenRequestId: Writable<string | null> = writable(null);

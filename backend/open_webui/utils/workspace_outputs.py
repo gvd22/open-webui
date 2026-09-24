@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import math
 from pathlib import PurePosixPath
+from typing import BinaryIO
 
 WORKSPACE_OUTPUTS_KEY = '_workspace_outputs'
 WORKSPACE_OUTPUT_MAX_COUNT = 100
 WORKSPACE_OUTPUT_MAX_PATH_CHARS = 1024
 WORKSPACE_OUTPUT_MAX_ID_CHARS = 256
+# Keep in sync with src/lib/pyodide/workspace.ts.
+WORKSPACE_OUTPUT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 WORKSPACE_OUTPUT_EXTENSIONS = {
     'csv',
     'doc',
@@ -21,6 +24,19 @@ WORKSPACE_OUTPUT_EXTENSIONS = {
     'xls',
     'xlsx',
 }
+
+
+def validate_workspace_output_upload(file: BinaryIO, metadata: object) -> None:
+    if not isinstance(metadata, dict) or metadata.get('source') != 'workspace-output':
+        return
+    position = file.tell()
+    try:
+        file.seek(0, 2)
+        size = file.tell()
+    finally:
+        file.seek(position)
+    if size > WORKSPACE_OUTPUT_MAX_UPLOAD_BYTES:
+        raise ValueError('Workspace output exceeds the 25 MB upload limit.')
 
 
 def normalize_workspace_output(item: object) -> dict | None:
@@ -99,6 +115,8 @@ def merge_workspace_outputs(
         if previous:
             # A runtime change is recorded before its durable upload finishes. Keep
             # the last snapshot usable until a newer fileId arrives.
+            if previous.get('fileId') and not item.get('fileId'):
+                item.pop('size', None)
             item = {**previous, **item}
             item['updatedAt'] = max(previous['updatedAt'], item['updatedAt'])
         by_path[item['path']] = item

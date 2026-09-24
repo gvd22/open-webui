@@ -1,6 +1,10 @@
 export const PYODIDE_WORKSPACE_ROOT = '/mnt/uploads';
 export const PYODIDE_WORKSPACE_DIRECTORY = `${PYODIDE_WORKSPACE_ROOT}/`;
 
+// Keep in sync with the server guard in utils/workspace_outputs.py.
+export const MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES = 25 * 1024 * 1024;
+export type WorkspaceOutputSnapshot = { path: string; size: number; data?: ArrayBuffer };
+
 const normalizeAbsolutePath = (path: string) => {
 	const parts: string[] = [];
 	for (const part of path.split('/')) {

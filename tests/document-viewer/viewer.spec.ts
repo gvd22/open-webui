@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 
 const paths = {
 	pdf: '/mnt/uploads/basic.pdf',
@@ -12,6 +13,135 @@ const paths = {
 };
 
 let blockedRequests: string[] = [];
+
+const sparseWorkbook = async (withSmallSheets = false) => {
+	const workbook = XLSX.utils.book_new();
+	if (withSmallSheets) {
+		XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Small sheet']]), 'Small');
+	}
+	XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Sparse sheet']]), 'Huge');
+	if (withSmallSheets) {
+		XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Other sheet']]), 'Other');
+	}
+	const zip = await JSZip.loadAsync(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+	const path = `xl/worksheets/sheet${withSmallSheets ? 2 : 1}.xml`;
+	zip.file(
+		path,
+		(await zip.file(path)!.async('string')).replace(
+			/<dimension[^>]*\/>/,
+			'<dimension ref="A1:XFD1048576"/>'
+		)
+	);
+	return zip.generateAsync({ type: 'nodebuffer' });
+};
+
+for (const source of ['workspace', 'saved'] as const) {
+	for (const format of ['xlsx', 'xls', 'csv'] as const) {
+		test(`enforces the cell budget for ${source} ${format} and downloads the intact original`, async ({
+			page
+		}) => {
+			let bytes: Buffer;
+			if (format === 'xlsx') bytes = await sparseWorkbook();
+			else if (format === 'csv') bytes = Buffer.from(('1,'.repeat(29) + '1\n').repeat(3340));
+			else {
+				const workbook = XLSX.utils.book_new();
+				const sheet = XLSX.utils.aoa_to_sheet([['Sparse sheet']]);
+				sheet.IV501 = { t: 'n', v: 1 };
+				sheet['!ref'] = 'A1:IV501';
+				XLSX.utils.book_append_sheet(workbook, sheet, 'Huge');
+				bytes = XLSX.write(workbook, { type: 'buffer', bookType: 'biff8' });
+			}
+			expect(bytes.length).toBeLessThan(1024 * 1024);
+			const errors: string[] = [];
+			page.on('pageerror', (error) => errors.push(error.message));
+			if (source === 'saved') {
+				const seeded = await page.request.post(`/api/v1/files/cell-budget.${format}/content`, {
+					data: bytes
+				});
+				expect(seeded.status()).toBe(204);
+			} else {
+				await page.route('**/runtime/files/view?**', (route) => route.fulfill({ body: bytes }));
+			}
+			await page.setViewportSize({ width: source === 'saved' ? 390 : 1200, height: 844 });
+			await page.goto(
+				`/?format=${format}&theme=dark${source === 'saved' ? `&fileId=cell-budget.${format}` : ''}`
+			);
+			await expect(page.getByText('This document is too large to display here.')).toBeVisible();
+			await expect(page.getByRole('button', { name: 'Try again', exact: true })).toHaveCount(0);
+			await expect(page.locator('.office-sheet')).toHaveCount(0);
+			const downloaded = page.waitForEvent('download');
+			await page.getByRole('button', { name: 'Download', exact: true }).click();
+			expect(
+				createHash('sha256')
+					.update(await readFile(await (await downloaded).path()))
+					.digest('hex')
+			).toBe(createHash('sha256').update(bytes).digest('hex'));
+			expect(errors).toEqual([]);
+			await page.screenshot({
+				path: test.info().outputPath(`cell-budget-${source}-${format}.png`)
+			});
+		});
+	}
+}
+
+test('renders a 90000-cell CSV below the cell budget without truncating it', async ({ page }) => {
+	const csv = Array.from({ length: 3000 }, (_, row) =>
+		Array.from({ length: 30 }, (_, column) => `${row}-${column}`).join(',')
+	).join('\n');
+	await page.route('**/runtime/files/view?**', (route) => route.fulfill({ body: csv }));
+	await page.goto('/?format=csv');
+	const sheet = page.locator('.office-sheet');
+	await expect(sheet.locator('tbody tr')).toHaveCount(3000);
+	await expect(sheet.locator('tbody tr').last().locator('td').last()).toHaveText('2999-29');
+	await expect(page.getByText('This document is too large to display here.')).toHaveCount(0);
+	const downloaded = page.waitForEvent('download');
+	await page.getByLabel('Download displayed version').click();
+	expect((await readFile(await (await downloaded).path())).toString('utf8')).toBe(csv);
+});
+
+test('keeps sheet navigation usable after a cell budget rejection', async ({ page }) => {
+	const bytes = await sparseWorkbook(true);
+	const errors: string[] = [];
+	page.on('pageerror', (error) => errors.push(error.message));
+	await page.route('**/runtime/files/view?**', (route) => route.fulfill({ body: bytes }));
+	await page.goto('/?format=xlsx');
+	await expect(page.getByRole('cell', { name: 'Small sheet', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Huge', exact: true }).click();
+	await expect(page.getByText('This document is too large to display here.')).toBeVisible();
+	await expect(page.getByRole('cell', { name: 'Small sheet', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Other', exact: true }).click();
+	await expect(page.getByRole('cell', { name: 'Other sheet', exact: true })).toBeVisible();
+	await expect(page.getByText('This document is too large to display here.')).toHaveCount(0);
+	await page.getByRole('button', { name: 'Huge', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Small', exact: true }).click();
+	await expect(page.getByRole('cell', { name: 'Small sheet', exact: true })).toBeVisible();
+	expect(errors).toEqual([]);
+});
+
+test('keeps the displayed snapshot when a refreshed sheet exceeds the cell budget', async ({
+	page
+}) => {
+	const original = Buffer.from('city,value\nBasel,1\n');
+	let bytes = original;
+	await page.route('**/runtime/files/view?**', (route) => route.fulfill({ body: bytes }));
+	await page.goto('/?format=csv');
+	await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
+	bytes = Buffer.from(('1,'.repeat(29) + '1\n').repeat(3340));
+	await page.getByTestId('refresh-viewer').click();
+	await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Try again', exact: true })).toHaveCount(0);
+	for (const [label, expected] of [
+		['Download displayed version', original],
+		['Download', bytes]
+	] as const) {
+		const downloaded = page.waitForEvent('download');
+		await page.getByRole('button', { name: label, exact: true }).click();
+		expect(await readFile(await (await downloaded).path())).toEqual(expected);
+		await expect(page.getByRole('cell', { name: 'Basel', exact: true })).toBeVisible();
+	}
+});
 
 for (const format of ['xlsx', 'xls'] as const) {
 	test(`renders and switches ${format} sheets without changing the downloaded workbook`, async ({

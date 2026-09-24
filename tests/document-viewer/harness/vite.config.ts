@@ -28,6 +28,7 @@ type RuntimeMode = 'valid' | 'corrupt' | 'missing' | 'unavailable' | 'oversized'
 type RuntimeState = { mode: RuntimeMode; revision?: 'a' | 'b'; delayMs?: number };
 const state = new Map<string, RuntimeState>();
 const requestCounts = new Map<string, number>();
+const savedSpreadsheets = new Map<string, Buffer>();
 
 const runtimeStateKey = (sessionId: string, filePath: string) => `${sessionId}:${filePath}`;
 
@@ -56,6 +57,30 @@ const viewerRuntime = (): Plugin => ({
 	configureServer(server) {
 		server.middlewares.use(async (request, response, next) => {
 			const url = new URL(request.url ?? '/', 'http://viewer.test');
+			const spreadsheet = url.pathname.match(
+				/^\/api\/v1\/files\/cell-budget\.(xlsx|xls|csv)\/content$/
+			);
+			if (spreadsheet) {
+				if (request.method === 'POST') {
+					const chunks: Buffer[] = [];
+					for await (const chunk of request) chunks.push(Buffer.from(chunk));
+					savedSpreadsheets.set(spreadsheet[1], Buffer.concat(chunks));
+					response.statusCode = 204;
+					response.end();
+					return;
+				}
+				const bytes = savedSpreadsheets.get(spreadsheet[1]);
+				response.statusCode = bytes ? 200 : 404;
+				response.setHeader('Content-Type', 'application/octet-stream');
+				if (url.searchParams.get('attachment') === 'true') {
+					response.setHeader(
+						'Content-Disposition',
+						`attachment; filename="basic.${spreadsheet[1]}"`
+					);
+				}
+				response.end(bytes);
+				return;
+			}
 			if (url.pathname === '/api/v1/files/oversized-test/content') {
 				const bytes = Buffer.alloc(16 * 1024 * 1024 + 1, 'x');
 				response.setHeader('Content-Type', 'text/csv');

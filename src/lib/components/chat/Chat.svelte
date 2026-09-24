@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { v4 as uuidv4 } from 'uuid';
 	import { toast } from 'svelte-sonner';
 
@@ -39,10 +40,13 @@
 		tools,
 		skills,
 		toolServers,
+		terminalServers,
 		functions,
 		selectedFolder,
 		showEmbeds,
+		selectedTerminalId,
 		showFileNavPath,
+		showFileNavDir,
 		workspaceActiveFile,
 		workspaceOutputFiles,
 		chatRequestQueues,
@@ -1113,6 +1117,23 @@
 		}
 	};
 
+	/** Check whether a terminal ID references an available system or direct terminal. */
+	const isTerminalAvailable = (tid: string): boolean => {
+		return (
+			($terminalServers ?? []).some((t) => t.id && t.id === tid) ||
+			($settings?.terminalServers ?? []).some((s) => s.url === tid)
+		);
+	};
+
+	$: if (
+		ENABLE_CHAT_TERMINALS &&
+		$terminalServers !== null &&
+		$selectedTerminalId &&
+		!isTerminalAvailable($selectedTerminalId)
+	) {
+		selectedTerminalId.set(null);
+	}
+
 	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
 		if (hasNewerWorkspaceOutputVersion(file)) {
 			toast.info($i18n.t('Opening the last saved version. Recent changes have not been saved.'));
@@ -1253,6 +1274,14 @@
 						webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
 					}
 				}
+
+				// Set Default Terminal — only if the referenced terminal actually exists
+				if (ENABLE_CHAT_TERMINALS && model?.info?.meta?.terminalId) {
+					const tid = model.info.meta.terminalId;
+					if (isTerminalAvailable(tid)) {
+						selectedTerminalId.set(tid);
+					}
+				}
 			}
 		} finally {
 			settingDefaults = false;
@@ -1302,6 +1331,19 @@
 			chat_id: id,
 			data: { type: 'last_read_at' }
 		});
+	};
+
+	const terminalEventHandler = (type: string, data: any) => {
+		if (type === 'terminal:display_file') {
+			if (!data?.path) return;
+			if ($settings?.terminalFileDisplay === 'inline') return;
+			displayFileHandler(data.path, { showControls, showFileNavPath }, { page: data?.page });
+		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
+			if (!data?.path) return;
+			showFileNavDir.set(data.path);
+		} else if (type === 'terminal:run_command') {
+			showFileNavDir.set('/');
+		}
 	};
 
 	const dismissContextCompactionToast = () => {
@@ -1534,6 +1576,8 @@
 					askUserTimeoutMs =
 						typeof data?.timeout_ms === 'number' && data.timeout_ms > 0 ? data.timeout_ms : null;
 					showAskUserDialog = true;
+				} else if (type.startsWith('terminal:')) {
+					if (ENABLE_CHAT_TERMINALS) terminalEventHandler(type, data);
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -1691,6 +1735,17 @@
 
 		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
 		audioQueue.set(audioQueueInstance);
+
+		// Restore direct terminal enabled states based on persisted selectedTerminalId
+		if (ENABLE_CHAT_TERMINALS && $settings?.terminalServers?.length) {
+			settings.set({
+				...$settings,
+				terminalServers: ($settings.terminalServers ?? []).map((s) => ({
+					...s,
+					enabled: $selectedTerminalId !== null && s.url === $selectedTerminalId
+				}))
+			});
+		}
 
 		let initialPageInitialization: Promise<void> | null = null;
 		const pageSubscribe = page.subscribe((p) => {
@@ -3721,6 +3776,9 @@
 		// in the message so the backend can inject their full content.
 		const skillIds = [...selectedSkillIds];
 
+		// Only send terminal_id if the model has terminal capability enabled.
+		const terminalEnabled =
+			ENABLE_CHAT_TERMINALS && (model.info?.meta?.capabilities?.terminal ?? true);
 		const useChatVariablesFallback =
 			!_chatId || $temporaryChatEnabled || isTemporaryChatId(_chatId);
 
@@ -3741,12 +3799,19 @@
 				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
+				terminal_id:
+					terminalEnabled &&
+					($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId)
+						? $selectedTerminalId
+						: undefined,
 				workspace_focus: workspaceFocus,
 				workspace_file: $workspaceActiveFile ?? undefined,
 				tool_servers: [
 					...($toolServers ?? []).filter(
 						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
-					)
+					),
+					// Direct terminal servers are retained but inactive while their entry points are disabled.
+					...(ENABLE_CHAT_TERMINALS ? ($terminalServers ?? []).filter((t) => !t.id) : [])
 				],
 				features: getFeatures(),
 				variables: {
@@ -4841,11 +4906,22 @@
 				{#if !embedded}
 					<ChatControls
 						bind:history
+						bind:chatFiles
+						bind:params
 						bind:files
 						chatId={$chatId}
+						chatUser={chatOwner}
 						modelId={selectedModelIds?.at(0) ?? null}
+						models={selectedModelIds.reduce((a, e, i, arr) => {
+							const model = $models.find((m) => m.id === e);
+							if (model) {
+								return [...a, model];
+							}
+							return a;
+						}, [])}
 						submitPrompt={submitHandler}
 						{stopResponse}
+						{showMessage}
 						{eventTarget}
 						{codeInterpreterEnabled}
 					/>

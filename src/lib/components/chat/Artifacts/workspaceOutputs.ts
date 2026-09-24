@@ -1,6 +1,10 @@
 import { get, type Writable } from 'svelte/store';
 
 import type { WorkspaceOutputFile } from '$lib/stores/artifactWorkspace';
+import {
+	MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES,
+	type WorkspaceOutputSnapshot
+} from '$lib/pyodide/workspace';
 
 export const WORKSPACE_OPEN_OUTPUT_EVENT = 'workspace:open-output';
 
@@ -11,9 +15,16 @@ export const hasNewerWorkspaceOutputVersion = (file: WorkspaceOutputFile) =>
 
 export const getWorkspaceOutputStorageLabel = (
 	file: WorkspaceOutputFile,
-	state?: 'saving' | 'failed'
+	state?: 'saving' | 'failed' | 'too-large'
 ) => {
 	if (state === 'saving') return 'Saving...';
+	if (
+		state === 'too-large' ||
+		((file.size ?? 0) > MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES &&
+			(!file.fileId || hasNewerWorkspaceOutputVersion(file)))
+	) {
+		return 'File size should not exceed {{maxSize}} MB.';
+	}
 	if (state === 'failed') return 'Saving failed';
 	if (!file.fileId) return 'Only in this browser';
 	if (file.persistedAt === undefined) return 'Saved version available';
@@ -86,6 +97,8 @@ export const mergeWorkspaceOutputFiles = (
 		byPath.set(item.path, {
 			...previous,
 			...item,
+			// A runtime revision must not change the size of its older saved snapshot.
+			...(previous?.fileId && !item.fileId ? { size: previous.size } : {}),
 			updatedAt: Math.max(previous?.updatedAt ?? 0, item.updatedAt)
 		});
 	}
@@ -133,8 +146,6 @@ export const createWorkspaceOutputOpenDetail = (file: {
 	};
 };
 
-type WorkspaceOutputSnapshot = { path: string; data: ArrayBuffer };
-
 const isArrayBuffer = (value: unknown): value is ArrayBuffer =>
 	value !== null &&
 	typeof value === 'object' &&
@@ -145,14 +156,22 @@ export const parseWorkspaceOutputSnapshots = (value: unknown) => ({
 	// paths must fail instead of being read after a later execution has changed them.
 	atomic: Array.isArray(value),
 	files: new Map(
-		(Array.isArray(value) ? value : []).flatMap((snapshot): [string, ArrayBuffer][] =>
-			snapshot &&
-			typeof snapshot === 'object' &&
-			isWorkspaceOutputPath((snapshot as WorkspaceOutputSnapshot).path) &&
-			isArrayBuffer((snapshot as WorkspaceOutputSnapshot).data)
-				? [[(snapshot as WorkspaceOutputSnapshot).path, (snapshot as WorkspaceOutputSnapshot).data]]
-				: []
-		)
+		(Array.isArray(value) ? value : []).flatMap((snapshot): [string, WorkspaceOutputSnapshot][] => {
+			if (!snapshot || typeof snapshot !== 'object' || !isWorkspaceOutputPath(snapshot.path))
+				return [];
+			if (isArrayBuffer(snapshot.data)) {
+				return [
+					[
+						snapshot.path,
+						{ path: snapshot.path, size: snapshot.data.byteLength, data: snapshot.data }
+					]
+				];
+			}
+			return Number.isSafeInteger(snapshot.size) &&
+				snapshot.size > MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES
+				? [[snapshot.path, { path: snapshot.path, size: snapshot.size }]]
+				: [];
+		})
 	)
 });
 
@@ -198,6 +217,7 @@ type PyodideFileChange = {
 	chatId?: string;
 	kind?: string;
 	paths?: unknown[];
+	snapshots?: unknown[];
 };
 
 export const createWorkspaceOutputCatalog = (
@@ -318,8 +338,13 @@ export const createWorkspaceOutputCatalog = (
 				persist(chatId, { remove: transientDeleted });
 				return;
 			}
+			const snapshots = parseWorkspaceOutputSnapshots(detail.snapshots);
 			const upsert = paths
-				.map((path: unknown) => createWorkspaceOutputFile(path))
+				.map((path: unknown) =>
+					createWorkspaceOutputFile(path, {
+						size: typeof path === 'string' ? snapshots.files.get(path)?.size : undefined
+					})
+				)
 				.filter((item: WorkspaceOutputFile | null): item is WorkspaceOutputFile => item !== null)
 				.slice(0, 100);
 			if (!upsert.length) return;
