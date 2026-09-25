@@ -38,6 +38,7 @@
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import equal from 'fast-deep-equal';
+	import { getWebPreviewsFromOutput } from '../Artifacts/webPreview';
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -55,6 +56,7 @@
 	import ContentRenderer from './ContentRenderer.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
+	import WorkspaceOutputCard from './WorkspaceOutputCard.svelte';
 	import FollowUps from './ResponseMessage/FollowUps.svelte';
 	import { fade } from 'svelte/transition';
 	import { flyAndScale } from '$lib/utils/transitions';
@@ -63,13 +65,22 @@
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
+	import { getCanvasNoteArtifactsFromOutput } from '../Artifacts/canvas';
 
 	interface MessageType {
 		id: string;
 		model: string;
 		content: string;
 		output?: OutputItem[];
-		files?: { type: string; url: string }[];
+		files?: {
+			type: string;
+			url: string;
+			name?: string;
+			content_type?: string;
+			size?: number;
+			source?: string;
+			workspace_path?: string;
+		}[];
 		timestamp: number;
 		role: string;
 		statusHistory?: {
@@ -191,6 +202,32 @@
 	$: visibleResponseContent =
 		getOutputText(message.output) || removeAllDetails(message.content ?? '');
 	$: hasResponseContent = Boolean((message.content ?? '').trim() || message.output?.length);
+	$: previousCanvasIds = Array.from(
+		new Set(
+			createMessagesList(history, message.id)
+				.slice(0, -1)
+				.flatMap((previousMessage) =>
+					getCanvasNoteArtifactsFromOutput(previousMessage.output ?? []).map(
+						(artifact) => artifact.canvasId
+					)
+				)
+		)
+	);
+	$: previousWebPreviewIds = Array.from(
+		new Set(
+			createMessagesList(history, message.id)
+				.slice(0, -1)
+				.flatMap((previousMessage) =>
+					getWebPreviewsFromOutput(previousMessage.output ?? []).map(
+						(artifact) => artifact.previewId
+					)
+				)
+		)
+	);
+	const hasToolOutput = (_message: MessageType) =>
+		(_message?.output ?? []).some(
+			(item) => item?.type === 'function_call' || item?.type === 'function_call_output'
+		);
 
 	let edit = false;
 	let editedContent = '';
@@ -690,12 +727,24 @@
 						{#if message?.files && message.files?.filter( (f) => ['image', 'file'].includes(f.type) ).length > 0}
 							<div
 								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+								class:max-w-[40rem]={message.files.every(
+									(file) => file.source === 'workspace-output'
+								)}
 								dir={$settings?.chatDirection ?? 'auto'}
 							>
 								{#each message.files.filter((f) => ['image', 'file'].includes(f.type)) as file}
-									<div>
+									<div
+										class={file.source === 'workspace-output' &&
+										file.workspace_path &&
+										!(file?.content_type ?? '').startsWith('image/') &&
+										file.type !== 'image'
+											? 'min-w-0 w-full max-w-[19.5rem] flex-[0_1_19.5rem]'
+											: ''}
+									>
 										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											<Image src={file.url} alt={file.name || $i18n.t('Generated Image')} />
+										{:else if file.source === 'workspace-output' && file.workspace_path}
+											<WorkspaceOutputCard {file} />
 										{:else}
 											<FileItem
 												item={file}
@@ -829,6 +878,8 @@
 									messageId={message.id}
 									content={message.content}
 									output={message.output}
+									{previousCanvasIds}
+									{previousWebPreviewIds}
 									sources={message.sources}
 									floatingButtons={message?.done &&
 										!readOnly &&
@@ -882,7 +933,7 @@
 								/>
 							{/if}
 
-							{#if !message.done && !message.error && (hasResponseContent || !hasVisibleStatus)}
+							{#if !message.done && !message.error && (Boolean(visibleResponseContent.trim()) || !hasVisibleStatus)}
 								<div class="text-[0.9375rem] leading-relaxed">
 									<span
 										class="inline-block w-[0.125rem] h-3.5 bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse align-text-bottom"
@@ -1106,7 +1157,7 @@
 									</Tooltip>
 								{/if}
 
-								{#if !readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.tts ?? true))}
+								{#if !hasToolOutput(message) && !readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.tts ?? true))}
 									<Tooltip content={$i18n.t('Read Aloud')} placement="bottom">
 										<button
 											aria-label={$i18n.t('Read Aloud')}

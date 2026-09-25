@@ -197,6 +197,7 @@
 								? 'opacity-50'
 								: ''}"
 							type="button"
+							disabled={!fileUploadEnabled}
 							on:click={() => {
 								if (fileUploadEnabled) {
 									uploadFilesHandler();
@@ -223,6 +224,7 @@
 								? 'opacity-50'
 								: ''}"
 							type="button"
+							disabled={!fileUploadEnabled}
 							on:click={() => {
 								if (fileUploadEnabled) {
 									if (!detectMobile()) {
@@ -254,6 +256,7 @@
 								? 'opacity-50'
 								: ''}"
 							type="button"
+							disabled={!webUploadEnabled}
 							on:click={() => {
 								if (webUploadEnabled) {
 									showAttachWebpageModal = true;
@@ -278,6 +281,7 @@
 							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
 								? 'opacity-50'
 								: ''}"
+							disabled={!fileUploadEnabled}
 							on:click={() => {
 								if (fileUploadEnabled) {
 									tab = 'files';
@@ -298,7 +302,7 @@
 						</button>
 					</Tooltip>
 
-					{#if $config?.features?.enable_notes ?? false}
+					{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || $user?.permissions?.features?.notes === true)}
 						<Tooltip
 							content={fileUploadCapableModels.length !== selectedModels.length
 								? $i18n.t('Model(s) do not support file upload')
@@ -311,6 +315,7 @@
 								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
 									? 'opacity-50'
 									: ''}"
+								disabled={!fileUploadEnabled}
 								on:click={() => {
 									tab = 'notes';
 								}}

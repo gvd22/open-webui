@@ -4,6 +4,7 @@ import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
 import type { AudioQueue } from '$lib/utils/audio';
+import type { WorkspaceContent } from '$lib/components/chat/Artifacts/workspace';
 
 import emojiShortCodes from '$lib/emoji-shortcodes.json';
 
@@ -119,7 +120,15 @@ export const visiblePinnedModels = derived([pinnedModels, models], ([$pinnedMode
 
 export const audioQueue = writable<AudioQueue | null>(null);
 export const chatRequestQueues: Writable<
-	Record<string, { id: string; prompt: string; files: any[] }[]>
+	Record<
+		string,
+		{
+			id: string;
+			prompt: string;
+			files: any[];
+			workspaceFocus?: { kind: 'canvas' | 'web_preview'; id: string };
+		}[]
+	>
 > = writable({});
 
 export const sidebarWidth = writable(245);
@@ -140,13 +149,16 @@ export const showOverview = writable(false);
 export const showArtifacts = writable(false);
 export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
-export type FileNavOpenRequest = string | { path: string; page?: number | null };
+export type FileNavOpenRequest =
+	| string
+	| { path: string; page?: number | null; fileId?: string | null; chatId?: string | null };
 export const showFileNavPath: Writable<FileNavOpenRequest | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedTerminalId: Writable<string | null> = writable(null);
+export * from './artifactWorkspace';
 
-export const artifactCode = writable(null);
-export const artifactContents = writable(null);
+export const artifactCode: Writable<string | null> = writable(null);
+export const artifactContents = writable<WorkspaceContent[] | null>(null);
 
 export const embed = writable(null);
 
@@ -328,6 +340,9 @@ type Config = {
 	status: boolean;
 	name: string;
 	version: string;
+	code?: {
+		interpreter_engine?: string;
+	};
 	default_locale: string;
 	default_models: string;
 	default_pinned_models?: string | null;
@@ -356,6 +371,10 @@ type Config = {
 		enable_direct_connections: boolean;
 		enable_version_update_check: boolean;
 		enable_pyodide_file_persistence?: boolean;
+		enable_document_viewer?: boolean;
+		enable_notes?: boolean;
+		enable_code_interpreter?: boolean;
+		enable_message_rating?: boolean;
 		folder_max_file_count?: number;
 		websocket_heartbeat_interval?: number | null;
 	};

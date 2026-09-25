@@ -41,6 +41,7 @@ export class SocketIOCollaborationProvider {
 	private readonly awareness = new SimpleAwareness(this.doc);
 	private isConnected = false;
 	private synced = false;
+	private syncingInitialContent = false;
 	private editor: Editor | null = null;
 	private editorContentGetter: EditorContentGetter | null = null;
 
@@ -91,16 +92,43 @@ export class SocketIOCollaborationProvider {
 		}
 	}
 
+	public get isApplyingInitialContent() {
+		return this.syncingInitialContent;
+	}
+
 	private applyInitialContent() {
 		if (!this.editor || !this.initialContent) return;
 
-		if (typeof this.initialContent === 'string') {
-			this.editor.commands.setContent(this.initialContent);
-			return;
-		}
+		this.syncingInitialContent = true;
+		try {
+			if (typeof this.initialContent === 'string') {
+				this.editor.commands.setContent(this.initialContent);
+				return;
+			}
 
-		const doc = prosemirrorJSONToYDoc(this.editor.schema, this.initialContent);
-		Y.applyUpdate(this.doc, Y.encodeStateAsUpdate(doc));
+			const doc = prosemirrorJSONToYDoc(this.editor.schema, this.initialContent);
+			Y.applyUpdate(this.doc, Y.encodeStateAsUpdate(doc));
+		} finally {
+			this.syncingInitialContent = false;
+		}
+	}
+
+	private emitDocumentUpdate(update: Uint8Array) {
+		if (!this.editor || !this.isConnected) return;
+
+		this.socket.emit('ydoc:document:update', {
+			document_id: this.documentId,
+			user_id: this.user?.id,
+			socket_id: this.socket.id,
+			update: Array.from(update),
+			data: {
+				content: this.editorContentGetter?.() ?? {
+					md: '',
+					html: '',
+					json: ''
+				}
+			}
+		});
 	}
 
 	private joinDocument() {
@@ -148,23 +176,19 @@ export class SocketIOCollaborationProvider {
 							if (
 								this.editor &&
 								!this.editor.getText().trim() &&
-								this.doc.getXmlFragment('prosemirror').length === 0
+								this.initialContent &&
+								[...(data.sessions ?? [])].sort()[0] === this.socket.id
 							) {
-								if (
-									this.initialContent &&
-									[...(data.sessions ?? [])].sort()[0] === this.socket.id
-								) {
-									this.applyInitialContent();
+								// Seed promoted Markdown before any local empty paragraph can be saved.
+								this.synced = true;
+								this.applyInitialContent();
+								if (this.doc.getXmlFragment('prosemirror').length > 0) {
+									this.emitDocumentUpdate(Y.encodeStateAsUpdate(this.doc));
 								}
 							} else {
 								// If the editor already has content, we don't need to send an empty state
 								if (this.doc.getXmlFragment('prosemirror').length > 0) {
-									this.socket.emit('ydoc:document:update', {
-										document_id: this.documentId,
-										user_id: this.user?.id,
-										socket_id: this.socket.id,
-										update: Array.from(Y.encodeStateAsUpdate(this.doc))
-									});
+									this.emitDocumentUpdate(Y.encodeStateAsUpdate(this.doc));
 								} else {
 									console.warn('Yjs document is empty, not sending state.');
 								}
@@ -203,21 +227,17 @@ export class SocketIOCollaborationProvider {
 
 		// Listen for document updates from Yjs
 		this.doc.on('update', async (update, origin) => {
-			if (this.editor && origin !== 'server' && this.isConnected) {
+			if (
+				this.editor &&
+				origin !== 'server' &&
+				this.isConnected &&
+				this.synced &&
+				!this.syncingInitialContent
+			) {
 				await tick(); // Ensure the DOM is updated before sending
-				this.socket.emit('ydoc:document:update', {
-					document_id: this.documentId,
-					user_id: this.user?.id,
-					socket_id: this.socket.id,
-					update: Array.from(update),
-					data: {
-						content: this.editorContentGetter?.() ?? {
-							md: '',
-							html: '',
-							json: ''
-						}
-					}
-				});
+				if (this.synced && !this.syncingInitialContent) {
+					this.emitDocumentUpdate(update);
+				}
 			}
 		});
 

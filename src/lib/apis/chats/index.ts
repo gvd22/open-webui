@@ -1308,6 +1308,15 @@ export const updateChatById = async (
 	return res;
 };
 
+export {
+	updateTransientCanvasDocument,
+	undoLastTransientCanvasAiUpdate,
+	selectTransientCanvasDocument,
+	promoteTransientCanvasDocument,
+	updateTransientWebPreview,
+	selectTransientWebPreview
+} from '../artifacts';
+
 export const compactChatById = async (token: string, id: string, model?: string | null) => {
 	let error = null;
 
@@ -1375,7 +1384,7 @@ export const resolveChatMessageToolCall = async (
 	messageId: string,
 	callId: string,
 	action: 'approve' | 'reject' | 'answer',
-	options: { answers?: unknown; timed_out?: boolean } = {}
+	options: { answers?: unknown; timed_out?: boolean; session_id?: string } = {}
 ) => {
 	let error = null;
 

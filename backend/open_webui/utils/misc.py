@@ -427,7 +427,21 @@ def convert_output_to_messages(
             output_parts = output_item.get('output', [])
             content = ''
             image_urls = []
+
+            # Stored Responses output normally uses input_text/input_image parts.
+            # Older imports and early Canvas tool results can contain the same
+            # textual result directly, so normalize that representation before
+            # reconstructing the tool message for a follow-up prompt.
+            if isinstance(output_parts, str):
+                output_parts = [{'type': 'input_text', 'text': output_parts}]
+            elif isinstance(output_parts, dict):
+                output_parts = [output_parts]
+            elif not isinstance(output_parts, list):
+                output_parts = []
+
             for part in output_parts:
+                if not isinstance(part, dict):
+                    continue
                 if part.get('type') == 'input_text':
                     output_text = part.get('text', '')
                     content += str(output_text) if not isinstance(output_text, str) else output_text

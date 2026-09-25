@@ -291,6 +291,8 @@
 
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape' && show) {
+			event.preventDefault();
+			event.stopPropagation();
 			closeDropdown();
 		}
 	}
@@ -351,6 +353,7 @@
 		style:max-height={resolvedMaxHeight}
 		style:overflow-y="auto"
 		transition:flyAndScale
+		on:keydown={handleKeydown}
 		on:click={(e) => e.stopPropagation()}
 		on:pointerdown={(e) => e.stopPropagation()}
 	>

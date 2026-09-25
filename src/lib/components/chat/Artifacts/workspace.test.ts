@@ -1,0 +1,242 @@
+import { describe, expect, expectTypeOf, it } from 'vitest';
+
+import {
+	buildWorkspaceFileContent,
+	buildWorkspaceSourceContents,
+	buildWorkspaceFilesContent,
+	buildWorkspaceTabs,
+	getDefaultWorkspaceContentId,
+	getVisibleWorkspaceContents,
+	getWorkspaceContentId,
+	getWorkspaceDocumentFormat,
+	getWorkspaceDocumentFormatForViewer,
+	getWorkspaceFileOpenTarget,
+	getWorkspaceFileRefreshAction,
+	getWorkspaceFileUpdateAction,
+	getWorkspaceModelFocus,
+	isWorkspaceOpenRequestForChat,
+	isWorkspaceDocumentPath,
+	moveWorkspaceContent,
+	orderWorkspaceContents,
+	shouldResetWorkspaceForChatChange,
+	shouldShowWorkspaceTabs,
+	upsertWorkspaceFileContent,
+	WORKSPACE_FILES_ID,
+	type WorkspaceContent,
+	type WorkspaceFileContent
+} from './workspace';
+
+describe('Pyodide workspace', () => {
+	it('requires the fields belonging to each workspace kind', () => {
+		expectTypeOf<{ type: 'canvas-note'; content: string }>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf<{
+			type: 'web-preview';
+			previewId: string;
+			content: string;
+		}>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf<{
+			type: 'workspace-file';
+			content: string;
+		}>().not.toMatchTypeOf<WorkspaceContent>();
+		expectTypeOf(buildWorkspaceFileContent('/report.pdf')).toMatchTypeOf<WorkspaceContent>();
+	});
+	it('uses Files as the only runtime-backed workspace entry', () => {
+		expect(getDefaultWorkspaceContentId()).toBe(WORKSPACE_FILES_ID);
+		expect(buildWorkspaceFilesContent()).toMatchObject({
+			type: 'workspace-files',
+			workspaceId: WORKSPACE_FILES_ID
+		});
+	});
+
+	it('scopes transient file-open requests to their originating chat', () => {
+		expect(isWorkspaceOpenRequestForChat(undefined, 'chat-2')).toBe(true);
+		expect(isWorkspaceOpenRequestForChat('chat-1', 'chat-1')).toBe(true);
+		expect(isWorkspaceOpenRequestForChat('chat-1', 'chat-2')).toBe(false);
+		expect(isWorkspaceOpenRequestForChat('chat-1', '')).toBe(false);
+	});
+
+	it('keeps durable document tabs independent from the Pyodide Files runtime', () => {
+		const document = buildWorkspaceFileContent('/mnt/uploads/report.pdf', null, 'file-1');
+
+		expect(buildWorkspaceSourceContents(false, false, true, [], [document])).toEqual([document]);
+		expect(buildWorkspaceSourceContents(true, true, false, [], [document])).toEqual([
+			expect.objectContaining({ type: 'workspace-files' })
+		]);
+	});
+
+	it('keeps model focus limited to the visible Canvas or Web Preview', () => {
+		const contents: WorkspaceContent[] = [
+			{
+				type: 'canvas-note',
+				content: '# Plan',
+				canvasId: 'canvas-1',
+				title: 'Plan',
+				source: 'tool'
+			},
+			{
+				type: 'web-preview',
+				content: '<h1>App</h1>',
+				previewId: 'preview-1',
+				title: 'App',
+				source: 'tool',
+				entrypoint: 'index.html',
+				files: {}
+			},
+			buildWorkspaceFilesContent()
+		];
+		expect(getWorkspaceModelFocus(contents, 'canvas-1', true)).toEqual({
+			kind: 'canvas',
+			id: 'canvas-1'
+		});
+		expect(getWorkspaceModelFocus(contents, 'preview-1', true)).toEqual({
+			kind: 'web_preview',
+			id: 'preview-1'
+		});
+		expect(getWorkspaceModelFocus(contents, WORKSPACE_FILES_ID, true)).toBeUndefined();
+		expect(getWorkspaceModelFocus(contents, 'canvas-1', false)).toBeUndefined();
+	});
+
+	it('builds stable tabs and legacy renderer ids', () => {
+		const contents: WorkspaceContent[] = [
+			{ type: 'workspace-files', content: '', workspaceId: WORKSPACE_FILES_ID, title: 'Files' },
+			{
+				type: 'canvas-note',
+				content: '# Breakfast',
+				canvasId: 'canvas-1',
+				title: 'Breakfast',
+				source: 'tool'
+			},
+			{ type: 'iframe', content: '<main></main>' }
+		];
+		const tabs = buildWorkspaceTabs(contents);
+		expect(tabs[0]).toEqual({
+			id: WORKSPACE_FILES_ID,
+			index: 0,
+			title: 'Files',
+			kind: 'workspace-files',
+			closable: false
+		});
+		expect(tabs[1]).toEqual({
+			id: 'canvas-1',
+			index: 1,
+			title: 'Breakfast',
+			kind: 'canvas-note',
+			closable: true
+		});
+		const legacyId = getWorkspaceContentId(contents[2], 2);
+		expect(legacyId).toMatch(/^iframe:[a-z0-9]+$/);
+		expect(getWorkspaceContentId(contents[2], 99)).toBe(legacyId);
+	});
+
+	it('keeps workspace state and tabs stable', () => {
+		expect(shouldResetWorkspaceForChatChange('', 'chat-1')).toBe(false);
+		expect(shouldResetWorkspaceForChatChange('chat-1', 'chat-2')).toBe(true);
+		expect(shouldShowWorkspaceTabs([])).toBe(false);
+		expect(shouldShowWorkspaceTabs([buildWorkspaceFilesContent()])).toBe(true);
+	});
+
+	it('keeps every opened document without duplicate tabs', () => {
+		let contents: WorkspaceFileContent[] = [];
+		for (let index = 0; index < 10; index += 1) {
+			const path = `/mnt/uploads/${index}.pdf`;
+			contents = upsertWorkspaceFileContent(contents, path);
+		}
+		contents = upsertWorkspaceFileContent(contents, '/mnt/uploads/0.pdf');
+		expect(contents.map((content) => content.path)).toEqual(
+			Array.from({ length: 10 }, (_, index) => `/mnt/uploads/${index}.pdf`)
+		);
+	});
+
+	it('updates one open document tab and preserves target pages', () => {
+		const first = upsertWorkspaceFileContent([], '/mnt/uploads/brief.docx');
+		const repeated = upsertWorkspaceFileContent(first, '/mnt/uploads/brief.docx', 2);
+		expect(repeated).toMatchObject([{ targetPage: 2 }]);
+		expect(upsertWorkspaceFileContent(repeated, '/mnt/uploads/brief.docx', 2)).toBe(repeated);
+		expect(buildWorkspaceFileContent('/mnt/uploads/brief.docx', 2)).toMatchObject({
+			workspaceId: 'workspace:file:/mnt/uploads/brief.docx',
+			fileFormat: 'docx',
+			targetPage: 2
+		});
+	});
+
+	it('handles refresh, delete, and rename events explicitly', () => {
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', true)).toBe('refresh');
+		expect(getWorkspaceFileRefreshAction(['/one.docx'], '/one.docx', false)).toBe('defer');
+		expect(getWorkspaceFileRefreshAction(['/other.docx'], '/one.docx', true)).toBe('ignore');
+		expect(
+			getWorkspaceFileUpdateAction({ path: '/one.docx', kind: 'deleted' }, '/one.docx', true)
+		).toBe('deleted');
+		expect(
+			getWorkspaceFileUpdateAction(
+				{ path: '/renamed.docx', previousPath: '/one.docx', kind: 'renamed' },
+				'/one.docx',
+				true
+			)
+		).toBe('renamed');
+	});
+
+	it('routes only supported document formats to the viewer', () => {
+		for (const path of [
+			'/mnt/uploads/report.pdf',
+			'/mnt/uploads/report.docx',
+			'/mnt/uploads/deck.pptx',
+			'/mnt/uploads/table.xlsx',
+			'/mnt/uploads/legacy.xls',
+			'/mnt/uploads/data.csv'
+		]) {
+			expect(getWorkspaceDocumentFormat(path)).not.toBeNull();
+			expect(getWorkspaceDocumentFormatForViewer(path, true)).toBe(
+				getWorkspaceDocumentFormat(path)
+			);
+		}
+		for (const path of ['/mnt/uploads/report.odt']) {
+			expect(isWorkspaceDocumentPath(path)).toBe(false);
+			expect(getWorkspaceFileOpenTarget(path)).toBe('file-preview');
+		}
+	});
+
+	it('appends text, Markdown and images as individual, deduplicated file tabs', () => {
+		const paths = ['/mnt/uploads/notes.md', '/mnt/uploads/readme.txt', '/mnt/uploads/image.png'];
+		let contents: WorkspaceFileContent[] = [];
+		for (const path of paths) {
+			expect(getWorkspaceFileOpenTarget(path)).toBe('file-preview');
+			contents = upsertWorkspaceFileContent(contents, path);
+		}
+		expect(upsertWorkspaceFileContent(contents, paths[0])).toBe(contents);
+		expect(contents.map((content) => content.path)).toEqual(paths);
+		expect(buildWorkspaceSourceContents(true, true, false, [], contents).slice(1)).toEqual(
+			contents
+		);
+	});
+
+	it('reorders and closes views without changing source content', () => {
+		const files = buildWorkspaceFilesContent();
+		const canvas: WorkspaceContent = {
+			type: 'canvas-note',
+			content: '',
+			canvasId: 'canvas-1',
+			title: 'Canvas',
+			source: 'tool'
+		};
+		const preview: WorkspaceContent = {
+			type: 'web-preview',
+			content: '',
+			previewId: 'preview-1',
+			title: 'Preview',
+			source: 'tool',
+			entrypoint: 'index.html',
+			files: {}
+		};
+		expect(orderWorkspaceContents([files, canvas, preview], ['canvas-1'])).toEqual([
+			canvas,
+			files,
+			preview
+		]);
+		expect(moveWorkspaceContent([files, canvas, preview], WORKSPACE_FILES_ID, 'preview-1')).toEqual(
+			[canvas, preview, files]
+		);
+		expect(getVisibleWorkspaceContents([canvas, preview], new Set(['canvas-1']))).toEqual([
+			preview
+		]);
+	});
+});

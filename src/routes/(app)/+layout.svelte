@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { toast } from 'svelte-sonner';
 	import { onMount, tick, getContext } from 'svelte';
 	import { openDB, deleteDB } from 'idb';
@@ -128,6 +129,7 @@
 			return true;
 		});
 		toolServers.set(toolServersData);
+		if (!ENABLE_CHAT_TERMINALS) return;
 
 		// Inject enabled terminal servers as always-on tool servers
 		const enabledTerminals = (($settings as any)?.terminalServers ?? []).filter(

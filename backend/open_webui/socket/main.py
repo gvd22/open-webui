@@ -33,6 +33,7 @@ from open_webui.env import (
 from open_webui.models.access_grants import AccessGrants
 from open_webui.models.channels import Channels
 from open_webui.models.chats import Chats
+from open_webui.models.config import Config
 from open_webui.models.folders import Folders
 from open_webui.models.notes import Notes, NoteUpdateForm
 from open_webui.models.users import UserNameResponse, Users
@@ -40,6 +41,7 @@ from open_webui.socket.utils import RedisDict, RedisLock, YdocManager
 from open_webui.tasks import create_task, stop_item_tasks
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user_by_token
+from open_webui.utils.canvas import sync_linked_canvases_from_note
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.json_codec import SOCKETIO_JSON
 from open_webui.utils.misc import get_output_text
@@ -721,6 +723,16 @@ async def document_save_handler(document_id, data, user):
 
     if document_id.startswith('note:'):
         note_id = document_id.split(':')[1]
+        if not await Config.get('notes.enable', True):
+            log.error('Notes are disabled; refusing save for note %s', note_id)
+            return
+        if user.get('role') != 'admin' and not await has_permission(
+            user.get('id', ''),
+            'features.notes',
+            await Config.get('user.permissions'),
+        ):
+            log.error('User %s no longer has Notes permission', user.get('id'))
+            return
         note = await Notes.get_note_by_id(note_id)
         if not note:
             log.error(f'Note {note_id} not found')
@@ -739,7 +751,15 @@ async def document_save_handler(document_id, data, user):
             log.error(f'User {user.get("id")} does not have write access to note {note_id}')
             return
 
-        await Notes.update_note_by_id(note_id, NoteUpdateForm(data=data))
+        updated_note = await Notes.update_note_by_id(note_id, NoteUpdateForm(data=data))
+        if updated_note:
+            markdown = (((updated_note.data or {}).get('content') or {}).get('md') or '')
+            await sync_linked_canvases_from_note(
+                updated_note.id,
+                updated_note.user_id,
+                updated_note.title,
+                markdown,
+            )
 
 
 @sio.on('ydoc:document:state')

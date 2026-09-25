@@ -19,7 +19,6 @@ from open_webui.env import (
     VIEW_FILE_DEFAULT_MAX_CHARS,
     VIEW_FILE_MAX_CHARS,
 )
-from open_webui.events import EVENTS, publish_event
 from open_webui.models.channels import Channel, ChannelMember, Channels
 from open_webui.models.chats import Chats, chat_search_content_query, chat_search_terms
 from open_webui.models.config import Config
@@ -61,19 +60,18 @@ from open_webui.routers.memories import (
     update_memories as _update_memories,
 )
 from open_webui.routers.retrieval import search_web as _search_web
-from open_webui.socket.main import sio
 from open_webui.tasks import stop_item_tasks
 from open_webui.tools.knowledge_fs import kb_exec  # noqa: F401 — re-exported
 from open_webui.utils.chat_id import is_saved_chat_id
+from open_webui.utils.canvas import sync_linked_canvases_from_note
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.notifications import notify_target
+from open_webui.utils.note_events import emit_note_updated as _emit_note_updated
 from open_webui.utils.sanitize import sanitize_code
 
 log = logging.getLogger(__name__)
 
 MAX_KNOWLEDGE_BASE_SEARCH_ITEMS = 10_000
-
-
 async def _has_write_access_to_note(note, user_id: str) -> bool:
     if note.user_id == user_id:
         return True
@@ -87,17 +85,6 @@ async def _has_write_access_to_note(note, user_id: str) -> bool:
         resource_id=note.id,
         permission='write',
         user_group_ids=set(user_group_ids),
-    )
-
-
-async def _emit_note_updated(request: Request, user: dict, note) -> None:
-    await sio.emit('events:note', note.model_dump(), to=f'note:{note.id}')
-    await publish_event(
-        request,
-        EVENTS.NOTE_UPDATED,
-        actor=user,
-        subject_id=note.id,
-        data={'title': note.title},
     )
 
 
@@ -1477,6 +1464,13 @@ async def replace_note_content(
         if not updated_note:
             return JSONCodec.dumps({'error': 'Failed to update note', 'code': 'update_failed'})
 
+        markdown = ((updated_note.data or {}).get('content') or {}).get('md') or ''
+        await sync_linked_canvases_from_note(
+            updated_note.id,
+            updated_note.user_id,
+            updated_note.title,
+            markdown,
+        )
         await _emit_note_updated(__request__, __user__, updated_note)
 
         return JSONCodec.dumps(

@@ -1,3 +1,13 @@
+import {
+	getWorkspaceActivity,
+	getWorkspaceResultItems,
+	type WorkspaceDisplayItem
+} from '../Artifacts/workspaceOutput';
+export {
+	dedupeCanvasDisplayItems,
+	dedupeWebPreviewDisplayItems
+} from '../Artifacts/workspaceOutput';
+
 export type OutputContentPart = {
 	type?: string;
 	text?: unknown;
@@ -13,7 +23,7 @@ export type OutputItem = {
 	arguments?: unknown;
 	content?: OutputContentPart[];
 	summary?: OutputContentPart[];
-	output?: OutputContentPart[];
+	output?: OutputContentPart[] | string;
 	files?: unknown;
 	embeds?: unknown;
 	code?: string;
@@ -58,6 +68,7 @@ export type OutputDisplayItem =
 			id: string;
 			tokens: OutputDetailToken[];
 	  }
+	| WorkspaceDisplayItem
 	| {
 			type: 'file';
 			id: string;
@@ -136,7 +147,12 @@ function getReasoningText(item: OutputItem): string {
 }
 
 function getToolResultText(item?: OutputItem): string {
-	return (item?.output ?? [])
+	const output =
+		typeof item?.output === 'string'
+			? [{ type: 'output_text', text: item.output }]
+			: (item?.output ?? []);
+
+	return output
 		.filter((part) => part?.type !== 'input_image')
 		.map((part) => {
 			if (part?.text === undefined || part?.text === null) {
@@ -341,6 +357,19 @@ function buildDetailToken(
 	return null;
 }
 
+export function hasPendingToolInteraction(output: OutputItem[] = []): boolean {
+	const completed = new Set(
+		output.filter((item) => item.type === 'function_call_output').map((item) => item.call_id)
+	);
+	return output.some(
+		(item) =>
+			item.type === 'function_call' &&
+			!completed.has(item.call_id) &&
+			(['pending', 'queued', 'requires_approval'].includes(item.status ?? '') ||
+				(item.name === 'ask_user' && item.status === 'in_progress'))
+	);
+}
+
 export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDisplayItem[] {
 	const displayItems: OutputDisplayItem[] = [];
 	const currentDetailTokens: OutputDetailToken[] = [];
@@ -373,11 +402,14 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	};
 
 	output.forEach((item, index) => {
-		if (!item) {
-			return;
-		}
+		if (!item) return;
 
-		if (item.type === 'function_call_output') {
+		if (item?.type === 'function_call_output') {
+			const workspaceItems = getWorkspaceResultItems(item, index);
+			if (workspaceItems.length) {
+				flushDetails();
+				displayItems.push(...workspaceItems);
+			}
 			const inlineFile = getInlineFileFromToolOutput(toolCallByCallId[item.call_id ?? ''], item);
 			if (inlineFile) {
 				flushDetails();
@@ -388,6 +420,20 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 				});
 			}
 			return;
+		}
+
+		if (item.type === 'function_call') {
+			const activity = getWorkspaceActivity(
+				item,
+				index,
+				item.call_id ? toolOutputByCallId[item.call_id] : undefined,
+				() => buildToolCallToken(item, toolOutputByCallId).attributes.done === 'true'
+			);
+			if (activity) {
+				flushDetails();
+				displayItems.push(activity);
+				return;
+			}
 		}
 
 		if (

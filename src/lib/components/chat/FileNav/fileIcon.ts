@@ -3,6 +3,19 @@
  * Maps file names/extensions to Icon component names.
  */
 
+export function fileIconTone(name: string, type: string = 'file'): string {
+	if (type === 'directory') return 'text-gray-500 dark:text-gray-400';
+	const base = name.split('/').pop() ?? name;
+	const extension = base.includes('.') ? (base.split('.').pop()?.toLowerCase() ?? '') : '';
+	if (['doc', 'docx', 'odt'].includes(extension)) return 'text-blue-600 dark:text-blue-400';
+	if (['ppt', 'pptx'].includes(extension)) return 'text-orange-600 dark:text-orange-400';
+	if (['xls', 'xlsx', 'ods', 'csv', 'tsv'].includes(extension)) {
+		return 'text-emerald-600 dark:text-emerald-400';
+	}
+	if (extension === 'pdf') return 'text-red-600 dark:text-red-400';
+	return 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300';
+}
+
 export function fileIconName(name: string, type: string = 'file'): string {
 	if (type === 'directory') return 'folder';
 	const base = name.split('/').pop() ?? name;

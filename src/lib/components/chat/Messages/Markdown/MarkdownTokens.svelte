@@ -11,7 +11,7 @@
 	import { resolveChatMessageToolCall } from '$lib/apis/chats';
 
 	import { WEBUI_BASE_URL } from '$lib/constants';
-	import { settings } from '$lib/stores';
+	import { settings, socket } from '$lib/stores';
 	import { toast } from 'svelte-sonner';
 
 	import CodeBlock from '$lib/components/chat/Messages/CodeBlock.svelte';
@@ -117,7 +117,8 @@
 				chatId,
 				messageId,
 				callId,
-				approved ? 'approve' : 'reject'
+				approved ? 'approve' : 'reject',
+				{ session_id: $socket?.id }
 			);
 			onToolCallResolved(res);
 		} catch (err) {
@@ -193,6 +194,8 @@
 		{#if token.raw.includes('```')}
 			<CodeBlock
 				id={`${id}-${tokenIdx}`}
+				{chatId}
+				{messageId}
 				collapsed={$settings?.collapseCodeBlocks ?? false}
 				{token}
 				lang={token?.lang ?? ''}
@@ -624,6 +627,8 @@
 	{:else if token.type === 'colonFence'}
 		<ColonFenceBlock
 			id={`${id}-${tokenIdx}`}
+			{chatId}
+			{messageId}
 			{token}
 			{tokenIdx}
 			{done}

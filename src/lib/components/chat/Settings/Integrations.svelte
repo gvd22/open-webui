@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { toast } from 'svelte-sonner';
 	import { onMount, getContext } from 'svelte';
 	import type { Writable } from 'svelte/store';
@@ -45,7 +46,7 @@
 	const updateHandler = async () => {
 		await saveSettings({
 			toolServers: servers,
-			terminalServers: terminalServerConfigs
+			...(ENABLE_CHAT_TERMINALS ? { terminalServers: terminalServerConfigs } : {})
 		});
 
 		let toolServersData = await getToolServersData($settings?.toolServers ?? []);
@@ -59,6 +60,8 @@
 			return true;
 		});
 		toolServers.set(toolServersData as any);
+
+		if (!ENABLE_CHAT_TERMINALS) return;
 
 		// Refresh terminal servers store (preserve system terminals)
 		const existingSystemTerminals = (($terminalServers ?? []) as any[]).filter((t) => t.id);
@@ -164,20 +167,22 @@
 				</div>
 			</UserSettingSection>
 
-			<UserSettingSection title={$i18n.t('Terminal')}>
-				<Terminals bind:servers={terminalServerConfigs} onChange={() => updateHandler()} />
+			{#if ENABLE_CHAT_TERMINALS}
+				<UserSettingSection title={$i18n.t('Terminal')}>
+					<Terminals bind:servers={terminalServerConfigs} onChange={() => updateHandler()} />
 
-				<div class="mt-1 {helpTextClass}">
-					{$i18n.t(
-						'Connect to Open Terminal instances to browse files and use them as always-on tools. Only one can be active at a time.'
-					)}
-				</div>
-				<a
-					class="mt-0.5 block text-[0.6875rem] text-gray-500 underline hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300"
-					href="https://github.com/open-webui/open-terminal"
-					target="_blank">{$i18n.t('Learn more about Open Terminal')} ↗</a
-				>
-			</UserSettingSection>
+					<div class="mt-1 {helpTextClass}">
+						{$i18n.t(
+							'Connect to Open Terminal instances to browse files and use them as always-on tools. Only one can be active at a time.'
+						)}
+					</div>
+					<a
+						class="mt-0.5 block text-[0.6875rem] text-gray-500 underline hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300"
+						href="https://github.com/open-webui/open-terminal"
+						target="_blank">{$i18n.t('Learn more about Open Terminal')} ↗</a
+					>
+				</UserSettingSection>
+			{/if}
 		{:else}
 			<div class="flex h-full justify-center">
 				<div class="my-auto">

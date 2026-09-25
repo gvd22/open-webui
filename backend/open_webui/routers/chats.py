@@ -32,11 +32,13 @@ from open_webui.models.config import Config
 from open_webui.models.folders import Folders
 from open_webui.models.shared_chats import SharedChatResponse, SharedChats
 from open_webui.models.tags import TagModel, Tags
+from open_webui.routers.chat_artifacts import router as chat_artifacts_router
 from open_webui.socket.main import get_event_emitter
 from open_webui.tasks import get_response_streams_by_chat_id, has_active_tasks, stop_item_tasks
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.access_control.folders import has_folder_write_access
 from open_webui.utils.auth import bearer_security, get_admin_user, get_current_user, get_verified_user
+from open_webui.utils.canvas import serialize_canvas_documents
 from open_webui.utils.chat_fork import build_fork_history
 from open_webui.utils.context_compaction import compact_chat_branch, get_chat_context_usage
 from open_webui.utils.misc import get_message_list
@@ -47,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+router.include_router(chat_artifacts_router)
 
 CHAT_CONFIG_KEYS = {
     'CONTEXT_COMPACTION_MODEL': 'chat.context_compaction.model',
@@ -1340,6 +1343,7 @@ async def get_chat_by_id(
             data,
             await get_response_streams_by_chat_id(request.app.state.redis, id),
         )
+        data['chat'] = serialize_canvas_documents(data['chat'])
         data['context_usage'] = await get_chat_context_usage(chat)
         return data
 
@@ -1362,6 +1366,8 @@ async def update_chat_by_id(
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if chat:
         touch = 'history' in form_data.chat or 'messages' in form_data.chat
+        # A runtime binding is claimed server-side, never retargeted by a stale UI save.
+        form_data.chat.pop('terminal_id', None)
         chat = await Chats.update_chat_by_id(id, form_data.chat, db=db, touch=touch)
         if form_data.variables is not None:
             chat = (

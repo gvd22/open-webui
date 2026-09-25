@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { v4 as uuidv4 } from 'uuid';
 	import { toast } from 'svelte-sonner';
 
@@ -18,6 +19,7 @@
 		chatId,
 		config,
 		type Model,
+		type WorkspaceOutputFile,
 		models,
 		tags as allTags,
 		settings,
@@ -33,6 +35,7 @@
 		mobile,
 		chatTitle,
 		showArtifacts,
+		artifactCode,
 		artifactContents,
 		tools,
 		skills,
@@ -44,6 +47,8 @@
 		selectedTerminalId,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceActiveFile,
+		workspaceOutputFiles,
 		chatRequestQueues,
 		desktopEvent
 	} from '$lib/stores';
@@ -60,13 +65,33 @@
 		getPromptVariables,
 		processDetails,
 		removeAllDetails,
+		isYoutubeUrl,
 		getCodeBlockContents,
-		displayFileHandler,
-		getUsageTokenCount
+		getUsageTokenCount,
+		displayFileHandler
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 	import { createTemporaryChatId, isTemporaryChatId } from '$lib/utils/chatId';
-	import { applyResponseStreamEvent, getOutputText } from './Messages/structuredOutput';
+	import {
+		createWorkspaceOutputCatalog,
+		createWorkspaceOutputFile,
+		hasNewerWorkspaceOutputVersion,
+		reassignWorkspaceOutputMessageFiles,
+		resolveWorkspaceOutputFile,
+		WORKSPACE_OPEN_OUTPUT_EVENT
+	} from './Artifacts/workspaceOutputs';
+	import {
+		applyResponseStreamEvent,
+		getOutputText,
+		hasPendingToolInteraction
+	} from './Messages/structuredOutput';
+	import { getCanvasNoteArtifactsFromHistory } from './Artifacts/canvas';
+	import { getWebPreviewsFromHistory } from './Artifacts/webPreview';
+	import {
+		buildChatWorkspaceArtifacts,
+		createWorkspaceReferenceHydrator
+	} from './Artifacts/chatArtifacts';
+	import { WORKSPACE_ASK_AI_EVENT } from './Artifacts/artifactEditing';
 
 	import {
 		archiveChatById,
@@ -100,7 +125,12 @@
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
+	import {
+		createWorkspaceOutputPersistence,
+		type UploadedWorkspaceFile
+	} from './Artifacts/workspaceOutputPersistence';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
+	import { updateWorkspaceOutputs } from '$lib/apis/artifacts';
 	import { getFunctions } from '$lib/apis/functions';
 	import { initiateOAuthRedirect } from '$lib/apis/configs';
 	import { updateFolderById } from '$lib/apis/folders';
@@ -108,8 +138,16 @@
 	import Banner from '../common/Banner.svelte';
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
+	import WorkspaceSelectionQuote from './Messages/WorkspaceSelectionQuote.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
+	import {
+		getDefaultWorkspaceContentId,
+		getWorkspaceDocumentFormat,
+		getWorkspaceModelFocus,
+		type WorkspaceModelFocus
+	} from './Artifacts/workspace';
+	import { flushWorkspaceSaveBarrier } from './Artifacts/serializedSaveQueue';
 	import EventConfirmDialog from '../common/ConfirmDialog.svelte';
 	import DeleteConfirmDialog from '../common/ConfirmDialog.svelte';
 	import WebSearchConfirmDialog from '../common/ConfirmDialog.svelte';
@@ -174,7 +212,7 @@
 
 	let selectedModels = [''];
 	let atSelectedModel: Model | undefined;
-	let selectedModelIds = [];
+	let selectedModelIds: string[] = [];
 	$: if (atSelectedModel !== undefined) {
 		selectedModelIds = [atSelectedModel.id];
 	} else {
@@ -209,7 +247,7 @@
 
 	$: {
 		const modelSearchParam =
-			$page.url.searchParams.get('models') || $page.url.searchParams.get('model');
+			$page?.url?.searchParams.get('models') || $page?.url?.searchParams.get('model');
 
 		if (
 			chatIdProp === '' &&
@@ -319,7 +357,20 @@
 
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
-	let codeInterpreterEnabled = false;
+	$: codeInterpreterEnabled =
+		selectedModelIds.length > 0 &&
+		selectedModelIds.every((id) => {
+			const model = $models.find((candidate) => candidate.id === id);
+			return (
+				(model?.info?.meta?.capabilities as Record<string, boolean> | undefined)
+					?.code_interpreter ?? true
+			);
+		}) &&
+		Boolean($config?.features?.enable_code_interpreter) &&
+		($user?.role === 'admin' || Boolean($user?.permissions?.features?.code_interpreter));
+	$: pyodideFilesAvailable =
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter';
+	$: workspaceDefaultContentId = getDefaultWorkspaceContentId();
 	let webSearchActive = false;
 	let showWebSearchConfirm = false;
 	let pendingWebSearchPrompt: string | null = null;
@@ -367,11 +418,26 @@
 	let showCommands = false;
 
 	let generating = false;
+	let knownWebPreviewIds = new Set<string>();
+	let knownCanvasIds = new Set<string>();
+	const workspaceHydrator = createWorkspaceReferenceHydrator({
+		contents: artifactContents,
+		getChatId: () => $chatId,
+		loadChat: (id) => getChatById(localStorage.token, id),
+		onLoaded: (documents) => {
+			if (chat?.chat) chat = { ...chat, chat: { ...chat.chat, ...documents } };
+		},
+		onError: (error) => {
+			console.error('Workspace references could not be loaded', error);
+			toast.error($i18n.t('Workspace content could not be loaded'));
+		}
+	});
+	onDestroy(() => workspaceHydrator.reset());
 	let dragged = false;
 	let generationController = null;
 	let contextCompactionToastId = null;
 
-	let chat = null;
+	let chat: Awaited<ReturnType<typeof getChatById>> | null = null;
 	let tags = [];
 
 	// Read-only when viewing someone else's chat (e.g. via shared folder access)
@@ -402,11 +468,100 @@
 		messages: {},
 		currentId: null
 	};
+	const workspaceOutputCatalog = createWorkspaceOutputCatalog(
+		workspaceOutputFiles,
+		async (id, mutation) => {
+			const result = await updateWorkspaceOutputs(localStorage.token, id, mutation);
+			if (chat?.id === id && chat.chat) chat.chat._workspace_outputs = result.files;
+			return result.files;
+		},
+		() => toast.error($i18n.t('Output list could not be saved'))
+	);
+
+	const syncWorkspaceOutputCatalog = (id: string) =>
+		workspaceOutputCatalog.sync(id, chat?.chat?._workspace_outputs);
+
+	const addOutputFileReference = (
+		file: WorkspaceOutputFile,
+		uploadedFile: UploadedWorkspaceFile
+	) => {
+		const messageId = file.messageId;
+		const reference = {
+			type: 'file',
+			id: uploadedFile.id,
+			url: uploadedFile.id,
+			name: file.name,
+			content_type: file.contentType,
+			size: file.size,
+			status: 'uploaded',
+			source: 'workspace-output',
+			workspace_path: file.path,
+			origin_chat_id: file.originChatId,
+			...(messageId ? { origin_message_id: messageId } : {})
+		};
+		chatFiles = [
+			...chatFiles.filter(
+				(item) => item?.source !== 'workspace-output' || item?.workspace_path !== file.path
+			),
+			reference
+		];
+		history = {
+			...history,
+			messages: reassignWorkspaceOutputMessageFiles(
+				history.messages,
+				file.path,
+				messageId,
+				reference
+			)
+		};
+	};
+
+	const { schedule: schedulePyodideOutputSnapshot, handleChange: handlePyodideFilesChanged } =
+		createWorkspaceOutputPersistence(workspaceOutputCatalog, addOutputFileReference, () =>
+			toast.error($i18n.t('Output could not be saved. It remains available in Files.'))
+		);
 
 	let taskIds = null;
 
 	// Chat Input
 	let prompt = '';
+	let workspaceRequest: { chatId: string; focus: WorkspaceModelFocus; title: string } | null = null;
+	$: if (workspaceRequest && workspaceRequest.chatId !== $chatId) workspaceRequest = null;
+	const prepareWorkspaceRequest = (event: Event) => {
+		const detail = (event as CustomEvent).detail;
+		if (detail?.chatId !== $chatId || readOnly || typeof detail.prompt !== 'string') {
+			event.preventDefault();
+			return;
+		}
+		const active = getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
+		if (!active || active.id !== detail.focus?.id || active.kind !== detail.focus?.kind) {
+			event.preventDefault();
+			return;
+		}
+		if (
+			workspaceRequest &&
+			JSON.stringify(workspaceRequest.focus) !== JSON.stringify(detail.focus)
+		) {
+			event.preventDefault();
+			toast.info($i18n.t('Remove the current selection before adding another.'));
+			return;
+		}
+		prompt = [prompt.trim(), detail.prompt.trim()].filter(Boolean).join('\n\n');
+		workspaceRequest = {
+			chatId: $chatId,
+			focus: structuredClone(detail.focus),
+			title: String(detail.title ?? 'Canvas').slice(0, 100)
+		};
+		messageInput?.setText(prompt);
+		if ($mobile) {
+			showControls.set(false);
+			showArtifacts.set(false);
+		}
+		void tick().then(() => {
+			if (workspaceRequest?.chatId === detail.chatId && $chatId === detail.chatId)
+				messageInput?.focus({ preventScroll: true });
+		});
+	};
 	let chatFiles = [];
 	let files: any[] = [];
 	let params = {};
@@ -416,7 +571,7 @@
 	let currentDraftKey = '';
 
 	$: toolApprovalMode =
-		(params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode) === 'ask'
+		(params?.tool_approval_mode ?? $settings?.params?.tool_approval_mode ?? 'ask') === 'ask'
 			? 'ask'
 			: 'full';
 
@@ -534,10 +689,6 @@
 			if (pending) return pending;
 		}
 		return null;
-	};
-
-	const messageHasPendingAskUser = (message) => {
-		return !!getPendingAskUserFromMessage(message);
 	};
 
 	const answerPendingAskUser = async (messageId, callId, answers, timedOut = false) => {
@@ -752,7 +903,6 @@
 			selectedFilterIds = input.selectedFilterIds ?? [];
 			webSearchEnabled = input.webSearchEnabled ?? false;
 			imageGenerationEnabled = input.imageGenerationEnabled ?? false;
-			codeInterpreterEnabled = input.codeInterpreterEnabled ?? false;
 			if (input.toolApprovalMode) {
 				await handleToolApprovalModeChange(input.toolApprovalMode);
 			}
@@ -797,6 +947,7 @@
 	}
 
 	const navigateHandler = async () => {
+		const targetId = chatIdProp;
 		noteChatDebug('navigateHandler start');
 		// Mark the outgoing chat as read before loading the new one.
 		// $chatId still holds the previous chat here — loadChat() updates it.
@@ -807,7 +958,10 @@
 
 		clearTimeout(saveControlsTimer);
 		await saveControls();
+		if (chatIdProp !== targetId) return;
 		loading = true;
+		showArtifacts.set(false);
+		showControls.set(false);
 
 		prompt = '';
 		messageInput?.setText('');
@@ -823,7 +977,8 @@
 			`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`
 		);
 
-		const loaded = chatIdProp ? await loadChat() : false;
+		const loaded = targetId ? await loadChat(targetId) : false;
+		if (chatIdProp !== targetId) return;
 		noteChatDebug('loadChat completed inside navigateHandler', { loaded });
 		if (loaded) {
 			await tick();
@@ -889,7 +1044,6 @@
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
-		codeInterpreterEnabled = false;
 		prompt = '';
 		messageInput?.setText('');
 		await chatId.set('');
@@ -958,8 +1112,6 @@
 		pendingOAuthTools = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
-		codeInterpreterEnabled = false;
-
 		if (selectedModelIds.filter((id) => id).length > 0) {
 			await setDefaults();
 		}
@@ -974,12 +1126,60 @@
 	};
 
 	$: if (
+		ENABLE_CHAT_TERMINALS &&
 		$terminalServers !== null &&
 		$selectedTerminalId &&
 		!isTerminalAvailable($selectedTerminalId)
 	) {
 		selectedTerminalId.set(null);
 	}
+
+	const openWorkspaceOutputFile = (file: WorkspaceOutputFile) => {
+		if (hasNewerWorkspaceOutputVersion(file)) {
+			toast.info($i18n.t('Opening the last saved version. Recent changes have not been saved.'));
+		}
+		const viewerEnabled = $config?.features?.enable_document_viewer === true;
+		if ((!viewerEnabled || !getWorkspaceDocumentFormat(file.path)) && file.fileId) {
+			window.open(
+				`${WEBUI_API_BASE_URL}/files/${encodeURIComponent(file.fileId)}/content`,
+				'_blank',
+				'noopener,noreferrer'
+			);
+			return;
+		}
+		if (!file.fileId && !pyodideFilesAvailable) {
+			toast.error($i18n.t('Enable Code Interpreter to reopen this output.'));
+			return;
+		}
+		displayFileHandler(
+			file.path,
+			{ showControls, showFileNavPath, showArtifacts },
+			{ page: file.page, fileId: file.fileId, chatId: $chatId }
+		);
+	};
+
+	const handleWorkspaceOutputOpenRequest = (event: Event) => {
+		const detail = (event as CustomEvent)?.detail;
+		const path = detail?.path;
+		const knownFile = resolveWorkspaceOutputFile(get(workspaceOutputFiles), path);
+		const file =
+			createWorkspaceOutputFile(path, {
+				...knownFile,
+				fileId: detail?.fileId ?? knownFile?.fileId,
+				contentType: detail?.contentType ?? knownFile?.contentType,
+				size: detail?.size ?? knownFile?.size
+			}) ?? (pyodideFilesAvailable ? createWorkspaceOutputFile(path) : null);
+		if (
+			file &&
+			!file.fileId &&
+			$chatId &&
+			!isTemporaryChatId($chatId) &&
+			($user?.role === 'admin' || ($user?.permissions?.chat?.file_upload ?? true))
+		) {
+			schedulePyodideOutputSnapshot($chatId, file.path);
+		}
+		if (file) openWorkspaceOutputFile(file);
+	};
 
 	let settingDefaults = false;
 	const setDefaults = async () => {
@@ -1073,18 +1273,10 @@
 					) {
 						webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
 					}
-
-					if (
-						model.info?.meta?.capabilities?.['code_interpreter'] &&
-						$config?.features?.enable_code_interpreter &&
-						($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
-					) {
-						codeInterpreterEnabled = model.info.meta.defaultFeatureIds.includes('code_interpreter');
-					}
 				}
 
 				// Set Default Terminal — only if the referenced terminal actually exists
-				if (model?.info?.meta?.terminalId) {
+				if (ENABLE_CHAT_TERMINALS && model?.info?.meta?.terminalId) {
 					const tid = model.info.meta.terminalId;
 					if (isTerminalAvailable(tid)) {
 						selectedTerminalId.set(tid);
@@ -1385,7 +1577,7 @@
 						typeof data?.timeout_ms === 'number' && data.timeout_ms > 0 ? data.timeout_ms : null;
 					showAskUserDialog = true;
 				} else if (type.startsWith('terminal:')) {
-					terminalEventHandler(type, data);
+					if (ENABLE_CHAT_TERMINALS) terminalEventHandler(type, data);
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -1533,6 +1725,9 @@
 		loading = true;
 		console.log('mounted');
 		window.addEventListener('message', onMessageHandler);
+		window.addEventListener('pyodide:files', handlePyodideFilesChanged);
+		window.addEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
+		window.addEventListener(WORKSPACE_ASK_AI_EVENT, prepareWorkspaceRequest);
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 
@@ -1542,7 +1737,7 @@
 		audioQueue.set(audioQueueInstance);
 
 		// Restore direct terminal enabled states based on persisted selectedTerminalId
-		if ($settings?.terminalServers?.length) {
+		if (ENABLE_CHAT_TERMINALS && $settings?.terminalServers?.length) {
 			settings.set({
 				...$settings,
 				terminalServers: ($settings.terminalServers ?? []).map((s) => ({
@@ -1552,13 +1747,17 @@
 			});
 		}
 
-		const pageSubscribe = page.subscribe(async (p) => {
-			if (p.url.pathname === '/' || p.url.pathname.startsWith('/folders/')) {
-				await tick();
-				initNewChat();
-			}
+		let initialPageInitialization: Promise<void> | null = null;
+		const pageSubscribe = page.subscribe((p) => {
+			const initialization = (async () => {
+				if (p.url.pathname === '/' || p.url.pathname.startsWith('/folders/')) {
+					await tick();
+					await initNewChat();
+				}
 
-			stopAudio();
+				stopAudio();
+			})();
+			if (!initialPageInitialization) initialPageInitialization = initialization;
 		});
 
 		const showControlsSubscribe = showControls.subscribe((value) => {
@@ -1583,6 +1782,10 @@
 		);
 
 		const init = async () => {
+			// The page store emits immediately. Restore the draft only after the initial
+			// new-chat defaults have finished, otherwise they can overwrite feature toggles.
+			await initialPageInitialization;
+
 			if (!chatIdProp) {
 				loading = false;
 				await tick();
@@ -1598,8 +1801,6 @@
 				selectedFilterIds = [];
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
-				codeInterpreterEnabled = false;
-
 				await restoreChatInput(storageChatInput);
 			}
 
@@ -1625,6 +1826,9 @@
 				chatTitle.set('');
 
 				window.removeEventListener('message', onMessageHandler);
+				window.removeEventListener('pyodide:files', handlePyodideFilesChanged);
+				window.removeEventListener(WORKSPACE_OPEN_OUTPUT_EVENT, handleWorkspaceOutputOpenRequest);
+				window.removeEventListener(WORKSPACE_ASK_AI_EVENT, prepareWorkspaceRequest);
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				dismissContextCompactionToast();
@@ -1639,15 +1843,6 @@
 	// File upload functions
 
 	const uploadGoogleDriveFile = async (fileData) => {
-		console.log('Starting uploadGoogleDriveFile with:', {
-			id: fileData.id,
-			name: fileData.name,
-			url: fileData.url,
-			headers: {
-				Authorization: `Bearer ${token}`
-			}
-		});
-
 		// Validate input
 		if (!fileData?.id || !fileData?.name || !fileData?.url || !fileData?.headers?.Authorization) {
 			throw new Error('Invalid file data provided');
@@ -1872,6 +2067,7 @@
 	};
 
 	const onHistoryChange = (history) => {
+		syncWorkspaceOutputCatalog($chatId ?? '');
 		if (history) {
 			clearTimeout(contentsRAF);
 			contentsRAF = setTimeout(() => {
@@ -1926,59 +2122,33 @@
 
 	const getContents = () => {
 		const messages = history ? createMessagesList(history, history.currentId) : [];
-		let contents = [];
-		messages.forEach((message) => {
-			if (message?.role !== 'user') {
-				const messageContent =
-					getOutputText(message?.output) || removeAllDetails(message?.content ?? '');
-				if (!messageContent.trim()) {
-					return;
-				}
-
-				const { codeBlocks: codeBlocks, htmlGroups: htmlGroups } =
-					getCodeBlockContents(messageContent);
-
-				if (htmlGroups && htmlGroups.length > 0) {
-					htmlGroups.forEach((group) => {
-						const renderedContent = `
-                        <!DOCTYPE html>
-                        <html lang="en">
-                        <head>
-                            <meta charset="UTF-8">
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-							<${''}style>
-								body {
-									background-color: white; /* Ensure the iframe has a white background */
-								}
-
-								${group.css}
-							</${''}style>
-                        </head>
-                        <body>
-                            ${group.html}
-
-							<${''}script>
-                            	${group.js}
-							</${''}script>
-                        </body>
-                        </html>
-                    `;
-						contents = [...contents, { type: 'iframe', content: renderedContent }];
-					});
-				} else {
-					// Check for SVG content
-					for (const block of codeBlocks) {
-						if (block.lang === 'svg' || (block.lang === 'xml' && block.code.includes('<svg'))) {
-							contents = [...contents, { type: 'svg', content: block.code }];
-						}
-					}
-				}
-			}
+		const result = buildChatWorkspaceArtifacts({
+			messages,
+			currentArtifacts: get(artifactContents) ?? [],
+			persistedCanvasDocuments: (chat?.chat?._canvas_documents ?? {}) as Record<string, any>,
+			persistedWebPreviews: (chat?.chat?._web_preview_documents ?? {}) as Record<string, any>,
+			knownWebPreviewIds,
+			knownCanvasIds,
+			selectedArtifactId: get(artifactCode)
 		});
 
-		artifactContents.set(contents);
-	};
+		knownWebPreviewIds = result.knownWebPreviewIds;
+		knownCanvasIds = result.knownCanvasIds;
+		artifactContents.set(result.contents);
+		void workspaceHydrator.hydrate(result.contents);
 
+		if (result.canvasAutoOpenId && !$mobile && $chatId) {
+			artifactCode.set(result.canvasAutoOpenId);
+			showArtifacts.set(true);
+			showControls.set(true);
+		}
+
+		if (result.newToolPreviewId && !$mobile && $chatId) {
+			artifactCode.set(result.newToolPreviewId);
+			showArtifacts.set(true);
+			showControls.set(true);
+		}
+	};
 	//////////////////////////
 	// Web functions
 	//////////////////////////
@@ -1992,13 +2162,18 @@
 
 	const initNewChat = async () => {
 		console.log('initNewChat');
+		const pageUrl = $page?.url ?? new URL(window.location.href);
 		resetWebSearchConfirmation();
+		knownWebPreviewIds = new Set();
+		knownCanvasIds = new Set();
+		workspaceHydrator.reset();
 
 		// Mark the outgoing chat as read before resetting; in-place created chats
 		// keep chatIdProp undefined, so navigateHandler never marks them read.
 		if ($chatId && !$temporaryChatEnabled) {
 			updateLastReadAt($chatId);
 		}
+		chat = null;
 
 		if ($user?.role !== 'admin' && $user?.permissions?.chat?.temporary_enforced) {
 			await temporaryChatEnabled.set(true);
@@ -2039,10 +2214,10 @@
 			}
 		};
 
-		if ($page.url.searchParams.get('models') || $page.url.searchParams.get('model')) {
+		if (pageUrl.searchParams.get('models') || pageUrl.searchParams.get('model')) {
 			const urlModels = (
-				$page.url.searchParams.get('models') ||
-				$page.url.searchParams.get('model') ||
+				pageUrl.searchParams.get('models') ||
+				pageUrl.searchParams.get('model') ||
 				''
 			)?.split(',');
 
@@ -2112,7 +2287,7 @@
 		await showCallOverlay.set(false);
 		await showArtifacts.set(false);
 
-		if (!embedded && $page.url.pathname.includes('/c/')) {
+		if (!embedded && pageUrl.pathname.includes('/c/')) {
 			window.history.replaceState(history.state, '', `/`);
 		}
 
@@ -2135,34 +2310,30 @@
 		taskIds = null;
 		chatTasks = [];
 
-		if ($page.url.searchParams.get('youtube')) {
-			await uploadWeb(`https://www.youtube.com/watch?v=${$page.url.searchParams.get('youtube')}`);
+		if (pageUrl.searchParams.get('youtube')) {
+			await uploadWeb(`https://www.youtube.com/watch?v=${pageUrl.searchParams.get('youtube')}`);
 		}
 
-		if ($page.url.searchParams.get('load-url')) {
-			await uploadWeb($page.url.searchParams.get('load-url'));
+		if (pageUrl.searchParams.get('load-url')) {
+			await uploadWeb(pageUrl.searchParams.get('load-url'));
 		}
 
-		if ($page.url.searchParams.get('web-search') === 'true') {
+		if (pageUrl.searchParams.get('web-search') === 'true') {
 			webSearchEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('image-generation') === 'true') {
+		if (pageUrl.searchParams.get('image-generation') === 'true') {
 			imageGenerationEnabled = true;
 		}
 
-		if ($page.url.searchParams.get('code-interpreter') === 'true') {
-			codeInterpreterEnabled = true;
-		}
-
-		if ($page.url.searchParams.get('tools')) {
-			selectedToolIds = $page.url.searchParams
+		if (pageUrl.searchParams.get('tools')) {
+			selectedToolIds = pageUrl.searchParams
 				.get('tools')
 				?.split(',')
 				.map((id) => id.trim())
 				.filter((id) => id);
-		} else if ($page.url.searchParams.get('tool-ids')) {
-			selectedToolIds = $page.url.searchParams
+		} else if (pageUrl.searchParams.get('tool-ids')) {
+			selectedToolIds = pageUrl.searchParams
 				.get('tool-ids')
 				?.split(',')
 				.map((id) => id.trim())
@@ -2178,7 +2349,7 @@
 			}
 		}
 
-		if ($page.url.searchParams.get('call') === 'true') {
+		if (pageUrl.searchParams.get('call') === 'true') {
 			openCallOverlay();
 		}
 
@@ -2215,12 +2386,12 @@
 					submitHandler(query || '');
 				}
 			}
-		} else if ($page.url.searchParams.get('q')) {
-			const q = $page.url.searchParams.get('q') ?? '';
+		} else if (pageUrl.searchParams.get('q')) {
+			const q = pageUrl.searchParams.get('q') ?? '';
 			messageInput?.setText(q);
 
 			if (q) {
-				if (($page.url.searchParams.get('submit') ?? 'true') === 'true') {
+				if ((pageUrl.searchParams.get('submit') ?? 'true') === 'true') {
 					await tick();
 					submitHandler(q);
 				}
@@ -2235,10 +2406,10 @@
 		messageInput?.focus({ preventScroll: true });
 	};
 
-	const loadChat = async () => {
+	const loadChat = async (targetId = $chatId || chatIdProp) => {
 		noteChatDebug('loadChat start');
-		// chatIdProp is empty for chats started from the home page (URL set via replaceState)
-		chatId.set(chatIdProp || $chatId);
+		// In-place new chats update the store and URL, not the old route prop.
+		chatId.set(targetId);
 		noteChatDebug('loadChat set active chat id');
 
 		if ($temporaryChatEnabled) {
@@ -2246,17 +2417,19 @@
 			temporaryChatEnabled.set(false);
 		}
 
-		chat = await getChatById(localStorage.token, $chatId).catch(async (error) => {
+		const loadedChat = await getChatById(localStorage.token, targetId).catch(async (error) => {
 			console.error('[note-chat] getChatById failed', {
 				chatIdProp,
 				activeChatId: $chatId,
 				error
 			});
-			if (!embedded) {
+			if (!embedded && $chatId === targetId) {
 				await goto('/');
 			}
 			return null;
 		});
+		if ($chatId !== targetId) return false;
+		chat = loadedChat;
 		noteChatDebug('getChatById completed', {
 			found: !!chat,
 			chatId: chat?.id,
@@ -2265,7 +2438,7 @@
 		});
 
 		if (chat) {
-			tags = await getTagsById(localStorage.token, $chatId).catch(async (error) => {
+			const loadedTags = await getTagsById(localStorage.token, targetId).catch(async (error) => {
 				console.warn('[note-chat] getTagsById failed; continuing without tags', {
 					chatIdProp,
 					activeChatId: $chatId,
@@ -2273,6 +2446,8 @@
 				});
 				return [];
 			});
+			if ($chatId !== targetId) return false;
+			tags = loadedTags;
 			noteChatDebug('getTagsById completed', { tagCount: tags?.length ?? 0 });
 
 			const chatContent = chat.chat;
@@ -2307,6 +2482,16 @@
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
 						: convertMessagesToHistory(chatContent.messages);
+				knownWebPreviewIds = new Set([
+					...getWebPreviewsFromHistory(history).map((preview) => preview.previewId),
+					...Object.keys(chatContent._web_preview_documents ?? {})
+				]);
+				knownCanvasIds = new Set([
+					...getCanvasNoteArtifactsFromHistory(history).map(
+						(item) => item.canvasId || item.noteId || ''
+					),
+					...Object.keys(chatContent._canvas_documents ?? {})
+				]);
 				if (chat?.current_message_id && history?.messages?.[chat.current_message_id]) {
 					history.currentId = chat.current_message_id;
 				}
@@ -2320,7 +2505,6 @@
 				params = structuredClone(chatContent?.params ?? {});
 				delete params.note_id;
 				chatFiles = structuredClone(chatContent?.files ?? []);
-
 				// Load tasks from chat-level DB field
 				chatTasks = chat?.tasks ?? [];
 				serverContextUsage = chat?.context_usage ?? null;
@@ -2346,8 +2530,9 @@
 				// If the response is already done, remaining tasks are just background
 				// work (follow-ups, title gen) that shouldn't block the input.
 				const activeTaskIds = taskIds;
-				const currentMessage = history.currentId ? history.messages[history.currentId] : null;
-				const pendingTaskIds = await getTaskIdsByChatId(localStorage.token, $chatId)
+				const currentMessage: { role?: string; done?: boolean; output?: any[] } | null =
+					history.currentId ? history.messages[history.currentId] : null;
+				const pendingTaskIds = await getTaskIdsByChatId(localStorage.token, targetId)
 					.then((res) => res?.task_ids ?? [])
 					.catch((error) => {
 						console.warn('[note-chat] getTaskIdsByChatId failed; continuing without tasks', {
@@ -2361,9 +2546,10 @@
 					pendingTaskCount: pendingTaskIds.length,
 					hasCurrentMessage: !!currentMessage
 				});
+				if ($chatId !== targetId) return false;
 				if (taskIds !== activeTaskIds) {
 					noteChatDebug('task ids changed during load; aborting stale load');
-					return;
+					return true;
 				}
 				const responseComplete = currentMessage?.role === 'assistant' && currentMessage?.done;
 
@@ -2375,7 +2561,7 @@
 					if (
 						currentMessage?.role === 'assistant' &&
 						!currentMessage.done &&
-						!messageHasPendingAskUser(currentMessage)
+						!hasPendingToolInteraction(currentMessage.output)
 					) {
 						currentMessage.done = true;
 					}
@@ -2453,6 +2639,10 @@
 	};
 
 	let processingQueueChats = new Set<string>();
+	const getCurrentWorkspaceFocus = (): WorkspaceModelFocus | undefined =>
+		workspaceRequest?.chatId === $chatId
+			? workspaceRequest.focus
+			: getWorkspaceModelFocus($artifactContents, $artifactCode, $showArtifacts);
 
 	const processNextInQueue = async (targetChatId: string) => {
 		if (processingQueueChats.has(targetChatId)) return;
@@ -2476,12 +2666,20 @@
 			const combinedPrompt = queuedMessages.map((m) => m.prompt).join('\n\n');
 			const combinedFiles = queuedMessages.flatMap((m) => m.files);
 
+			const workspaceFocus = queuedMessages.every((item) =>
+				equal(item.workspaceFocus, queuedMessages[0].workspaceFocus)
+			)
+				? queuedMessages[0].workspaceFocus
+				: undefined;
+
 			chatRequestQueues.update((q) => ({
 				...q,
 				[targetChatId]: (q[targetChatId] ?? []).filter((m) => !queuedMessageIds.has(m.id))
 			}));
 
-			await submitPrompt(combinedPrompt, combinedFiles);
+			if (!(await submitPrompt(combinedPrompt, combinedFiles, workspaceFocus))) {
+				throw new Error('Queued message was not submitted.');
+			}
 		} catch (error) {
 			console.error(error);
 			chatRequestQueues.update((q) => ({
@@ -2506,7 +2704,7 @@
 		}));
 		await stopResponse(false);
 		await tick();
-		await submitPrompt(item.prompt, item.files);
+		await submitPrompt(item.prompt, item.files, item.workspaceFocus);
 	};
 
 	const editQueuedMessage = (id) => {
@@ -2866,8 +3064,25 @@
 	// Chat functions
 	//////////////////////////
 
-	const submitPrompt = async (inputContent, inputFiles) => {
+	const submitPrompt = async (
+		inputContent,
+		inputFiles,
+		workspaceFocus: WorkspaceModelFocus | undefined = getCurrentWorkspaceFocus()
+	) => {
+		const workspaceSaved = await flushWorkspaceSaveBarrier(
+			workspaceFocus && $chatId ? { chatId: $chatId, ...workspaceFocus } : undefined
+		);
+		if (!workspaceSaved) {
+			toast.warning(
+				$i18n.t('The open workspace item changed elsewhere. Review it before sending.')
+			);
+			return false;
+		}
 		const _files = structuredClone(inputFiles);
+		const workspaceSelection = workspaceFocus?.selection
+			? { ...structuredClone(workspaceFocus), title: workspaceRequest?.title ?? 'Canvas' }
+			: undefined;
+		workspaceRequest = null;
 
 		chatFiles.push(
 			..._files.filter(
@@ -2889,6 +3104,7 @@
 			childrenIds: [],
 			role: 'user',
 			content: inputContent,
+			workspace_selection: workspaceSelection,
 			files: _files.length > 0 ? _files : undefined,
 			timestamp: Math.floor(Date.now() / 1000), // Unix epoch
 			models: selectedModels
@@ -2911,7 +3127,8 @@
 
 		saveSessionSelectedModels();
 
-		await sendMessage(history, userMessageId);
+		await sendMessage(history, userMessageId, { workspaceFocus });
+		return true;
 	};
 
 	const handleManualCompact = async () => {
@@ -3160,7 +3377,15 @@
 				const _files = structuredClone(files);
 				chatRequestQueues.update((q) => ({
 					...q,
-					[$chatId]: [...(q[$chatId] ?? []), { id: uuidv4(), prompt: userPrompt, files: _files }]
+					[$chatId]: [
+						...(q[$chatId] ?? []),
+						{
+							id: uuidv4(),
+							prompt: userPrompt,
+							files: _files,
+							workspaceFocus: getCurrentWorkspaceFocus()
+						}
+					]
 				}));
 				// Clear input
 				messageInput?.setText('');
@@ -3184,14 +3409,13 @@
 			}
 		}
 
-		// Clear input and submit
+		const _files = structuredClone(files);
+		const submitted = await submitPrompt(userPrompt, _files);
+		if (!submitted) return;
+
 		messageInput?.setText('');
 		prompt = '';
-		const _files = structuredClone(files);
 		files = [];
-		messageInput?.setText('');
-
-		await submitPrompt(userPrompt, _files);
 	};
 
 	const sendMessage = async (
@@ -3201,12 +3425,15 @@
 			messages = null,
 			modelId = null,
 			modelIdx = null,
-			regenerationPrompt = null
+			regenerationPrompt = null,
+			workspaceFocus = _history.messages[parentId]?.workspace_selection ??
+				getCurrentWorkspaceFocus()
 		}: {
 			messages?: any[] | null;
 			modelId?: string | null;
 			modelIdx?: number | null;
 			regenerationPrompt?: string | null;
+			workspaceFocus?: WorkspaceModelFocus;
 		} = {}
 	) => {
 		if (autoScroll) {
@@ -3352,7 +3579,8 @@
 						// regenerations in a duplicate-model chat, which would otherwise lose their
 						// column identity and collapse on reload.
 						messageIdsList: messageIdsList.length > 0 ? messageIdsList : undefined,
-						regenerationPrompt
+						regenerationPrompt,
+						workspaceFocus
 					}
 				);
 			} finally {
@@ -3387,6 +3615,11 @@
 		return features;
 	};
 
+	const getChatFeatures = () => ({
+		...(chat?.chat?.features ?? {}),
+		code_interpreter: codeInterpreterEnabled
+	});
+
 	const getStopTokens = () => {
 		const stop = params?.stop ?? $settings?.params?.stop;
 		if (!stop) return undefined;
@@ -3407,11 +3640,13 @@
 		{
 			messageIdsList,
 			regenerationPrompt,
-			continueResponse = false
+			continueResponse = false,
+			workspaceFocus
 		}: {
 			messageIdsList?: Array<{ model_id: string; message_id: string }>;
 			regenerationPrompt?: string | null;
 			continueResponse?: boolean;
+			workspaceFocus?: WorkspaceModelFocus;
 		} = {}
 	) => {
 		const responseMessage = _history.messages[responseMessageId];
@@ -3423,6 +3658,7 @@
 
 		// Filter chatFiles to only include files that are in the chatMessageFiles
 		chatFiles = chatFiles.filter((item) => {
+			if (item?.source === 'workspace-output') return true;
 			const fileExists = chatMessageFiles.some((messageFile) => messageFile.id === item.id);
 			return fileExists;
 		});
@@ -3540,8 +3776,9 @@
 		// in the message so the backend can inject their full content.
 		const skillIds = [...selectedSkillIds];
 
-		// Only send terminal_id if the model has terminal capability enabled
-		const terminalEnabled = model.info?.meta?.capabilities?.terminal ?? true;
+		// Only send terminal_id if the model has terminal capability enabled.
+		const terminalEnabled =
+			ENABLE_CHAT_TERMINALS && (model.info?.meta?.capabilities?.terminal ?? true);
 		const useChatVariablesFallback =
 			!_chatId || $temporaryChatEnabled || isTemporaryChatId(_chatId);
 
@@ -3567,12 +3804,14 @@
 					($terminalServers ?? []).some((t) => t.id && t.id === $selectedTerminalId)
 						? $selectedTerminalId
 						: undefined,
+				workspace_focus: workspaceFocus,
+				workspace_file: $workspaceActiveFile ?? undefined,
 				tool_servers: [
 					...($toolServers ?? []).filter(
 						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
 					),
-					// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
-					...($terminalServers ?? []).filter((t) => !t.id)
+					// Direct terminal servers are retained but inactive while their entry points are disabled.
+					...(ENABLE_CHAT_TERMINALS ? ($terminalServers ?? []).filter((t) => !t.id) : [])
 				],
 				features: getFeatures(),
 				variables: {
@@ -3934,6 +4173,7 @@
 					models: selectedModels,
 					system: $settings.system ?? undefined,
 					params: params,
+					features: getChatFeatures(),
 					history: history,
 					messages: createMessagesList(history, history.currentId),
 					tags: [],
@@ -3978,6 +4218,7 @@
 					history: history,
 					messages: createMessagesList(history, history.currentId),
 					params: params,
+					features: getChatFeatures(),
 					files: chatFiles
 				});
 			}
@@ -3987,11 +4228,18 @@
 	const saveControls = async () => {
 		if (!$chatId || $temporaryChatEnabled) return;
 		const loaded = chat?.chat ?? {};
-		if (equal(params, loaded.params ?? {}) && equal(chatFiles, loaded.files ?? [])) return;
+		const features = getChatFeatures();
+		if (
+			equal(params, loaded.params ?? {}) &&
+			equal(chatFiles, loaded.files ?? []) &&
+			equal(features, loaded.features ?? {})
+		)
+			return;
 
 		const res = await updateChatById(localStorage.token, $chatId, {
 			params,
-			files: chatFiles
+			files: chatFiles,
+			features
 		}).catch((err) => {
 			console.error('[controls autosave]', err);
 			return null;
@@ -4018,7 +4266,6 @@
 		selectedFilterIds,
 		imageGenerationEnabled,
 		webSearchEnabled,
-		codeInterpreterEnabled,
 		toolApprovalMode
 	});
 
@@ -4312,11 +4559,16 @@
 									models: selectedModels,
 									system: $settings.system ?? undefined,
 									params: params,
+									features: getChatFeatures(),
 									history: history,
 									timestamp: Date.now()
 								}
 							}}
 							{history}
+							{workspaceDefaultContentId}
+							onOpenWorkspaceOutputFile={openWorkspaceOutputFile}
+							canvasDocuments={chat?.chat?._canvas_documents ?? {}}
+							webPreviews={chat?.chat?._web_preview_documents ?? {}}
 							title={$chatTitle}
 							shareEnabled={!!history.currentId}
 							{initNewChat}
@@ -4341,6 +4593,7 @@
 											title: title.length > 50 ? `${title.slice(0, 50)}...` : title,
 											models: selectedModels,
 											params: params,
+											features: getChatFeatures(),
 											history: history,
 											messages: messages,
 											timestamp: Date.now()
@@ -4422,6 +4675,19 @@
 									id={embedded ? messageInputDropzoneId : undefined}
 									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
 								>
+									{#if workspaceRequest}
+										<div class="px-4 pb-2">
+											<WorkspaceSelectionQuote
+												text={workspaceRequest.focus.selection?.displayText ??
+													workspaceRequest.focus.selection?.text ??
+													''}
+												title={workspaceRequest.focus.selection
+													? workspaceRequest.title
+													: 'Web Preview'}
+												onRemove={() => (workspaceRequest = null)}
+											/>
+										</div>
+									{/if}
 									<MessageInput
 										bind:this={messageInput}
 										{history}
@@ -4434,7 +4700,6 @@
 										bind:selectedSkillIds
 										bind:selectedFilterIds
 										bind:imageGenerationEnabled
-										bind:codeInterpreterEnabled
 										{pendingOAuthTools}
 										{oauthRedirectHandler}
 										bind:webSearchEnabled
@@ -4514,6 +4779,19 @@
 									</div>
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
+									{#if workspaceRequest}
+										<div class="px-4 pb-2">
+											<WorkspaceSelectionQuote
+												text={workspaceRequest.focus.selection?.displayText ??
+													workspaceRequest.focus.selection?.text ??
+													''}
+												title={workspaceRequest.focus.selection
+													? workspaceRequest.title
+													: 'Web Preview'}
+												onRemove={() => (workspaceRequest = null)}
+											/>
+										</div>
+									{/if}
 									<MessageInput
 										bind:this={messageInput}
 										{history}
@@ -4526,7 +4804,6 @@
 										bind:selectedSkillIds
 										bind:selectedFilterIds
 										bind:imageGenerationEnabled
-										bind:codeInterpreterEnabled
 										{pendingOAuthTools}
 										{oauthRedirectHandler}
 										bind:webSearchEnabled
@@ -4586,7 +4863,6 @@
 									bind:selectedSkillIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
-									bind:codeInterpreterEnabled
 									bind:webSearchEnabled
 									bind:atSelectedModel
 									bind:showCommands

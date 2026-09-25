@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { SHOW_UPSTREAM_CHAT_CONTROLS } from '$lib/chatUi';
+	import Knobs from '../icons/Knobs.svelte';
 	import { getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -9,6 +11,7 @@
 		config,
 		mobile,
 		settings,
+		showArtifacts,
 		showControls,
 		showSidebar,
 		temporaryChatEnabled,
@@ -22,8 +25,6 @@
 	import ShareChatModal from '../chat/ShareChatModal.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Menu from '$lib/components/layout/Navbar/Menu.svelte';
-	import AdjustmentsHorizontal from '../icons/AdjustmentsHorizontal.svelte';
-
 	import PencilSquare from '../icons/PencilSquare.svelte';
 	import Banner from '../common/Banner.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
@@ -34,8 +35,11 @@
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
 	import ChatPlus from '../icons/ChatPlus.svelte';
 	import ChatCheck from '../icons/ChatCheck.svelte';
-	import Knobs from '../icons/Knobs.svelte';
+	import { artifactCode } from '$lib/stores';
+	import { WORKSPACE_FILES_ID } from './Artifacts/workspace';
 	import { isTemporaryChatId } from '$lib/utils/chatId';
+	import WorkspaceOutputsMenu from './WorkspaceOutputsMenu.svelte';
+	import type { WorkspaceOutputFile } from '$lib/stores';
 
 	const i18n = getContext('i18n');
 
@@ -44,6 +48,10 @@
 	export let shareEnabled: boolean = false;
 	export let scrollTop = 0;
 	export let scrollToTop: (() => void) | null = null;
+	export let workspaceDefaultContentId = WORKSPACE_FILES_ID;
+	export let onOpenWorkspaceOutputFile: (file: WorkspaceOutputFile) => void = () => {};
+	export let canvasDocuments: Record<string, any> = {};
+	export let webPreviews: Record<string, any> = {};
 
 	export let chat;
 	export let history;
@@ -230,11 +238,20 @@
 						</Tooltip>
 					{/if}
 
-					{#if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
+					{#if chat?.id}
+						<WorkspaceOutputsMenu
+							onOpenFile={onOpenWorkspaceOutputFile}
+							{canvasDocuments}
+							{webPreviews}
+						/>
+					{/if}
+
+					{#if SHOW_UPSTREAM_CHAT_CONTROLS && ($user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true))}
 						<Tooltip content={$i18n.t('Controls')}>
 							<button
 								class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
 								on:click={async () => {
+									showArtifacts.set(false);
 									await showControls.set(!$showControls);
 								}}
 								aria-label="Controls"
@@ -243,6 +260,25 @@
 							</button>
 						</Tooltip>
 					{/if}
+
+					<Tooltip content={$i18n.t('Workspace')}>
+						<button
+							class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
+							on:click={async () => {
+								if ($showControls && $showArtifacts) {
+									showControls.set(false);
+									return;
+								}
+								artifactCode.set(workspaceDefaultContentId);
+								showArtifacts.set(true);
+								showControls.set(true);
+							}}
+							aria-label={$i18n.t('Workspace')}
+							aria-pressed={$showControls && $showArtifacts}
+						>
+							<Sidebar className="size-4" strokeWidth="1.5" side="right" />
+						</button>
+					</Tooltip>
 				</div>
 			</div>
 		</div>

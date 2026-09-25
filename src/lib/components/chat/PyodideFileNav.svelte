@@ -1,11 +1,22 @@
 <script context="module">
-	let savedPyodidePath = '/mnt/uploads';
+	import { PYODIDE_WORKSPACE_DIRECTORY } from '$lib/pyodide/workspace';
+
+	let savedPyodidePath = PYODIDE_WORKSPACE_DIRECTORY;
 </script>
 
 <script lang="ts">
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
-	import { pyodideWorker } from '$lib/stores';
+	import { toast } from 'svelte-sonner';
+	import { chatId, pyodideWorker, showFileNavPath } from '$lib/stores';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { requestPyodideFile, type PyodideFileRequest } from '$lib/pyodide/workerRequest';
+	import {
+		asPyodideWorkspaceDirectory,
+		getPyodideWorkspaceBreadcrumbs,
+		getPyodideWorkspacePath,
+		isValidPyodideEntryName
+	} from '$lib/pyodide/workspace';
 	import type { FileEntry } from '$lib/apis/terminal';
 
 	import FileNavToolbar from './FileNav/FileNavToolbar.svelte';
@@ -15,16 +26,25 @@
 	import Spinner from '../common/Spinner.svelte';
 	import Folder from '../icons/Folder.svelte';
 	import Document from '../icons/Document.svelte';
+	import { isWorkspaceOpenRequestForChat } from './Artifacts/workspace';
 
 	const i18n = getContext('i18n');
 
 	export let overlay = false;
+	export let onOpenFile: (
+		path: string,
+		options?: { page?: number | null; fileId?: string | null }
+	) => boolean = () => false;
 
 	// ── State ─────────────────────────────────────────────────────────────
 	let currentPath = savedPyodidePath;
 	let entries: FileEntry[] = [];
+	let sortBy: 'name' | 'size' | 'date' = 'name';
+	let sortAsc = true;
+	let showHidden = false;
 	let loading = false;
 	let error: string | null = null;
+	let startupStage: string | null = null;
 
 	let selectedFile: string | null = null;
 	let fileLoading = false;
@@ -90,10 +110,31 @@
 		navigatingHistory = false;
 	};
 
-	let _reqId = 0;
+	let directoryRequestId = 0;
+	let fileRequestId = 0;
+	let filesChangedRequestId = 0;
 
+	const FILE_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 	const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'avif']);
 	const isImage = (path: string) => IMAGE_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
+	$: visibleEntries = entries
+		.filter((entry) => showHidden || !entry.name.startsWith('.'))
+		.sort((a, b) => {
+			if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+			let comparison = 0;
+			if (sortBy === 'size') comparison = (a.size ?? 0) - (b.size ?? 0);
+			else if (sortBy === 'date') comparison = (a.modified ?? 0) - (b.modified ?? 0);
+			else comparison = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+			return sortAsc ? comparison : -comparison;
+		});
+
+	const toggleSort = (mode: 'name' | 'size' | 'date') => {
+		if (sortBy === mode) sortAsc = !sortAsc;
+		else {
+			sortBy = mode;
+			sortAsc = true;
+		}
+	};
 
 	// ── Worker management ─────────────────────────────────────────────────
 
@@ -106,89 +147,129 @@
 		return worker;
 	}
 
-	function sendWorkerMessage(msg: any): Promise<any> {
+	async function sendWorkerMessage(msg: PyodideFileRequest) {
 		const worker = ensureWorker();
-		const id = `fs-${++_reqId}`;
-		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				worker.removeEventListener('message', handler);
-				reject('Timeout');
-			}, 30000);
-
-			function handler(event: MessageEvent) {
-				if (event.data?.id !== id) return;
-				clearTimeout(timeout);
-				worker.removeEventListener('message', handler);
-				resolve(event.data);
-			}
-
-			worker.addEventListener('message', handler);
-			worker.postMessage({ ...msg, id });
-		});
+		try {
+			return await requestPyodideFile(worker, msg, {
+				onProgress: (stage) => {
+					startupStage = stage;
+				},
+				onWorkerError: () => {
+					if ($pyodideWorker === worker) pyodideWorker.set(null);
+				},
+				onTimeout: () => {
+					if ($pyodideWorker === worker) {
+						terminatePyodideWorker(worker, 'Pyodide stopped after a file request timed out');
+						pyodideWorker.set(null);
+					}
+				}
+			});
+		} finally {
+			startupStage = null;
+		}
 	}
 
 	// ── Breadcrumbs ───────────────────────────────────────────────────────
 
-	const buildBreadcrumbs = (path: string) => {
-		const parts = path.split('/').filter(Boolean);
-		return parts.reduce(
-			(acc, part) => {
-				const prev = acc[acc.length - 1];
-				acc.push({ label: part, path: `${prev.path}${part}/` });
-				return acc;
-			},
-			[{ label: '/', path: '/' }]
-		);
-	};
-
-	$: breadcrumbs = buildBreadcrumbs(currentPath);
+	$: breadcrumbs = getPyodideWorkspaceBreadcrumbs(currentPath);
 
 	// ── Operations ────────────────────────────────────────────────────────
 
-	const loadDir = async (path: string) => {
+	const loadDir = async (
+		path: string,
+		options: { preserveSelection?: boolean; recordHistory?: boolean } = {}
+	) => {
+		const requestId = ++directoryRequestId;
+		const previousPath = currentPath;
 		loading = true;
 		error = null;
-		selectedFile = null;
-		clearPreview();
-		currentPath = path.endsWith('/') ? path : path + '/';
-		savedPyodidePath = currentPath;
-		pushNavHistory(currentPath);
+		if (!options.preserveSelection) {
+			fileRequestId += 1;
+			selectedFile = null;
+			clearPreview();
+		}
+		const requestedPath = asPyodideWorkspaceDirectory(path);
+		currentPath = requestedPath;
 
 		try {
 			const res = await sendWorkerMessage({
 				type: 'fs:list',
-				path: currentPath.replace(/\/$/, '') || '/'
+				path: requestedPath.replace(/\/$/, '') || '/'
 			});
-			entries = (res.entries || []).sort((a: FileEntry, b: FileEntry) => {
-				if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-				return a.name.localeCompare(b.name);
-			});
-		} catch {
-			error = 'Failed to list directory';
+			if (requestId !== directoryRequestId) return;
+			entries = res.entries || [];
+			savedPyodidePath = requestedPath;
+			if (options.recordHistory !== false) pushNavHistory(requestedPath);
+		} catch (loadError) {
+			if (requestId !== directoryRequestId) return;
+			const failure = loadError instanceof Error ? loadError.message : String(loadError);
+			if (
+				requestedPath !== PYODIDE_WORKSPACE_DIRECTORY &&
+				!/timed out|worker failed|stopped/i.test(failure)
+			) {
+				console.warn('Pyodide directory is unavailable; returning to Files home', loadError);
+				currentPath = PYODIDE_WORKSPACE_DIRECTORY;
+				savedPyodidePath = PYODIDE_WORKSPACE_DIRECTORY;
+				await loadDir(PYODIDE_WORKSPACE_DIRECTORY, options);
+				return;
+			}
+			console.error('Failed to list Pyodide directory', loadError);
+			currentPath = previousPath;
+			error = $i18n.t('Files are currently unavailable');
 			entries = [];
+		} finally {
+			if (requestId === directoryRequestId) loading = false;
 		}
-		loading = false;
 	};
 
-	const openEntry = async (entry: FileEntry) => {
+	const refreshDirectory = async () => {
+		loading = true;
+		error = null;
+		try {
+			await sendWorkerMessage({ type: 'fs:sync' });
+		} catch (syncError) {
+			console.error('Failed to synchronize Pyodide files', syncError);
+		}
+		if (selectedFile) {
+			const name = selectedFile.split('/').pop() ?? '';
+			try {
+				await openEntry({ name, type: 'file', size: 0 });
+			} finally {
+				loading = false;
+			}
+		} else {
+			await loadDir(currentPath);
+		}
+	};
+
+	const openEntry = async (entry: FileEntry, notifyWorkspace = true) => {
 		if (entry.type === 'directory') {
 			await loadDir(`${currentPath}${entry.name}/`);
 			return;
 		}
 
 		const filePath = `${currentPath}${entry.name}`;
+		if (notifyWorkspace && onOpenFile(filePath)) return;
 		pushNavHistory(currentPath, filePath);
+		const requestId = ++fileRequestId;
 		selectedFile = filePath;
 		fileLoading = true;
 		clearPreview();
 
 		try {
-			const res = await sendWorkerMessage({ type: 'fs:read', path: filePath });
+			const res = await sendWorkerMessage({
+				type: 'fs:read',
+				path: filePath,
+				maxBytes: FILE_PREVIEW_MAX_BYTES
+			});
+			if (requestId !== fileRequestId) return;
 			if (res.error) {
 				fileContent = `Error: ${res.error}`;
 			} else if (isImage(filePath)) {
 				const blob = new Blob([res.data]);
-				fileImageUrl = URL.createObjectURL(blob);
+				const nextUrl = URL.createObjectURL(blob);
+				if (requestId !== fileRequestId) URL.revokeObjectURL(nextUrl);
+				else fileImageUrl = nextUrl;
 			} else {
 				const decoder = new TextDecoder('utf-8', { fatal: true });
 				try {
@@ -197,10 +278,35 @@
 					fileContent = `[Binary file: ${entry.size ?? 0} bytes]`;
 				}
 			}
-		} catch {
-			fileContent = 'Failed to read file';
+		} catch (readError) {
+			if (requestId === fileRequestId) {
+				console.error('Failed to read Pyodide file', readError);
+				fileContent = String(readError).includes('File exceeds the read limit')
+					? $i18n.t('This file is too large to preview. Download it instead.')
+					: $i18n.t('Failed to read file');
+			}
+		} finally {
+			if (requestId === fileRequestId) fileLoading = false;
 		}
-		fileLoading = false;
+	};
+
+	const openRequestedFile = async (
+		request: string | { path: string; page?: number | null; fileId?: string | null }
+	) => {
+		const filePath = typeof request === 'string' ? request : request.path;
+		const normalized = getPyodideWorkspacePath(
+			filePath.startsWith('/') ? filePath : `${currentPath}${filePath}`
+		);
+		if (!normalized) return;
+		const separator = normalized.lastIndexOf('/');
+		const directory = separator >= 0 ? normalized.slice(0, separator + 1) || '/' : currentPath;
+		const name = normalized.slice(separator + 1);
+		if (!name) return;
+		if (onOpenFile(normalized, typeof request === 'string' ? {} : request)) {
+			return;
+		}
+		await loadDir(directory);
+		await openEntry({ name, type: 'file', size: 0 }, false);
 	};
 
 	const clearPreview = () => {
@@ -220,11 +326,15 @@
 				const a = document.createElement('a');
 				a.href = url;
 				a.download = path.split('/').pop() ?? 'file';
+				a.style.display = 'none';
+				document.body.appendChild(a);
 				a.click();
-				URL.revokeObjectURL(url);
+				a.remove();
+				window.setTimeout(() => URL.revokeObjectURL(url), 0);
 			}
 		} catch (e) {
 			console.error('Download failed:', e);
+			toast.error($i18n.t('Download failed'));
 		}
 	};
 
@@ -237,6 +347,11 @@
 	const doDelete = async () => {
 		try {
 			await sendWorkerMessage({ type: 'fs:delete', path: deletePath });
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: { paths: [deletePath], kind: 'deleted' }
+				})
+			);
 			if (selectedFile === deletePath) {
 				selectedFile = null;
 				clearPreview();
@@ -244,6 +359,7 @@
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Delete failed:', e);
+			toast.error($i18n.t('Delete failed'));
 		}
 	};
 
@@ -255,16 +371,22 @@
 	};
 
 	const submitNewFolder = async () => {
+		if (!creatingFolder) return;
 		const name = newFolderName.trim();
 		creatingFolder = false;
 		newFolderName = '';
 		if (!name) return;
+		if (!isValidPyodideEntryName(name)) {
+			toast.error($i18n.t('Enter a valid name without slashes.'));
+			return;
+		}
 		const folderPath = `${currentPath}${name}`.replace(/\/$/, '');
 		try {
 			await sendWorkerMessage({ type: 'fs:mkdir', path: folderPath });
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Failed to create folder:', e);
+			toast.error($i18n.t('Folder could not be created'));
 		}
 	};
 
@@ -276,10 +398,15 @@
 	};
 
 	const submitNewFile = async () => {
+		if (!creatingFile) return;
 		const name = newFileName.trim();
 		creatingFile = false;
 		newFileName = '';
 		if (!name) return;
+		if (!isValidPyodideEntryName(name)) {
+			toast.error($i18n.t('Enter a valid name without slashes.'));
+			return;
+		}
 		try {
 			await sendWorkerMessage({
 				type: 'fs:upload',
@@ -289,14 +416,20 @@
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Failed to create file:', e);
+			toast.error($i18n.t('File could not be created'));
 		}
 	};
 
 	const uploadFiles = async (fileList: File[]) => {
 		const payloads: { name: string; data: ArrayBuffer }[] = [];
 		for (const file of fileList) {
+			if (!isValidPyodideEntryName(file.name)) {
+				toast.error($i18n.t('One or more file names are invalid.'));
+				continue;
+			}
 			payloads.push({ name: file.name, data: await file.arrayBuffer() });
 		}
+		if (!payloads.length) return;
 		try {
 			await sendWorkerMessage({
 				type: 'fs:upload',
@@ -305,6 +438,8 @@
 			});
 		} catch (e) {
 			console.error('Upload failed:', e);
+			toast.error($i18n.t('Upload failed'));
+			return;
 		}
 		await loadDir(currentPath);
 	};
@@ -330,21 +465,73 @@
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
-	const onFilesChanged = async () => {
+	const onFilesChanged = async (event: Event) => {
+		const requestId = ++filesChangedRequestId;
+		const detail = (event as CustomEvent<{ paths?: string[]; kind?: string }>).detail;
+		const changedPaths = Array.isArray(detail?.paths) ? detail.paths : [];
+		if (detail?.kind === 'deleted' && selectedFile && changedPaths.includes(selectedFile)) {
+			fileRequestId += 1;
+			selectedFile = null;
+			clearPreview();
+		}
 		try {
 			await sendWorkerMessage({ type: 'fs:sync' });
-		} catch {}
-		loadDir(currentPath);
+		} catch (syncError) {
+			console.error('Failed to synchronize changed Pyodide files', syncError);
+		}
+		if (requestId !== filesChangedRequestId) return;
+		const fileToRefresh = selectedFile;
+		const directoryToRefresh = currentPath;
+		await loadDir(directoryToRefresh, {
+			preserveSelection: Boolean(fileToRefresh),
+			recordHistory: false
+		});
+		if (
+			requestId !== filesChangedRequestId ||
+			currentPath !== directoryToRefresh ||
+			selectedFile !== fileToRefresh
+		)
+			return;
+		if (
+			fileToRefresh &&
+			!entries.some(
+				(entry) => entry.type === 'file' && `${currentPath}${entry.name}` === fileToRefresh
+			)
+		) {
+			fileRequestId += 1;
+			selectedFile = null;
+			clearPreview();
+			return;
+		}
+		if (fileToRefresh && (!changedPaths.length || changedPaths.includes(fileToRefresh))) {
+			await openEntry({ name: fileToRefresh.split('/').pop() ?? '', type: 'file', size: 0 }, false);
+		}
 	};
+
+	let unsubscribeDisplayFile: (() => void) | null = null;
 
 	onMount(() => {
 		ensureWorker();
 		loadDir(currentPath);
 		window.addEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile = showFileNavPath.subscribe((request) => {
+			if (!request) return;
+			if (typeof request === 'object' && !isWorkspaceOpenRequestForChat(request.chatId, $chatId)) {
+				showFileNavPath.set(null);
+				return;
+			}
+			if (typeof request === 'object' && request.fileId) return;
+			showFileNavPath.set(null);
+			void openRequestedFile(request);
+		});
 	});
 
 	onDestroy(() => {
+		filesChangedRequestId += 1;
+		directoryRequestId += 1;
+		fileRequestId += 1;
 		window.removeEventListener('pyodide:files', onFilesChanged);
+		unsubscribeDisplayFile?.();
 	});
 </script>
 
@@ -386,7 +573,7 @@
 	{/if}
 
 	{#if overlay}
-		<div class="absolute inset-0 z-10 pointer-events-none" />
+		<div class="absolute inset-0 z-10 pointer-events-none"></div>
 	{/if}
 
 	<!-- Toolbar (shared with FileNav) -->
@@ -396,24 +583,20 @@
 		{loading}
 		{canGoBack}
 		{canGoForward}
+		{sortBy}
+		{sortAsc}
+		{showHidden}
 		onGoBack={goBack}
 		onGoForward={goForward}
 		onNavigate={(path) => loadDir(path)}
-		onRefresh={async () => {
-			try {
-				await sendWorkerMessage({ type: 'fs:sync' });
-			} catch {}
-			if (selectedFile) {
-				const name = selectedFile.split('/').pop() ?? '';
-				openEntry({ name, type: 'file', size: 0 });
-			} else {
-				loadDir(currentPath);
-			}
-		}}
+		onRefresh={refreshDirectory}
 		onNewFolder={startNewFolder}
 		onNewFile={startNewFile}
 		onUploadFiles={uploadFiles}
-		onMove={() => {}}
+		onSort={toggleSort}
+		onToggleHidden={() => (showHidden = !showHidden)}
+		allowDirectoryDownload={false}
+		allowMove={false}
 	>
 		<!-- File action buttons when a file is selected (slot content) -->
 		<button
@@ -442,74 +625,109 @@
 		{#if selectedFile}
 			<FilePreview {selectedFile} {fileLoading} {fileImageUrl} {fileContent} {overlay} />
 		{:else if loading}
-			<div class="flex items-center justify-center flex-1 p-6">
+			<div
+				class="flex flex-1 items-center justify-center gap-2 p-6 text-xs text-gray-500 dark:text-gray-400"
+				data-pyodide-stage={startupStage ?? 'waiting'}
+				role="status"
+			>
 				<Spinner className="size-4" />
+				<span>{$i18n.t(startupStage ? 'Preparing Files' : 'Loading')}</span>
 			</div>
 		{:else if error}
-			<div class="flex items-center justify-center flex-1 p-6">
-				<div class="text-xs text-red-500">{error}</div>
+			<div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+				<div class="text-sm text-gray-500 dark:text-gray-400">{error}</div>
+				<button
+					type="button"
+					class="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+					on:click={refreshDirectory}
+				>
+					{$i18n.t('Retry')}
+				</button>
 			</div>
-		{:else if entries.length === 0 && !creatingFolder && !creatingFile}
-			<div class="flex flex-col items-center justify-center flex-1 p-6 text-center gap-2">
-				<Folder className="size-5 text-gray-300 dark:text-gray-600" />
-				<div class="text-xs text-gray-400 dark:text-gray-500">
-					{$i18n.t('No files yet. Upload files or run Python code to create them.')}
+		{:else if visibleEntries.length === 0 && !creatingFolder && !creatingFile}
+			<div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+				<div
+					class="mb-1 flex size-10 items-center justify-center rounded-lg border border-gray-100 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-gray-800/50 dark:text-gray-500"
+				>
+					<Folder className="size-5" />
 				</div>
+				<div class="text-sm font-medium text-gray-700 dark:text-gray-300">
+					{entries.length > 0 ? $i18n.t('No files found') : $i18n.t('Files')}
+				</div>
+				{#if entries.length === 0}
+					<div class="max-w-72 text-xs leading-5 text-gray-400 dark:text-gray-500">
+						{$i18n.t('No files yet. Upload files or run Python code to create them.')}
+					</div>
+				{/if}
+				{#if entries.length > 0}
+					<button
+						type="button"
+						class="mt-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+						on:click={() => (showHidden = true)}
+					>
+						{$i18n.t('Show Hidden Files')}
+					</button>
+				{/if}
 			</div>
 		{/if}
 
 		{#if !loading && !error && !selectedFile}
-			{#if creatingFolder}
-				<div class="flex items-center gap-2 px-3 py-1.5">
-					<Folder className="size-4 shrink-0 text-blue-400 dark:text-blue-300" />
-					<input
-						bind:this={newFolderInput}
-						bind:value={newFolderName}
-						class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
-						placeholder={$i18n.t('Folder name')}
-						on:keydown={(e) => {
-							if (e.key === 'Enter') submitNewFolder();
-							if (e.key === 'Escape') {
-								creatingFolder = false;
-								newFolderName = '';
-							}
-						}}
-						on:blur={submitNewFolder}
-					/>
-				</div>
-			{/if}
-			{#if creatingFile}
-				<div class="flex items-center gap-2 px-3 py-1.5">
-					<Document className="size-4 shrink-0 text-gray-400 dark:text-gray-500" />
-					<input
-						bind:this={newFileInput}
-						bind:value={newFileName}
-						class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
-						placeholder={$i18n.t('File name')}
-						on:keydown={(e) => {
-							if (e.key === 'Enter') submitNewFile();
-							if (e.key === 'Escape') {
-								creatingFile = false;
-								newFileName = '';
-							}
-						}}
-						on:blur={submitNewFile}
-					/>
-				</div>
-			{/if}
+			{#if visibleEntries.length > 0 || creatingFolder || creatingFile}
+				<div class="min-h-0 flex-1 overflow-y-auto">
+					<div class="w-full px-1 pt-2 pb-4">
+						{#if creatingFolder}
+							<div class="flex min-h-7 items-center gap-2.5 px-2.5 py-1">
+								<Folder className="size-4 shrink-0 text-blue-400 dark:text-blue-300" />
+								<input
+									bind:this={newFolderInput}
+									bind:value={newFolderName}
+									class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+									placeholder={$i18n.t('Folder name')}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') submitNewFolder();
+										if (e.key === 'Escape') {
+											creatingFolder = false;
+											newFolderName = '';
+										}
+									}}
+									on:blur={submitNewFolder}
+								/>
+							</div>
+						{/if}
+						{#if creatingFile}
+							<div class="flex min-h-7 items-center gap-2.5 px-2.5 py-1">
+								<Document className="size-4 shrink-0 text-gray-400 dark:text-gray-500" />
+								<input
+									bind:this={newFileInput}
+									bind:value={newFileName}
+									class="flex-1 text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500"
+									placeholder={$i18n.t('File name')}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') submitNewFile();
+										if (e.key === 'Escape') {
+											creatingFile = false;
+											newFileName = '';
+										}
+									}}
+									on:blur={submitNewFile}
+								/>
+							</div>
+						{/if}
 
-			{#if entries.length > 0 || creatingFolder || creatingFile}
-				<ul class="overflow-y-auto flex-1 min-h-0">
-					{#each entries as entry (entry.name)}
-						<FileEntryRow
-							{entry}
-							{currentPath}
-							onOpen={openEntry}
-							onDownload={downloadFile}
-							onDelete={confirmDelete}
-						/>
-					{/each}
-				</ul>
+						<ul>
+							{#each visibleEntries as entry (entry.name)}
+								<FileEntryRow
+									{entry}
+									{currentPath}
+									draggableEnabled={false}
+									onOpen={openEntry}
+									onDownload={downloadFile}
+									onDelete={confirmDelete}
+								/>
+							{/each}
+						</ul>
+					</div>
+				</div>
 			{/if}
 		{/if}
 	</div>

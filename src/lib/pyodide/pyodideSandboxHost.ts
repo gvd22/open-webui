@@ -1,3 +1,5 @@
+import { MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES } from './workspace';
+
 type MessageListener = (event: MessageEvent) => void;
 type ErrorListener = (event: Event) => void;
 type QueuedMessage = { message: unknown; transfer: Transferable[] };
@@ -8,14 +10,21 @@ const sandboxScript = String.raw`
 	let pyodideReady = null;
 	let stdout = null;
 	let stderr = null;
+	const workspaceRoot = '/mnt/uploads';
+	const installedPackages = new Set();
 
 	function post(message, transfer) {
 		parent.postMessage(message, '*', transfer || []);
 	}
 
-	async function loadRuntime(packages) {
+	function report(stage, id) {
+		post({ type: 'pyodide:progress', stage: stage, id: id });
+	}
+
+	async function loadRuntime(id) {
 		stdout = null;
 		stderr = null;
+		report('loading-runtime', id);
 		pyodide = await loadPyodide({
 			indexURL: self.__PYODIDE_INDEX_URL__ || '/pyodide/',
 			stdout: function (text) {
@@ -26,15 +35,52 @@ const sandboxScript = String.raw`
 			},
 			packages: ['micropip']
 		});
-		pyodide.FS.mkdirTree('/mnt/uploads');
-		await pyodide.pyimport('micropip').install(packages || []);
+		report('mounting-files', id);
+		pyodide.FS.mkdirTree(workspaceRoot);
+		await resetPythonWorkspace();
+		report('ready', id);
 	}
 
-	async function ensureRuntime(packages) {
-		if (!pyodideReady) pyodideReady = loadRuntime(packages || []);
-		await pyodideReady;
-		if (packages && packages.length > 0) {
-			await pyodide.pyimport('micropip').install(packages);
+	async function resetPythonWorkspace() {
+		await pyodide.runPythonAsync('import os\nos.environ["HOME"] = "' + workspaceRoot + '"\nos.chdir("' + workspaceRoot + '")');
+	}
+
+	function requireWorkspacePath(path) {
+		if (typeof path !== 'string' || !path.startsWith('/') || path.includes('\0')) {
+			throw new Error('Path is outside the Pyodide workspace');
+		}
+		const parts = [];
+		for (const part of path.split('/')) {
+			if (!part || part === '.') continue;
+			if (part === '..') parts.pop();
+			else parts.push(part);
+		}
+		const normalized = '/' + parts.join('/');
+		if (normalized !== workspaceRoot && !normalized.startsWith(workspaceRoot + '/')) {
+			throw new Error('Path is outside the Pyodide workspace');
+		}
+		return normalized;
+	}
+
+	async function ensureRuntime(packages, id) {
+		if (!pyodideReady) {
+			const loading = loadRuntime(id);
+			pyodideReady = loading;
+			try {
+				await loading;
+			} catch (error) {
+				if (pyodideReady === loading) pyodideReady = null;
+				throw error;
+			}
+		} else {
+			await pyodideReady;
+		}
+		const missingPackages = (packages || []).filter(function (name) {
+			return !installedPackages.has(name);
+		});
+		if (missingPackages.length > 0) {
+			await pyodide.pyimport('micropip').install(missingPackages);
+			for (const name of missingPackages) installedPackages.add(name);
 		}
 	}
 
@@ -46,44 +92,113 @@ const sandboxScript = String.raw`
 		}
 	}
 
+	function requireEntryName(name) {
+		if (
+			typeof name !== 'string' ||
+			name.length === 0 ||
+			name.length > 255 ||
+			name === '.' ||
+			name === '..' ||
+			name.includes('/') ||
+			name.includes('\\') ||
+			/[\u0000-\u001f\u007f]/.test(name)
+		) {
+			throw new Error('Invalid Pyodide file name');
+		}
+		return name;
+	}
+
 	function upload(files, dir) {
-		dir = dir || '/mnt/uploads';
+		dir = requireWorkspacePath(dir || workspaceRoot);
 		ensureDir(dir);
 		for (const file of files || []) {
-			pyodide.FS.writeFile(dir + '/' + file.name, new Uint8Array(file.data));
+			const target = requireWorkspacePath(dir + '/' + requireEntryName(file.name));
+			pyodide.FS.writeFile(target, new Uint8Array(file.data));
 		}
 	}
 
 	function list(path) {
+		path = requireWorkspacePath(path);
 		const entries = [];
-		try {
-			const names = pyodide.FS.readdir(path).filter(function (name) {
-				return name !== '.' && name !== '..';
-			});
-			for (const name of names) {
-				try {
-					const stat = pyodide.FS.stat(path + '/' + name);
-					const isDir = pyodide.FS.isDir(stat.mode);
-					entries.push({ name: name, type: isDir ? 'directory' : 'file', size: isDir ? 0 : stat.size });
-				} catch {}
-			}
-		} catch {}
+		const names = pyodide.FS.readdir(path).filter(function (name) {
+			return name !== '.' && name !== '..';
+		});
+		for (const name of names) {
+			try {
+				const stat = pyodide.FS.stat(path + '/' + name);
+				const isDir = pyodide.FS.isDir(stat.mode);
+				entries.push({
+					name: name,
+					type: isDir ? 'directory' : 'file',
+					size: isDir ? 0 : stat.size,
+					modified: stat.mtime && stat.mtime.getTime ? stat.mtime.getTime() : undefined
+				});
+			} catch {}
+		}
 		return entries;
 	}
 
 	function remove(path) {
-		try {
-			const stat = pyodide.FS.stat(path);
-			if (!pyodide.FS.isDir(stat.mode)) {
-				pyodide.FS.unlink(path);
-				return;
-			}
-			const names = pyodide.FS.readdir(path).filter(function (name) {
-				return name !== '.' && name !== '..';
-			});
-			for (const name of names) remove(path + '/' + name);
-			pyodide.FS.rmdir(path);
-		} catch {}
+		path = requireWorkspacePath(path);
+		if (path === workspaceRoot) throw new Error('The Pyodide workspace root cannot be deleted');
+		const stat = pyodide.FS.stat(path);
+		if (!pyodide.FS.isDir(stat.mode)) {
+			pyodide.FS.unlink(path);
+			return;
+		}
+		const names = pyodide.FS.readdir(path).filter(function (name) {
+			return name !== '.' && name !== '..';
+		});
+		for (const name of names) remove(path + '/' + name);
+		pyodide.FS.rmdir(path);
+	}
+
+	const outputExtensions = new Set(['csv', 'doc', 'docx', 'ods', 'odt', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx']);
+	const maxOutputSnapshotBytes = 64 * 1024 * 1024;
+	const maxOutputUploadBytes = ${MAX_WORKSPACE_OUTPUT_UPLOAD_BYTES};
+
+	function listWorkspaceOutputs() {
+		const outputs = new Map();
+		function visit(dir, depth) {
+			if (outputs.size >= 100 || depth > 20) return;
+			try {
+				for (const name of pyodide.FS.readdir(dir)) {
+					if (name === '.' || name === '..') continue;
+					const path = (dir + '/' + name).replace('//', '/');
+					const stat = pyodide.FS.stat(path);
+					if (pyodide.FS.isDir(stat.mode)) visit(path, depth + 1);
+					else if (outputExtensions.has((name.split('.').pop() || '').toLowerCase())) {
+						outputs.set(path, String(stat.size) + ':' + String(stat.mtime && stat.mtime.getTime ? stat.mtime.getTime() : 0));
+					}
+					if (outputs.size >= 100) return;
+				}
+			} catch {}
+		}
+		visit(workspaceRoot, 0);
+		return outputs;
+	}
+
+	function snapshotWorkspaceOutputs(paths) {
+		const snapshots = [];
+		let remainingBytes = maxOutputSnapshotBytes;
+		for (const path of paths) {
+			try {
+				const safePath = requireWorkspacePath(path);
+				const stat = pyodide.FS.stat(safePath);
+				if (pyodide.FS.isDir(stat.mode) || !Number.isSafeInteger(stat.size) || stat.size < 0) continue;
+				if (stat.size > maxOutputUploadBytes) {
+					snapshots.push({ path: safePath, size: stat.size });
+					continue;
+				}
+				if (stat.size > remainingBytes) continue;
+				const bytes = pyodide.FS.readFile(safePath);
+				const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+				if (data.byteLength > remainingBytes) continue;
+				remainingBytes -= data.byteLength;
+				snapshots.push({ path: safePath, size: data.byteLength, data: data });
+			} catch {}
+		}
+		return snapshots;
 	}
 
 	function clean(value) {
@@ -133,26 +248,46 @@ const sandboxScript = String.raw`
 		stderr = null;
 		let result = null;
 		if (files && files.length > 0) upload(files);
+		const outputsBefore = listWorkspaceOutputs();
 		try {
+			await resetPythonWorkspace();
+			report('executing-code', id);
 			if (code.includes('matplotlib')) await patchMatplotlib();
 			result = clean(await pyodide.runPythonAsync(code));
 		} catch (error) {
 			stderr = error && error.message ? error.message : String(error);
 		}
-		post({ id: id, result: result, stdout: stdout, stderr: stderr });
+		const outputsAfter = listWorkspaceOutputs();
+		const workspaceFiles = [];
+		for (const entry of outputsAfter) {
+			if (outputsBefore.get(entry[0]) !== entry[1]) workspaceFiles.push(entry[0]);
+		}
+		const workspaceDeletedFiles = [];
+		for (const path of outputsBefore.keys()) {
+			if (!outputsAfter.has(path)) workspaceDeletedFiles.push(path);
+		}
+		const workspaceFileSnapshots = snapshotWorkspaceOutputs(workspaceFiles);
+		post({
+			id: id,
+			result: result,
+			stdout: stdout,
+			stderr: stderr,
+			workspaceFiles: workspaceFiles,
+			workspaceDeletedFiles: workspaceDeletedFiles,
+			workspaceFileSnapshots: workspaceFileSnapshots
+		}, workspaceFileSnapshots.filter(function (snapshot) { return snapshot.data; }).map(function (snapshot) { return snapshot.data; }));
 	}
 
-	window.addEventListener('message', async function (event) {
-		if (event.source !== parent) return;
-		const data = event.data || {};
+	async function handleMessage(data) {
 		const id = data.id;
 		try {
+			report('request-started', id);
 			if (!data.type || data.type === 'execute') {
-				await ensureRuntime(data.packages || []);
+				await ensureRuntime(data.packages || [], id);
 				await execute(id, data.code, data.files);
 				return;
 			}
-			await ensureRuntime();
+			await ensureRuntime([], id);
 			switch (data.type) {
 				case 'fs:upload':
 					upload(data.files, data.dir);
@@ -163,7 +298,20 @@ const sandboxScript = String.raw`
 					break;
 				case 'fs:read':
 					try {
-						const buffer = pyodide.FS.readFile(data.path).buffer;
+						const path = requireWorkspacePath(data.path);
+						const stat = pyodide.FS.stat(path);
+						if (pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+						if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+							throw new Error('File metadata is invalid');
+						}
+						if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
+						const bytes = pyodide.FS.readFile(path);
+						const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+						if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+							throw new Error('File exceeds the read limit');
+						}
 						post({ id: id, type: data.type, data: buffer }, [buffer]);
 					} catch (error) {
 						post({ id: id, type: data.type, error: error && error.message ? error.message : String(error) });
@@ -174,16 +322,35 @@ const sandboxScript = String.raw`
 					post({ id: id, type: data.type, success: true });
 					break;
 				case 'fs:mkdir':
-					pyodide.FS.mkdirTree(data.path);
+					pyodide.FS.mkdirTree(requireWorkspacePath(data.path));
 					post({ id: id, type: data.type, success: true });
 					break;
 				case 'fs:sync':
 					post({ id: id, type: data.type, success: true });
 					break;
+				default:
+					throw new Error('Unknown Pyodide request type: ' + String(data.type));
 			}
 		} catch (error) {
-			post({ id: id, stderr: error && error.message ? error.message : String(error) });
+			const message = error && error.message ? error.message : String(error);
+			post({
+				id: id,
+				type: data.type,
+				error: message,
+				...(!data.type || data.type === 'execute' ? { stderr: message } : {})
+			});
 		}
+	}
+
+	let messageQueue = Promise.resolve();
+	window.addEventListener('message', function (event) {
+		if (event.source !== parent) return;
+		const data = event.data || {};
+		report('request-queued', data.id);
+		messageQueue = messageQueue.then(
+			function () { return handleMessage(data); },
+			function () { return handleMessage(data); }
+		);
 	});
 })();
 `;
@@ -235,10 +402,7 @@ export class PyodideSandboxHost {
 		};
 
 		this.onIframeError = (event: Event) => {
-			this.onerror?.(event);
-			for (const listener of this.errorListeners) {
-				listener(event);
-			}
+			this.dispatchEvent(event);
 		};
 
 		window.addEventListener('message', this.onWindowMessage);
@@ -269,6 +433,13 @@ export class PyodideSandboxHost {
 		} else if (type === 'error') {
 			this.errorListeners.delete(listener as ErrorListener);
 		}
+	}
+
+	dispatchEvent(event: Event) {
+		if (event.type !== 'error') return false;
+		this.onerror?.(event);
+		for (const listener of [...this.errorListeners]) listener(event);
+		return !event.defaultPrevented;
 	}
 
 	terminate() {

@@ -43,8 +43,10 @@ from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
 from open_webui.routers.audio import transcribe
 from open_webui.routers.retrieval import ProcessFileForm, process_file
 from open_webui.storage.provider import Storage
+from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.misc import strict_match_mime_type
+from open_webui.utils.workspace_outputs import validate_workspace_output_upload
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -279,6 +281,11 @@ async def upload_file(
     user=Depends(get_verified_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    if user.role != 'admin' and not await has_permission(
+        user.id, 'chat.file_upload', await Config.get('user.permissions'), db=db
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
     result = await upload_file_handler(
         request,
         file=file,
@@ -333,6 +340,13 @@ async def upload_file_handler(
                 detail=ERROR_MESSAGES.DEFAULT('Invalid metadata format'),
             )
     file_metadata = metadata if metadata else {}
+    try:
+        await asyncio.to_thread(validate_workspace_output_upload, file.file, file_metadata)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={'code': 'workspace_output_too_large', 'message': str(error)},
+        ) from error
 
     try:
         unsanitized_filename = file.filename

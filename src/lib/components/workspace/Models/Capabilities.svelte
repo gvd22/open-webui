@@ -39,6 +39,18 @@
 				'Model can access Open Terminal for command execution and file management'
 			)
 		},
+		canvas: {
+			label: $i18n.t('Canvas'),
+			description: $i18n.t(
+				'Model can create and update editable Canvas documents. Requires Builtin Tools and the Canvas builtin category.'
+			)
+		},
+		web_preview: {
+			label: $i18n.t('Web Preview'),
+			description: $i18n.t(
+				'Model can create and update interactive web previews. Requires Builtin Tools and the Web Preview builtin category.'
+			)
+		},
 		usage: {
 			label: $i18n.t('Usage'),
 			description: $i18n.t(
@@ -111,4 +123,14 @@
 			</div>
 		{/each}
 	</div>
+	<div class="mt-2 text-[0.6875rem] leading-4 text-gray-400 dark:text-gray-600">
+		{$i18n.t(
+			'Canvas and Web Preview are off by default and must be enabled for each model. Builtin Tools and the matching builtin category must also remain enabled.'
+		)}
+	</div>
+	{#if (capabilities.canvas || capabilities.web_preview) && !capabilities.builtin_tools}
+		<div class="mt-1 text-[0.6875rem] leading-4 text-amber-600 dark:text-amber-400">
+			{$i18n.t('Canvas and Web Preview are currently unavailable because Builtin Tools is off.')}
+		</div>
+	{/if}
 </div>

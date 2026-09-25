@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+	import Sparkles from '$lib/components/icons/Sparkles.svelte';
 	import { v4 as uuidv4 } from 'uuid';
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
@@ -85,7 +86,6 @@
 	import RecordMenu from './RecordMenu.svelte';
 	import NoteMenu from './Notes/NoteMenu.svelte';
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
-	import Sparkles from '../icons/Sparkles.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import ArrowUturnLeft from '../icons/ArrowUturnLeft.svelte';
 	import ArrowUturnRight from '../icons/ArrowUturnRight.svelte';
@@ -93,9 +93,12 @@
 	import ChatBubbleOval from '../icons/ChatBubbleOval.svelte';
 
 	export let id: null | string = null;
+	export let canvas = false;
+	export let onDocumentChange: (document: { title?: string; content?: string }) => void = () => {};
+	export let onUnavailable: () => void = () => {};
 
-	let editor = null;
-	let note = null;
+	let editor: any = null;
+	let note: any = null;
 
 	const newNote = {
 		title: '',
@@ -127,7 +130,7 @@
 	let wordCount = 0;
 	let charCount = 0;
 
-	let versionIdx = null;
+	let versionIdx: number | null = null;
 	let selectedModelId = null;
 
 	let recording = false;
@@ -140,12 +143,13 @@
 	let noteChatDraftKey = '';
 	let noteChatCreating = false;
 
-	let selectedContent = null;
+	let selectedContent: { text: string; from: number; to: number } | null = null;
 	let noteAttachmentFiles = [];
 	let noteChatSuggestedPrompts = [];
 	let pendingNoteEvent = null;
 	let pendingNoteEventTimer = null;
 	let lastLocalContentChangeAt = 0;
+	let applyingExternalContent = false;
 	$: noteAttachmentFiles = (files ?? []).filter(
 		(file) => file?.type !== 'image' && !(file?.content_type ?? '').startsWith('image/')
 	);
@@ -196,6 +200,11 @@
 			$socket?.off('events:note', noteEventHandler);
 			$socket?.on('events:note', noteEventHandler);
 		} else {
+			if (canvas) {
+				onUnavailable();
+				loading = false;
+				return;
+			}
 			goto('/');
 			return;
 		}
@@ -250,6 +259,13 @@
 			return false;
 		}
 
+		if ((incomingContent?.md ?? '') === (note?.data?.content?.md ?? '')) {
+			if (_note.updated_at) {
+				note.updated_at = _note.updated_at;
+			}
+			return false;
+		}
+
 		const elapsed = Date.now() - lastLocalContentChangeAt;
 		if (elapsed < 800) {
 			pendingNoteEvent = _note;
@@ -292,8 +308,11 @@
 		}
 
 		const selection = editor.state.selection;
+		// Guard the actual content transaction, never subsequent user edits by elapsed time.
+		applyingExternalContent = true;
 		editor.commands.setContent(incomingContent.html || marked.parse(incomingContent.md ?? ''));
 		await tick();
+		applyingExternalContent = false;
 
 		const docSize = editor.state.doc.content.size;
 		const from = Math.min(selection.from, docSize);
@@ -448,7 +467,7 @@ ${content}
 				insertNoteVersion(note);
 				versionIdx = note.data.versions.length - 1;
 			} else {
-				versionIdx = note.data.versions.length;
+				versionIdx = Number(note.data.versions.length);
 			}
 		}
 
@@ -946,7 +965,6 @@ ${content}
 		if (pendingNoteEventTimer) {
 			clearTimeout(pendingNoteEventTimer);
 		}
-
 		const dropzoneElement = document.getElementById('note-editor');
 
 		if (dropzoneElement) {
@@ -1015,279 +1033,292 @@ ${content}
 				</div>
 			{:else}
 				<div class=" w-full flex flex-col {loading ? 'opacity-20' : ''}">
-					<div class="shrink-0 w-full flex justify-between items-center px-3">
-						<div class="w-full min-w-0 flex items-center">
-							{#if $mobile}
-								<Tooltip
-									content={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
-								>
-									<button
-										id="sidebar-toggle-button"
-										class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition cursor-"
-										aria-label={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
-										type="button"
-										on:click={() => {
-											showSidebar.set(!$showSidebar);
-										}}
+					{#if canvas}
+						<slot
+							name="canvas-actions"
+							{editor}
+							editable={Boolean(editor && versionIdx === null && note?.write_access)}
+						/>
+					{:else}
+						<div class="shrink-0 w-full flex justify-between items-center px-3">
+							<div class="w-full min-w-0 flex items-center">
+								{#if $mobile}
+									<Tooltip
+										content={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
 									>
-										<div class=" self-center p-1.5">
-											<Sidebar className="size-4" />
-										</div>
-									</button>
-								</Tooltip>
-							{/if}
-
-							<input
-								class="w-full text-sm font-normal bg-transparent outline-hidden {$mobile
-									? 'ml-1'
-									: ''}"
-								type="text"
-								bind:value={note.title}
-								placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
-								disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
-									titleGenerating}
-								required
-								on:focus={() => {
-									titleInputFocused = true;
-								}}
-								on:blur={(e) => {
-									// check if target is generate button
-									if (ignoreBlur) {
-										ignoreBlur = false;
-										return;
-									}
-
-									titleInputFocused = false;
-									changeDebounceHandler();
-								}}
-							/>
-
-							{#if titleInputFocused && !titleGenerating}
-								<div
-									class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
-								>
-									<Tooltip content={$i18n.t('Generate')}>
 										<button
-											class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
-											id="generate-title-button"
-											disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
-												titleGenerating}
-											on:mouseenter={() => {
-												ignoreBlur = true;
-											}}
-											on:click={(e) => {
-												e.preventDefault();
-												e.stopImmediatePropagation();
-												e.stopPropagation();
-
-												generateTitleHandler();
-												titleInputFocused = false;
+											id="sidebar-toggle-button"
+											class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition cursor-"
+											aria-label={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
+											type="button"
+											on:click={() => {
+												showSidebar.set(!$showSidebar);
 											}}
 										>
-											<Sparkles strokeWidth="1.5" />
+											<div class=" self-center p-1.5">
+												<Sidebar className="size-4" />
+											</div>
 										</button>
 									</Tooltip>
-								</div>
-							{/if}
-
-							<div class="flex items-center gap-0.5 shrink-0">
-								{#if note?.write_access}
-									{#if editor}
-										<div>
-											<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
-												<button
-													class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
-													on:click={() => {
-														editor.chain().focus().undo().run();
-														// versionNavigateHandler('prev');
-													}}
-													disabled={!editor.can().undo()}
-												>
-													<ArrowUturnLeft className="size-4" />
-												</button>
-
-												<button
-													class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
-													on:click={() => {
-														editor.chain().focus().redo().run();
-														// versionNavigateHandler('next');
-													}}
-													disabled={!editor.can().redo()}
-												>
-													<ArrowUturnRight className="size-4" />
-												</button>
-											</div>
-										</div>
-									{/if}
 								{/if}
 
-								<Tooltip content={$i18n.t('Chat')} placement="top">
-									<button
-										type="button"
-										class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg"
-										aria-label={$i18n.t('Chat')}
-										on:click={openNoteChat}
+								<input
+									class="w-full min-w-0 text-sm font-normal bg-transparent outline-hidden {$mobile
+										? 'ml-1'
+										: ''}"
+									type="text"
+									bind:value={note.title}
+									on:input={() => {
+										onDocumentChange({ title: note.title });
+									}}
+									placeholder={titleGenerating ? $i18n.t('Generating...') : $i18n.t('Title')}
+									disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
+										titleGenerating}
+									required
+									on:focus={() => {
+										titleInputFocused = true;
+									}}
+									on:blur={(e) => {
+										// check if target is generate button
+										if (ignoreBlur) {
+											ignoreBlur = false;
+											return;
+										}
+
+										titleInputFocused = false;
+										changeDebounceHandler();
+									}}
+								/>
+
+								{#if titleInputFocused && !titleGenerating}
+									<div
+										class="flex self-center items-center space-x-1.5 z-10 translate-y-[0.5px] -translate-x-[0.5px] pl-2 pr-0.5"
 									>
-										<ChatBubbleOval className="size-4" strokeWidth="1.8" />
-									</button>
-								</Tooltip>
+										<Tooltip content={$i18n.t('Generate')}>
+											<button
+												class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+												id="generate-title-button"
+												disabled={(note?.user_id !== $user?.id && $user?.role !== 'admin') ||
+													titleGenerating}
+												on:mouseenter={() => {
+													ignoreBlur = true;
+												}}
+												on:click={(e) => {
+													e.preventDefault();
+													e.stopImmediatePropagation();
+													e.stopPropagation();
 
-								{#if note?.write_access}
-									<RecordMenu
-										onRecord={async () => {
-											displayMediaRecord = false;
+													generateTitleHandler();
+													titleInputFocused = false;
+												}}
+											>
+												<Sparkles strokeWidth="1.5" />
+											</button>
+										</Tooltip>
+									</div>
+								{/if}
 
-											try {
-												let stream = await navigator.mediaDevices
-													.getUserMedia({ audio: true })
-													.catch(function (err) {
-														toast.error(
-															$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
-																error: err
-															})
-														);
-														return null;
-													});
+								<div class="flex items-center gap-0.5 shrink-0">
+									{#if note?.write_access}
+										{#if editor}
+											<div>
+												<div class="flex items-center gap-0.5 self-center min-w-fit" dir="ltr">
+													<button
+														class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
+														on:click={() => {
+															editor.chain().focus().undo().run();
+															// versionNavigateHandler('prev');
+														}}
+														disabled={!editor.can().undo()}
+													>
+														<ArrowUturnLeft className="size-4" />
+													</button>
 
-												if (stream) {
-													recording = true;
-													const tracks = stream.getTracks();
-													tracks.forEach((track) => track.stop());
+													<button
+														class="self-center p-1 hover:enabled:bg-black/5 dark:hover:enabled:bg-white/5 dark:hover:enabled:text-white hover:enabled:text-black rounded-md transition disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:text-gray-500"
+														on:click={() => {
+															editor.chain().focus().redo().run();
+															// versionNavigateHandler('next');
+														}}
+														disabled={!editor.can().redo()}
+													>
+														<ArrowUturnRight className="size-4" />
+													</button>
+												</div>
+											</div>
+										{/if}
+									{/if}
+
+									<Tooltip content={$i18n.t('Chat')} placement="top">
+										<button
+											type="button"
+											class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg"
+											aria-label={$i18n.t('Chat')}
+											on:click={openNoteChat}
+										>
+											<ChatBubbleOval className="size-4" strokeWidth="1.8" />
+										</button>
+									</Tooltip>
+
+									{#if note?.write_access}
+										<RecordMenu
+											onRecord={async () => {
+												displayMediaRecord = false;
+
+												try {
+													let stream = await navigator.mediaDevices
+														.getUserMedia({ audio: true })
+														.catch(function (err) {
+															toast.error(
+																$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
+																	error: err
+																})
+															);
+															return null;
+														});
+
+													if (stream) {
+														recording = true;
+														const tracks = stream.getTracks();
+														tracks.forEach((track) => track.stop());
+													}
+													stream = null;
+												} catch {
+													toast.error($i18n.t('Permission denied when accessing microphone'));
 												}
-												stream = null;
-											} catch {
-												toast.error($i18n.t('Permission denied when accessing microphone'));
+											}}
+											onCaptureAudio={async () => {
+												displayMediaRecord = true;
+
+												recording = true;
+											}}
+											onUpload={async () => {
+												const input = document.createElement('input');
+												input.type = 'file';
+												input.accept = 'audio/*';
+												input.multiple = false;
+												input.click();
+
+												input.onchange = async (e) => {
+													const files = e.target.files;
+
+													if (files && files.length > 0) {
+														await uploadFileHandler(files[0]);
+													}
+												};
+											}}
+										>
+											<Tooltip content={$i18n.t('Record')} placement="top">
+												<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
+													<Mic className="size-4" />
+												</div>
+											</Tooltip>
+										</RecordMenu>
+									{/if}
+
+									<NoteMenu
+										onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
+										onDownload={(type) => {
+											downloadHandler(type);
+										}}
+										onCopyLink={async () => {
+											const baseUrl = window.location.origin;
+											const res = await copyToClipboard(`${baseUrl}/notes/${note.id}`);
+
+											if (res) {
+												toast.success($i18n.t('Copied link to clipboard'));
+											} else {
+												toast.error($i18n.t('Failed to copy link'));
 											}
 										}}
-										onCaptureAudio={async () => {
-											displayMediaRecord = true;
+										onCopyToClipboard={async () => {
+											const res = await copyToClipboard(
+												note.data.content.md,
+												note.data.content.html,
+												true
+											).catch((error) => {
+												toast.error(`${error}`);
+												return null;
+											});
 
-											recording = true;
+											if (res) {
+												toast.success($i18n.t('Copied to clipboard'));
+											}
 										}}
-										onUpload={async () => {
-											const input = document.createElement('input');
-											input.type = 'file';
-											input.accept = 'audio/*';
-											input.multiple = false;
-											input.click();
-
-											input.onchange = async (e) => {
-												const files = e.target.files;
-
-												if (files && files.length > 0) {
-													await uploadFileHandler(files[0]);
-												}
-											};
+										onDelete={() => {
+											showDeleteConfirm = true;
+										}}
+										isPinned={$pinnedNotes.some((n) => n.id === note.id)}
+										onPin={async () => {
+											await toggleNotePinnedStatusById(localStorage.token, note.id);
+											note = await getNoteById(localStorage.token, note.id);
+											pinnedNotes.set(await getPinnedNoteList(localStorage.token).catch(() => []));
 										}}
 									>
-										<Tooltip content={$i18n.t('Record')} placement="top">
-											<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
-												<Mic className="size-4" />
-											</div>
-										</Tooltip>
-									</RecordMenu>
-								{/if}
+										<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
+											<EllipsisHorizontal className="size-5" />
+										</div>
+									</NoteMenu>
 
-								<NoteMenu
-									onUploadFiles={note?.write_access ? uploadNoteFilesHandler : null}
-									onDownload={(type) => {
-										downloadHandler(type);
-									}}
-									onCopyLink={async () => {
-										const baseUrl = window.location.origin;
-										const res = await copyToClipboard(`${baseUrl}/notes/${note.id}`);
-
-										if (res) {
-											toast.success($i18n.t('Copied link to clipboard'));
-										} else {
-											toast.error($i18n.t('Failed to copy link'));
-										}
-									}}
-									onCopyToClipboard={async () => {
-										const res = await copyToClipboard(
-											note.data.content.md,
-											note.data.content.html,
-											true
-										).catch((error) => {
-											toast.error(`${error}`);
-											return null;
-										});
-
-										if (res) {
-											toast.success($i18n.t('Copied to clipboard'));
-										}
-									}}
-									onDelete={() => {
-										showDeleteConfirm = true;
-									}}
-									isPinned={$pinnedNotes.some((n) => n.id === note.id)}
-									onPin={async () => {
-										await toggleNotePinnedStatusById(localStorage.token, note.id);
-										note = await getNoteById(localStorage.token, note.id);
-										pinnedNotes.set(await getPinnedNoteList(localStorage.token).catch(() => []));
-									}}
-								>
-									<div class="p-1 bg-transparent hover:bg-white/5 transition rounded-lg">
-										<EllipsisHorizontal className="size-5" />
-									</div>
-								</NoteMenu>
-
-								{#if note?.write_access}
-									<div class="ml-1.5">
-										<AccessButton
-											on:click={() => {
-												showAccessControlModal = true;
-											}}
-											disabled={note?.user_id !== $user?.id && $user?.role !== 'admin'}
-										/>
-									</div>
-								{:else}
-									<div class="shrink-0 text-xs text-gray-500 px-2 py-1">
-										{$i18n.t('Read-Only Access')}
-									</div>
-								{/if}
+									{#if note?.write_access}
+										<div class="ml-1.5">
+											<AccessButton
+												on:click={() => {
+													showAccessControlModal = true;
+												}}
+												disabled={note?.user_id !== $user?.id && $user?.role !== 'admin'}
+											/>
+										</div>
+									{:else}
+										<div class="shrink-0 text-xs text-gray-500 px-2 py-1">
+											{$i18n.t('Read-Only Access')}
+										</div>
+									{/if}
+								</div>
 							</div>
 						</div>
-					</div>
+					{/if}
 
-					<div class="  px-1.5">
-						<div
-							class=" flex w-full bg-transparent overflow-x-auto scrollbar-none"
-							on:wheel={(e) => {
-								if (e.deltaY !== 0) {
-									e.preventDefault();
-									e.currentTarget.scrollLeft += e.deltaY;
-								}
-							}}
-						>
+					{#if !canvas}
+						<div class="  px-1.5">
 							<div
-								class="flex gap-0.5 items-center text-xs font-normal text-gray-500 dark:text-gray-500 w-fit"
+								class=" flex w-full bg-transparent overflow-x-auto scrollbar-none"
+								on:wheel={(e) => {
+									if (e.deltaY !== 0) {
+										e.preventDefault();
+										e.currentTarget.scrollLeft += e.deltaY;
+									}
+								}}
 							>
-								<button class=" flex items-center gap-1 w-fit py-1 px-1.5 rounded-lg min-w-fit">
-									<!-- check for same date, yesterday, last week, and other -->
+								<div
+									class="flex gap-0.5 items-center text-xs font-normal text-gray-500 dark:text-gray-500 w-fit"
+								>
+									<button class=" flex items-center gap-1 w-fit py-1 px-1.5 rounded-lg min-w-fit">
+										<!-- check for same date, yesterday, last week, and other -->
 
-									{#if dayjs(note.created_at / 1000000).isSame(dayjs(), 'day')}
-										<span
-											>{dayjs(note.created_at / 1000000).format($i18n.t('[Today at] h:mm A'))}</span
-										>
-									{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'day'), 'day')}
-										<span
-											>{dayjs(note.created_at / 1000000).format(
-												$i18n.t('[Yesterday at] h:mm A')
-											)}</span
-										>
-									{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'week'), 'week')}
-										<span
-											>{dayjs(note.created_at / 1000000).format(
-												$i18n.t('[Last] dddd [at] h:mm A')
-											)}</span
-										>
-									{:else}
-										<span>{dayjs(note.created_at / 1000000).format($i18n.t('DD/MM/YYYY'))}</span>
-									{/if}
-								</button>
+										{#if dayjs(note.created_at / 1000000).isSame(dayjs(), 'day')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Today at] h:mm A')
+												)}</span
+											>
+										{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'day'), 'day')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Yesterday at] h:mm A')
+												)}</span
+											>
+										{:else if dayjs(note.created_at / 1000000).isSame(dayjs().subtract(1, 'week'), 'week')}
+											<span
+												>{dayjs(note.created_at / 1000000).format(
+													$i18n.t('[Last] dddd [at] h:mm A')
+												)}</span
+											>
+										{:else}
+											<span>{dayjs(note.created_at / 1000000).format($i18n.t('DD/MM/YYYY'))}</span>
+										{/if}
+									</button>
 
-								{#if editor}
 									<div class="flex items-center gap-1 px-1 min-w-fit">
 										<div>
 											{$i18n.t('{{COUNT}} words', {
@@ -1300,13 +1331,14 @@ ${content}
 											})}
 										</div>
 									</div>
-								{/if}
+								</div>
 							</div>
 						</div>
-					</div>
-
+					{/if}
 					<div
-						class=" flex-1 w-full h-full overflow-auto px-3 relative flex flex-col"
+						class=" flex-1 w-full h-full overflow-auto px-3 relative flex flex-col {canvas
+							? 'canvas-document-content'
+							: ''}"
 						id="note-content-container"
 					>
 						{#if noteAttachmentFiles.length > 0}
@@ -1337,6 +1369,15 @@ ${content}
 							</div>
 						{/if}
 
+						{#if canvas && editor && versionIdx === null && note?.write_access}
+							<slot
+								name="canvas-selection"
+								{editor}
+								selection={selectedContent
+									? editor.state.doc.textBetween(selectedContent.from, selectedContent.to, '\n\n')
+									: ''}
+							/>
+						{/if}
 						<RichTextInput
 							bind:this={inputElement}
 							bind:editor
@@ -1373,11 +1414,18 @@ ${content}
 								lastLocalContentChangeAt = Date.now();
 								note.data.content.html = content.html;
 								note.data.content.md = content.md;
+								if (!canvas || !applyingExternalContent) {
+									onDocumentChange({ content: content.md });
+								}
 
 								if (editor) {
 									wordCount = editor.storage.characterCount.words();
 									charCount = editor.storage.characterCount.characters();
 								}
+							}}
+							onProgrammaticChange={(content) => {
+								wordCount = content.wordCount;
+								charCount = content.charCount;
 							}}
 							fileHandler={true}
 							onFileDrop={(currentEditor, files, pos) => {
@@ -1467,46 +1515,55 @@ ${content}
 			</div>
 		{/if}
 	</div>
-	<NotePanel bind:show={showNoteChat}>
-		{#if noteChatLoading}
-			<div class="flex h-full items-center justify-center">
-				<Spinner className="size-5" />
-			</div>
-		{:else if noteChatId || noteChatDraftKey}
-			<Chat
-				embedded={true}
-				chatIdProp={noteChatId ?? ''}
-				embeddedChats={noteChats}
-				embeddedDraftKey={noteChatDraftKey}
-				suggestedPrompts={noteChatSuggestedPrompts}
-				selectedText={selectedContent?.text ?? ''}
-				onInsertToNote={insertHandler}
-				onNewEmbeddedChat={createNoteChat}
-				onCreateEmbeddedChat={createNoteChatOnFirstMessage}
-				onSelectEmbeddedChat={(chatId) => {
-					if (!chatId || chatId === noteChatId) return;
-					noteChatId = chatId;
-					noteChatDraftKey = '';
-				}}
-				onDeleteEmbeddedChat={deleteNoteChat}
-				onEmbeddedChatTitle={(chatId, title) => {
-					noteChats = noteChats.map((chat) =>
-						chat.id === chatId
-							? {
-									...chat,
-									title,
-									chat: {
-										...(chat.chat ?? {}),
-										title
+	{#if !canvas}
+		<NotePanel bind:show={showNoteChat}>
+			{#if noteChatLoading}
+				<div class="flex h-full items-center justify-center">
+					<Spinner className="size-5" />
+				</div>
+			{:else if noteChatId || noteChatDraftKey}
+				<Chat
+					embedded={true}
+					chatIdProp={noteChatId ?? ''}
+					embeddedChats={noteChats}
+					embeddedDraftKey={noteChatDraftKey}
+					suggestedPrompts={noteChatSuggestedPrompts}
+					selectedText={selectedContent?.text ?? ''}
+					onInsertToNote={insertHandler}
+					onNewEmbeddedChat={createNoteChat}
+					onCreateEmbeddedChat={createNoteChatOnFirstMessage}
+					onSelectEmbeddedChat={(chatId) => {
+						if (!chatId || chatId === noteChatId) return;
+						noteChatId = chatId;
+						noteChatDraftKey = '';
+					}}
+					onDeleteEmbeddedChat={deleteNoteChat}
+					onEmbeddedChatTitle={(chatId, title) => {
+						noteChats = noteChats.map((chat) =>
+							chat.id === chatId
+								? {
+										...chat,
+										title,
+										chat: {
+											...(chat.chat ?? {}),
+											title
+										}
 									}
-								}
-							: chat
-					);
-				}}
-				onCloseEmbedded={() => {
-					showNoteChat = false;
-				}}
-			/>
-		{/if}
-	</NotePanel>
+								: chat
+						);
+					}}
+					onCloseEmbedded={() => {
+						showNoteChat = false;
+					}}
+				/>
+			{/if}
+		</NotePanel>
+	{/if}
 </div>
+
+<style>
+	.canvas-document-content :global(.tiptap > :first-child:not(.canvas-removed-text)),
+	.canvas-document-content :global(.tiptap > .canvas-removed-text:first-child > :first-child) {
+		padding-inline-end: 7rem;
+	}
+</style>

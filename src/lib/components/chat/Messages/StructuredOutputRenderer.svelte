@@ -3,13 +3,19 @@
 	import ToolCallDisplay from '$lib/components/common/ToolCallDisplay.svelte';
 	import TerminalOutputFile from './TerminalOutputFile.svelte';
 	import { resolveChatMessageToolCall } from '$lib/apis/chats';
-	import { settings } from '$lib/stores';
+	import { settings, socket } from '$lib/stores';
 	import { toast } from 'svelte-sonner';
 
 	import Markdown from './Markdown.svelte';
+	import CanvasActivity from './CanvasActivity.svelte';
+	import CanvasPreview from './CanvasPreview.svelte';
+	import WebPreviewCard from './WebPreviewCard.svelte';
+	import WebPreviewActivity from './WebPreviewActivity.svelte';
 	import ConsecutiveDetailsGroup from './Markdown/ConsecutiveDetailsGroup.svelte';
 	import {
 		buildOutputDisplayItems,
+		dedupeCanvasDisplayItems,
+		dedupeWebPreviewDisplayItems,
 		type OutputDetailToken,
 		type OutputDisplayItem,
 		type OutputItem
@@ -28,6 +34,8 @@
 	export let editCodeBlock = true;
 	export let topPadding = false;
 	export let sourceIds: string[] = [];
+	export let previousCanvasIds: string[] = [];
+	export let previousWebPreviewIds: string[] = [];
 	export let formatMessageContent: (content: string) => string = (content) => content;
 	export let onSave: any = () => {};
 	export let onSourceClick: any = () => {};
@@ -52,7 +60,8 @@
 				chatId,
 				messageId,
 				callId,
-				approved ? 'approve' : 'reject'
+				approved ? 'approve' : 'reject',
+				{ session_id: $socket?.id }
 			);
 			onToolCallResolved(res);
 		} catch (err) {
@@ -66,7 +75,13 @@
 		compactPreview ? 'text-xs' : 'text-[0.9375rem]'
 	} text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition`;
 
-	$: displayItems = buildOutputDisplayItems(output) as OutputDisplayItem[];
+	$: displayItems = dedupeWebPreviewDisplayItems(
+		dedupeCanvasDisplayItems(
+			buildOutputDisplayItems(output) as OutputDisplayItem[],
+			previousCanvasIds
+		),
+		previousWebPreviewIds
+	);
 </script>
 
 {#each displayItems as displayItem (displayItem.id)}
@@ -97,6 +112,42 @@
 		{:else}
 			<div class="whitespace-pre-wrap text-[0.9375rem]">{displayItem.text}</div>
 		{/if}
+	{:else if displayItem.type === 'canvas'}
+		<CanvasPreview
+			title={displayItem.artifact.title}
+			content={displayItem.artifact.content}
+			canvasId={displayItem.artifact.canvasId}
+			noteId={displayItem.artifact.noteId ?? ''}
+			{model}
+			{save}
+			{preview}
+			{compactPreview}
+			{done}
+			{editCodeBlock}
+			{topPadding}
+			{sourceIds}
+			{onSourceClick}
+			{onTaskClick}
+			{onSave}
+			{onUpdate}
+			{onPreview}
+		/>
+	{:else if displayItem.type === 'canvas_activity'}
+		<CanvasActivity
+			name={displayItem.name}
+			done={displayItem.done}
+			artifact={displayItem.artifact}
+			error={displayItem.error ?? ''}
+		/>
+	{:else if displayItem.type === 'web_preview'}
+		<WebPreviewCard artifact={displayItem.artifact} />
+	{:else if displayItem.type === 'web_preview_activity'}
+		<WebPreviewActivity
+			name={displayItem.name}
+			done={displayItem.done}
+			artifact={displayItem.artifact}
+			error={displayItem.error ?? ''}
+		/>
 	{:else if displayItem.type === 'detail_group'}
 		<ConsecutiveDetailsGroup
 			id={`${id}-${displayItem.id}`}

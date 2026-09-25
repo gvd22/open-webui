@@ -1,7 +1,10 @@
 <script>
 	import { io } from 'socket.io-client';
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
+	import { handleWorkspaceRpc } from '$lib/components/chat/Artifacts/workspaceRpc';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -11,6 +14,8 @@
 	import { onMount, tick, setContext, onDestroy } from 'svelte';
 	import {
 		config,
+		models,
+		appData,
 		user,
 		settings,
 		theme,
@@ -32,8 +37,10 @@
 		channelId,
 		terminalServers,
 		showControls,
+		showArtifacts,
 		showFileNavPath,
 		showFileNavDir,
+		workspaceFileUpdate,
 		pyodideWorker,
 		desktopEvent
 	} from '$lib/stores';
@@ -291,7 +298,16 @@
 		return worker;
 	};
 
-	const executePythonAsWorker = async (id, code, cb, files = []) => {
+	const invalidatePyodideWorkspaceFiles = () => {
+		// Python can create, replace, rename, or remove arbitrary files. Do not guess
+		// paths or switch to another filesystem; open viewers verify on activation.
+		window.dispatchEvent(new CustomEvent('pyodide:files', { detail: { paths: undefined } }));
+	};
+
+	/** @param {unknown} value */
+	const isString = (value) => typeof value === 'string';
+
+	const executePythonAsWorker = async (id, code, cb, files = [], chatId = '', messageId = '') => {
 		let result = null;
 		let stdout = null;
 		let stderr = null;
@@ -306,8 +322,6 @@
 			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sklearn\b|\bfrom\s+sklearn\b/.test(code) ? 'scikit-learn' : null,
 			/\bimport\s+scipy\b|\bfrom\s+scipy\b/.test(code) ? 'scipy' : null,
-			/\bimport\s+re\b|\bfrom\s+re\b/.test(code) ? 'regex' : null,
-			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
@@ -334,46 +348,42 @@
 			}
 		}
 
-		worker.postMessage({
-			type: 'execute',
-			id: id,
-			code: code,
-			packages: packages,
-			files: filePayloads.length > 0 ? filePayloads : undefined
-		});
+		let timeoutId;
+		const armTimeout = (milliseconds) => {
+			clearTimeout(timeoutId);
+			timeoutId = setTimeout(() => {
+				if (executing) {
+					executing = false;
+					stderr = 'Execution Time Limit Exceeded';
 
-		// Timeout for this specific execution (not the worker itself)
-		let timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
+					worker.removeEventListener('message', onMessage);
+					worker.removeEventListener('error', onError);
+					terminatePyodideWorker(worker, 'Pyodide stopped after another request timed out');
+					if ($pyodideWorker === worker) pyodideWorker.set(null);
+					invalidatePyodideWorkspaceFiles();
 
-				// Terminate and recreate the worker on timeout
-				worker.terminate();
-				pyodideWorker.set(null);
-
-				if (cb) {
-					cb(
-						JSON.parse(
-							JSON.stringify(
-								{
-									stdout: stdout,
-									stderr: stderr,
-									result: result
-								},
-								(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
+					if (cb) {
+						cb(
+							JSON.parse(
+								JSON.stringify({ stdout, stderr, result }, (_key, value) =>
+									typeof value === 'bigint' ? value.toString() : value
+								)
 							)
-						)
-					);
+						);
+					}
 				}
-			}
-		}, 60000);
+			}, milliseconds);
+		};
 
 		// Use addEventListener so multiple concurrent executions don't clobber each other
 		const onMessage = (event) => {
 			const { id: eventId, ...data } = event.data;
 			// Only handle responses for this execution ID
 			if (eventId !== id) return;
+			if (data.type === 'pyodide:progress') {
+				armTimeout(getPyodideRequestTimeout(data.stage));
+				return;
+			}
 			// Ignore FS responses (they use a type field)
 			if (data.type && data.type.startsWith('fs:')) return;
 
@@ -382,9 +392,37 @@
 			worker.removeEventListener('message', onMessage);
 			worker.removeEventListener('error', onError);
 
-			data['stdout'] && (stdout = data['stdout']);
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
+			if (data.stdout !== undefined && data.stdout !== null) stdout = data.stdout;
+			if (data.stderr !== undefined && data.stderr !== null) stderr = data.stderr;
+			if (data.error !== undefined && data.error !== null) stderr = data.error;
+			if (data.result !== undefined && data.result !== null) result = data.result;
+			const workspaceFiles = Array.isArray(data.workspaceFiles)
+				? data.workspaceFiles.filter(isString)
+				: [];
+			const workspaceDeletedFiles = Array.isArray(data.workspaceDeletedFiles)
+				? data.workspaceDeletedFiles.filter(isString)
+				: [];
+			const workspaceFileSnapshots = Array.isArray(data.workspaceFileSnapshots)
+				? data.workspaceFileSnapshots
+				: [];
+			window.dispatchEvent(
+				new CustomEvent('pyodide:files', {
+					detail: {
+						paths: workspaceFiles,
+						snapshots: workspaceFileSnapshots,
+						kind: 'changed',
+						chatId,
+						messageId: messageId || undefined
+					}
+				})
+			);
+			if (workspaceDeletedFiles.length > 0) {
+				window.dispatchEvent(
+					new CustomEvent('pyodide:files', {
+						detail: { paths: workspaceDeletedFiles, kind: 'deleted', chatId }
+					})
+				);
+			}
 
 			if (cb) {
 				cb(
@@ -410,6 +448,10 @@
 			worker.removeEventListener('message', onMessage);
 			worker.removeEventListener('error', onError);
 
+			stderr = event?.message || 'Pyodide worker failed';
+			if (!event?.pyodideTerminating) worker.terminate();
+			if ($pyodideWorker === worker) pyodideWorker.set(null);
+			invalidatePyodideWorkspaceFiles();
 			if (cb) {
 				cb(
 					JSON.parse(
@@ -429,11 +471,23 @@
 
 		worker.addEventListener('message', onMessage);
 		worker.addEventListener('error', onError);
+		armTimeout(getPyodideRequestTimeout('request-queued'));
+		try {
+			worker.postMessage({
+				type: 'execute',
+				id,
+				code,
+				packages,
+				files: filePayloads.length > 0 ? filePayloads : undefined
+			});
+		} catch (error) {
+			onError({ message: error instanceof Error ? error.message : String(error) });
+		}
 	};
 
 	const resolveToolServer = (serverUrl) => {
 		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
-		if (!toolServer) {
+		if (ENABLE_CHAT_TERMINALS && !toolServer) {
 			const terminalServer = ($settings?.terminalServers ?? []).find(
 				(server) => server.url === serverUrl
 			);
@@ -449,7 +503,9 @@
 
 		let toolServerData =
 			$toolServers?.find((server) => server.url === serverUrl) ??
-			$terminalServers?.find((server) => server.url === serverUrl);
+			(ENABLE_CHAT_TERMINALS
+				? $terminalServers?.find((server) => server.url === serverUrl)
+				: undefined);
 
 		let token = null;
 		if (toolServer) {
@@ -535,14 +591,20 @@
 				if (result?.exists !== false) {
 					displayFileHandler(
 						params.path,
-						{ showControls, showFileNavPath },
-						{ page: params?.page }
+						{ showControls, showFileNavPath, showArtifacts },
+						{ page: params?.page, chatId }
 					);
 				}
 			}
 
-			if (['write_file'].includes(data?.name) && params?.path) {
-				showFileNavDir.set(result?.path ?? params.path);
+			if (['write_file', 'replace_file_content'].includes(data?.name) && params?.path) {
+				const path = result?.path ?? params.path;
+				workspaceFileUpdate.set({ path, kind: 'changed', revision: Date.now() });
+				showFileNavDir.set(path);
+			}
+
+			if (data?.name === 'run_command') {
+				workspaceFileUpdate.set({ kind: 'unknown', revision: Date.now() });
 			}
 
 			if (cb) {
@@ -556,6 +618,41 @@
 	};
 
 	const chatEventHandler = async (event, cb) => {
+		const type = event?.data?.type ?? null;
+		const data = event?.data?.data ?? null;
+		const socketId = $socket?.id;
+
+		// Session-targeted RPC must bypass visibility, the electron focus bridge,
+		// and Svelte's flush. Those steps can fail independently of the worker
+		// callback that the backend is waiting for.
+		if (data?.session_id && data.session_id === socketId) {
+			if (type === 'execute:python') {
+				console.log('execute:python', data);
+				void executePythonAsWorker(
+					data.id,
+					data.code,
+					cb,
+					data.files || [],
+					event.chat_id,
+					event.message_id ?? data.message_id ?? ''
+				).catch((error) => {
+					cb?.({ error: error instanceof Error ? error.message : String(error) });
+				});
+				return;
+			} else if (type === 'workspace:display_file' || type === 'workspace:read_runtime_file') {
+				await handleWorkspaceRpc(type, data, event.chat_id, cb, getOrCreateWorker);
+				return;
+			} else if (type === 'execute:tool') {
+				console.log('execute:tool', data);
+				try {
+					await executeTool(data, cb, event.chat_id);
+				} catch (error) {
+					cb?.({ error: error instanceof Error ? error.message : String(error) });
+				}
+				return;
+			}
+		}
+
 		const chat = $page.url.pathname.includes(`/c/${event.chat_id}`);
 
 		// Skip events from temporary chats that are not the current chat.
@@ -577,8 +674,6 @@
 		}
 
 		await tick();
-		const type = event?.data?.type ?? null;
-		const data = event?.data?.data ?? null;
 
 		// Calendar alerts are not chat-scoped, handle before chat_id checks
 		if (type === 'calendar:alert' && data) {
@@ -618,16 +713,8 @@
 		// Session-targeted RPC calls (code execution, tool calls, direct completion)
 		// must ALWAYS be processed regardless of active chat or tab visibility,
 		// because the backend's sio.call blocks waiting for our callback response.
-		if (data?.session_id === $socket.id) {
-			if (type === 'execute:python') {
-				console.log('execute:python', data);
-				executePythonAsWorker(data.id, data.code, cb, data.files || []);
-				return;
-			} else if (type === 'execute:tool') {
-				console.log('execute:tool', data);
-				executeTool(data, cb, event.chat_id);
-				return;
-			} else if (type === 'request:chat:completion') {
+		if (data?.session_id === socketId) {
+			if (type === 'request:chat:completion') {
 				console.log(data, $socket.id);
 				const { session_id, channel, form_data, model } = data;
 

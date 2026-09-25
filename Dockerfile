@@ -186,6 +186,11 @@ RUN if [ "$USE_OLLAMA" = "true" ]; then \
 COPY --chown=$UID:$GID --from=build /app/build /app/build
 COPY --chown=$UID:$GID --from=build /app/CHANGELOG.md /app/CHANGELOG.md
 COPY --chown=$UID:$GID --from=build /app/package.json /app/package.json
+COPY --chown=$UID:$GID --from=build /app/LICENSE_NOTICE /app/legal/LICENSE_NOTICE
+COPY --chown=$UID:$GID --from=build /app/node_modules/pdfjs-dist/LICENSE /app/legal/pdfjs-dist-LICENSE
+COPY --chown=$UID:$GID --from=build /app/node_modules/docx-preview/LICENSE /app/legal/docx-preview-LICENSE
+COPY --chown=$UID:$GID --from=build /app/node_modules/jszip/LICENSE.markdown /app/legal/jszip-LICENSE.markdown
+COPY --chown=$UID:$GID --from=build /app/node_modules/xlsx/LICENSE /app/legal/xlsx-LICENSE
 
 # copy backend files
 COPY --chown=$UID:$GID ./backend .

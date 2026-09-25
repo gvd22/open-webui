@@ -1,8 +1,17 @@
 <script lang="ts">
 	import DOMPurify from 'dompurify';
-	import { getContext, onDestroy, onMount, tick } from 'svelte';
+	import { createEventDispatcher, getContext, onDestroy, onMount, tick } from 'svelte';
 	import type { Readable } from 'svelte/store';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
+	import { hardenDocumentLinks, validateDocxArchive } from './documentSecurity';
+	import DocumentZoomControls from './DocumentZoomControls.svelte';
+	import {
+		clampDocumentZoom,
+		DOCUMENT_ZOOM_BUTTON_STEP,
+		DOCUMENT_ZOOM_MAX,
+		getDocumentWheelZoomDelta,
+		panDocumentViewport
+	} from './documentZoom';
 
 	import Spinner from './Spinner.svelte';
 
@@ -11,6 +20,10 @@
 	};
 
 	const i18n = getContext<Readable<I18n>>('i18n');
+	const dispatch = createEventDispatcher<{
+		'preview-rendered': { data: ArrayBuffer };
+		'preview-failed': { data: ArrayBuffer };
+	}>();
 
 	export let data: ArrayBuffer | null = null;
 	export let className = '';
@@ -25,10 +38,11 @@
 	let renderId = 0;
 	let mounted = false;
 	let fitScale = 1;
-	let zoomLevel = 1;
+	let zoomPercent = 100;
 	let resizeObserver: ResizeObserver | null = null;
+	let dragStart: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null;
 
-	$: docxScale = Math.max(0.25, fitScale * zoomLevel);
+	$: docxScale = Math.max(0.25, fitScale * (zoomPercent / 100));
 
 	const clearPreview = () => {
 		if (containerEl) containerEl.innerHTML = '';
@@ -48,41 +62,70 @@
 		const pageWidth = Number.isFinite(computedWidth)
 			? computedWidth
 			: page.getBoundingClientRect().width / docxScale;
-		const availableWidth = Math.max(320, outerContainer.clientWidth - 32);
+		const availableWidth = Math.max(1, outerContainer.clientWidth - 32);
 		fitScale = Math.min(1, availableWidth / pageWidth);
 	};
 
-	const zoomIn = () => {
-		zoomLevel = Math.min(4, zoomLevel * 1.25);
-	};
-
-	const zoomOut = () => {
-		zoomLevel = Math.max(0.25, zoomLevel * 0.8);
-	};
-
-	const handleWheel = (e: WheelEvent) => {
-		if (!e.ctrlKey && !e.metaKey) return;
+	const setZoom = (value: number, anchorX?: number, anchorY?: number) => {
 		if (!outerContainer) return;
-
-		e.preventDefault();
-
-		const oldScale = docxScale;
-		const rect = outerContainer.getBoundingClientRect();
-		const pointerX = e.clientX - rect.left + outerContainer.scrollLeft;
-		const pointerY = e.clientY - rect.top + outerContainer.scrollTop;
-		const factor = Math.exp(-e.deltaY * 0.002);
-
-		zoomLevel = Math.max(0.25, Math.min(4, zoomLevel * factor));
-
-		void tick().then(() => {
-			const ratio = docxScale / oldScale;
-			outerContainer.scrollLeft = pointerX * ratio - (e.clientX - rect.left);
-			outerContainer.scrollTop = pointerY * ratio - (e.clientY - rect.top);
+		const nextZoom = clampDocumentZoom(value);
+		if (nextZoom === zoomPercent) return;
+		const oldScale = fitScale * (zoomPercent / 100);
+		const nextScale = fitScale * (nextZoom / 100);
+		const x = anchorX ?? outerContainer.clientWidth / 2;
+		const y = anchorY ?? outerContainer.clientHeight / 2;
+		const contentX = (outerContainer.scrollLeft + x) / oldScale;
+		const contentY = (outerContainer.scrollTop + y) / oldScale;
+		zoomPercent = nextZoom;
+		requestAnimationFrame(() => {
+			outerContainer.scrollTo(contentX * nextScale - x, contentY * nextScale - y);
 		});
 	};
 
+	const handleWheel = (e: WheelEvent) => {
+		if (!outerContainer) return;
+		if (!e.ctrlKey && !e.metaKey) {
+			if (zoomPercent <= 100) return;
+			e.preventDefault();
+			panDocumentViewport(outerContainer, e.deltaX, e.deltaY);
+			return;
+		}
+		e.preventDefault();
+		const rect = outerContainer.getBoundingClientRect();
+		setZoom(
+			zoomPercent + getDocumentWheelZoomDelta(e.deltaY),
+			e.clientX - rect.left,
+			e.clientY - rect.top
+		);
+	};
+
+	const startDrag = (event: PointerEvent) => {
+		if (!outerContainer || event.button !== 0 || zoomPercent <= 100) return;
+		outerContainer.setPointerCapture(event.pointerId);
+		dragStart = {
+			x: event.clientX,
+			y: event.clientY,
+			scrollLeft: outerContainer.scrollLeft,
+			scrollTop: outerContainer.scrollTop
+		};
+	};
+
+	const dragDocument = (event: PointerEvent) => {
+		if (!outerContainer || !dragStart) return;
+		outerContainer.scrollLeft = dragStart.scrollLeft - (event.clientX - dragStart.x);
+		outerContainer.scrollTop = dragStart.scrollTop - (event.clientY - dragStart.y);
+	};
+
+	const stopDrag = (event: PointerEvent) => {
+		if (!outerContainer || !dragStart) return;
+		dragStart = null;
+		if (outerContainer.hasPointerCapture(event.pointerId)) {
+			outerContainer.releasePointerCapture(event.pointerId);
+		}
+	};
+
 	export const resetView = () => {
-		zoomLevel = 1;
+		zoomPercent = 100;
 		updateFitScale();
 	};
 
@@ -99,12 +142,22 @@
 	const renderDocx = async (arrayBuffer: ArrayBuffer | null) => {
 		const currentRender = ++renderId;
 		clearPreview();
-		zoomLevel = 1;
+		zoomPercent = 100;
 
 		if (!arrayBuffer || !containerEl || !styleEl) return;
 
 		loading = true;
 		await tick();
+		try {
+			await validateDocxArchive(arrayBuffer);
+		} catch (validationError) {
+			if (currentRender !== renderId) return;
+			console.error('DOCX validation failed:', validationError);
+			error = $i18n.t('Failed to load DOCX file. Please try downloading it instead.');
+			dispatch('preview-failed', { data: arrayBuffer });
+			loading = false;
+			return;
+		}
 
 		try {
 			const { renderAsync } = await import('docx-preview');
@@ -123,8 +176,10 @@
 				useBase64URL: true
 			});
 			await tick();
+			hardenDocumentLinks(containerEl);
 			updateFitScale();
 			await scrollToTargetPage();
+			dispatch('preview-rendered', { data: arrayBuffer });
 		} catch (e) {
 			console.error('Error rendering DOCX preview:', e);
 
@@ -132,9 +187,13 @@
 				const { docxToHtml } = await import('$lib/utils/docxToHtml');
 				if (currentRender !== renderId) return;
 				fallbackHtml = DOMPurify.sanitize(await docxToHtml(arrayBuffer.slice(0)));
+				await tick();
+				if (outerContainer) hardenDocumentLinks(outerContainer);
+				dispatch('preview-rendered', { data: arrayBuffer });
 			} catch (fallbackError) {
 				console.error('Error rendering DOCX fallback:', fallbackError);
 				error = $i18n.t('Failed to load DOCX file. Please try downloading it instead.');
+				dispatch('preview-failed', { data: arrayBuffer });
 			}
 		} finally {
 			if (currentRender === renderId) loading = false;
@@ -165,7 +224,7 @@
 </script>
 
 <div
-	class="relative min-h-full bg-transparent [&_.docx-wrapper]:flex [&_.docx-wrapper]:flex-col [&_.docx-wrapper]:items-center [&_.docx-wrapper]:!bg-transparent [&_.docx-wrapper]:pt-4 [&_.docx-wrapper]:pb-14 [&_.docx-wrapper>section.docx]:!mx-auto [&_.docx-wrapper>section.docx]:!mt-0 [&_.docx-wrapper>section.docx]:!mb-1 [&_.docx-wrapper>section.docx]:!bg-white [&_.docx-wrapper>section.docx]:!shadow-[0_1px_4px_rgba(0,0,0,0.18)] [&_.docx-wrapper>section.docx]:[zoom:var(--docx-scale)] {className}"
+	class="relative min-h-full bg-transparent [&_.docx-wrapper]:flex [&_.docx-wrapper]:flex-col [&_.docx-wrapper]:items-center [&_.docx-wrapper]:!bg-transparent [&_.docx-wrapper]:!px-4 [&_.docx-wrapper]:pt-4 [&_.docx-wrapper]:pb-14 [&_.docx-wrapper>section.docx]:!mx-auto [&_.docx-wrapper>section.docx]:!mt-0 [&_.docx-wrapper>section.docx]:!mb-1 [&_.docx-wrapper>section.docx]:!bg-white [&_.docx-wrapper>section.docx]:!shadow-[0_1px_4px_rgba(0,0,0,0.18)] [&_.docx-wrapper>section.docx]:[zoom:var(--docx-scale)] {className}"
 	style="--docx-scale: {docxScale};"
 >
 	<div bind:this={styleEl}></div>
@@ -188,63 +247,40 @@
 			</div>
 		</div>
 	{:else}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			bind:this={outerContainer}
-			class="h-full overflow-auto overscroll-contain"
+			role="region"
+			aria-label="Word document"
+			class="h-full overflow-auto overscroll-contain {zoomPercent > 100
+				? 'cursor-grab select-none active:cursor-grabbing'
+				: ''}"
 			on:wheel|nonpassive={handleWheel}
+			on:pointerdown={startDrag}
+			on:pointermove={dragDocument}
+			on:pointerup={stopDrag}
+			on:pointercancel={stopDrag}
 		>
 			<div bind:this={containerEl}></div>
 		</div>
 	{/if}
 
 	{#if !loading && !error && data && !fallbackHtml}
-		<div
-			class="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 rounded-lg bg-white/90 dark:bg-gray-850/90 backdrop-blur-sm shadow-lg border border-gray-200/60 dark:border-gray-700/60 px-1 py-0.5"
-		>
-			<button
-				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-				on:click={zoomOut}
-				aria-label="Zoom out"
+		<div class="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
+			<div
+				class="flex items-center gap-0.5 rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-gray-700/80 dark:bg-gray-850/95"
 			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
-				>
-					<path
-						fill-rule="evenodd"
-						d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-			<button
-				type="button"
-				class="shrink-0 min-w-12 h-7 px-1.5 py-1 text-center text-[0.6875rem] font-normal text-gray-500 dark:text-gray-400 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition tabular-nums"
-				on:click={resetView}
-				aria-label="Reset zoom"
-			>
-				{Math.round(zoomLevel * 100)}%
-			</button>
-			<button
-				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
-				on:click={zoomIn}
-				aria-label="Zoom in"
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
-				>
-					<path
-						d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z"
-					/>
-				</svg>
-			</button>
+				<DocumentZoomControls
+					percent={zoomPercent}
+					maximum={DOCUMENT_ZOOM_MAX}
+					zoomOutLabel={$i18n.t('Zoom out')}
+					resetLabel={$i18n.t('Reset zoom')}
+					zoomInLabel={$i18n.t('Zoom in')}
+					onZoomOut={() => setZoom(zoomPercent - DOCUMENT_ZOOM_BUTTON_STEP)}
+					onReset={resetView}
+					onZoomIn={() => setZoom(zoomPercent + DOCUMENT_ZOOM_BUTTON_STEP)}
+				/>
+			</div>
 		</div>
 	{/if}
 </div>

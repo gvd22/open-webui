@@ -40,6 +40,7 @@ from open_webui.env import (
     REDIS_KEY_PREFIX,
 )
 from open_webui.models.access_grants import AccessGrants
+from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.groups import Groups
 from open_webui.models.tools import Tools
@@ -100,7 +101,24 @@ from open_webui.tools.builtin import (
     view_skill,
     write_note,
 )
+from open_webui.tools.workspace import (
+    canvas_create_document,
+    canvas_list_documents,
+    canvas_read_document,
+    canvas_replace_text,
+    canvas_select_document,
+    canvas_update_document,
+    web_preview_create,
+    web_preview_import_runtime_file,
+    web_preview_list,
+    web_preview_read_file,
+    web_preview_replace_text,
+    web_preview_select,
+    web_preview_update,
+    workspace_display_file,
+)
 from open_webui.utils.access_control import has_access, has_connection_access, has_permission
+from open_webui.utils.canvas import is_internal_note_chat
 from open_webui.utils.chat_id import is_saved_chat_id
 from open_webui.utils.headers import (
     bearer_auth_header,
@@ -124,6 +142,13 @@ from pydantic.fields import FieldInfo
 log = logging.getLogger(__name__)
 
 
+def supports_chat_workspace_tools(chat_id: str, chat: Any) -> bool:
+    """Workspace tools require a persisted non-Notes chat.
+
+    Automation runs use persisted chats and are intentionally supported. Notes
+    chats keep their own editor/tool lifecycle and must not receive these tools.
+    """
+    return is_saved_chat_id(chat_id) and not is_internal_note_chat(chat)
 async def build_tool_server_headers(
     connection: dict,
     request,
@@ -538,7 +563,7 @@ async def get_builtin_tools(
     # Helper to check if a builtin tool category is enabled via meta.builtinTools
     # Defaults to True if not specified (backward compatible)
     def is_builtin_tool_enabled(category: str, default: bool = True) -> bool:
-        builtin_tools = model.get('info', {}).get('meta', {}).get('builtinTools', {})
+        builtin_tools = model.get('info', {}).get('meta', {}).get('builtinTools') or {}
         return builtin_tools.get(category, default)
 
     # Helper to check user-level feature permission (admins always pass)
@@ -714,11 +739,66 @@ async def get_builtin_tools(
     ):
         builtin_functions.append(execute_code)
 
-    # Notes tools - search, view, create, and update user's notes
-    if is_note_chat or (
-        is_builtin_tool_enabled('notes') and config.get('notes.enable') and await has_user_permission('notes')
+    chat_id = metadata.get('chat_id') or ''
+    chat = None
+    if is_saved_chat_id(chat_id):
+        chat = await Chats.get_chat_by_id(chat_id)
+
+    from open_webui.env import ENABLE_DOCUMENT_VIEWER
+    if (
+        execute_code in builtin_functions
+        and ENABLE_DOCUMENT_VIEWER
+        and supports_chat_workspace_tools(chat_id, chat)
+        and await Config.get('code_interpreter.engine', 'pyodide') == 'pyodide'
+        and metadata.get('session_id')
     ):
+        builtin_functions.append(workspace_display_file)
+
+    # Internal Note chats bypass model tool-category selection, but never the
+    # global Notes switch or the user's current Notes permission.
+    notes_allowed = bool(config.get('notes.enable')) and await has_user_permission('notes')
+    is_note_chat = is_note_chat or is_internal_note_chat(chat)
+    if notes_allowed and (is_note_chat or is_builtin_tool_enabled('notes')):
         builtin_functions.extend([search_notes, view_note, write_note, replace_note_content])
+
+    # Canvas is intentionally opt-in per model. It persists only inside the
+    # chat until the user explicitly promotes the document to Notes in the UI.
+    if (
+        is_builtin_tool_enabled('canvas')
+        and get_model_capability('canvas', False)
+        and supports_chat_workspace_tools(chat_id, chat)
+    ):
+        builtin_functions.extend(
+            [
+                canvas_create_document,
+                canvas_update_document,
+                canvas_select_document,
+                canvas_list_documents,
+                canvas_read_document,
+                canvas_replace_text,
+            ]
+        )
+
+    if (
+        is_builtin_tool_enabled('web_preview')
+        and get_model_capability('web_preview', False)
+        and supports_chat_workspace_tools(chat_id, chat)
+    ):
+        web_preview_functions = [
+            web_preview_create,
+            web_preview_update,
+            web_preview_select,
+            web_preview_list,
+            web_preview_read_file,
+            web_preview_replace_text,
+        ]
+        pyodide_runtime_active = (
+            execute_code in builtin_functions
+            and await Config.get('code_interpreter.engine', 'pyodide') == 'pyodide'
+        )
+        if pyodide_runtime_active:
+            web_preview_functions.append(web_preview_import_runtime_file)
+        builtin_functions.extend(web_preview_functions)
 
     # Channels tools - search channels and messages
     if is_builtin_tool_enabled('channels') and config.get('channels.enable') and await has_user_permission('channels'):
@@ -939,7 +1019,6 @@ def clean_properties(schema: dict):
 
 
 def clean_openai_tool_schema(spec: dict) -> dict:
-
     cleaned_spec = copy.deepcopy(spec)
 
     if 'parameters' in cleaned_spec:
@@ -1381,6 +1460,13 @@ async def get_terminal_tools(
     if not await has_connection_access(user, connection, user_group_ids):
         raise RuntimeError(f'Access denied to terminal {terminal_id}')
 
+    metadata = extra_params.get('__metadata__', {})
+    terminal_context = 'automation' if metadata.get('automation_id') else 'chat'
+    if not terminal_context_available(connection, terminal_context):
+        raise RuntimeError(f"Terminal server '{terminal_id}' is not available for {terminal_context}")
+
+    session_id = metadata.get('chat_id')
+
     # Find the cached spec data for this terminal
     terminal_servers = await get_terminal_servers(request)
     server_data = next((server for server in terminal_servers if server.get('id') == terminal_id), None)
@@ -1409,12 +1495,6 @@ async def get_terminal_tools(
     # auth_type == "none": no Authorization header
 
     # Use chat_id as the per-session key for cwd tracking
-    metadata = extra_params.get('__metadata__', {})
-    terminal_context = 'automation' if metadata.get('automation_id') else 'chat'
-    if not terminal_context_available(connection, terminal_context):
-        raise RuntimeError(f"Terminal server '{terminal_id}' is not available for {terminal_context}")
-
-    session_id = metadata.get('chat_id')
     if session_id:
         headers['X-Session-Id'] = session_id
 

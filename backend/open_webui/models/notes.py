@@ -165,26 +165,51 @@ class NoteTable:
         )
 
     async def insert_new_note(
-        self, user_id: str, form_data: NoteForm, db: Optional[AsyncSession] = None
+        self,
+        user_id: str,
+        form_data: NoteForm,
+        db: Optional[AsyncSession] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[NoteModel]:
+        if not commit:
+            if not isinstance(db, AsyncSession):
+                raise ValueError('An active database session is required for transactional note creation.')
+            if form_data.access_grants:
+                raise ValueError('Transactional note creation does not support access grants.')
+            return await self._insert_new_note(user_id, form_data, db, commit=False)
+
         async with get_async_db_context(db) as db:
-            note = NoteModel(
-                **{
-                    'id': str(uuid.uuid4()),
-                    'user_id': user_id,
-                    **form_data.model_dump(exclude={'access_grants'}),
-                    'created_at': int(time.time_ns()),
-                    'updated_at': int(time.time_ns()),
-                    'access_grants': [],
-                }
-            )
+            return await self._insert_new_note(user_id, form_data, db, commit=True)
 
-            new_note = Note(**note.model_dump(exclude={'access_grants', 'is_pinned'}))
+    async def _insert_new_note(
+        self,
+        user_id: str,
+        form_data: NoteForm,
+        db: AsyncSession,
+        *,
+        commit: bool,
+    ) -> NoteModel:
+        note = NoteModel(
+            **{
+                'id': str(uuid.uuid4()),
+                'user_id': user_id,
+                **form_data.model_dump(exclude={'access_grants'}),
+                'created_at': int(time.time_ns()),
+                'updated_at': int(time.time_ns()),
+                'access_grants': [],
+            }
+        )
+        new_note = Note(**note.model_dump(exclude={'access_grants', 'is_pinned'}))
+        db.add(new_note)
 
-            db.add(new_note)
-            await db.commit()
-            await AccessGrants.set_access_grants('note', note.id, form_data.access_grants, db=db)
-            return await self._to_note_model(new_note, db=db)
+        if not commit:
+            await db.flush()
+            return note
+
+        await db.commit()
+        await AccessGrants.set_access_grants('note', note.id, form_data.access_grants, db=db)
+        return await self._to_note_model(new_note, db=db)
 
     async def get_notes(self, skip: int = 0, limit: int = 50, db: Optional[AsyncSession] = None) -> list[NoteModel]:
         async with get_async_db_context(db) as db:
@@ -337,8 +362,15 @@ class NoteTable:
             return await self._to_note_model(note, db=db) if note else None
 
     async def update_note_by_id(
-        self, id: str, form_data: NoteUpdateForm, db: Optional[AsyncSession] = None
+        self,
+        id: str,
+        form_data: NoteUpdateForm,
+        db: Optional[AsyncSession] = None,
+        *,
+        commit: bool = True,
     ) -> Optional[NoteModel]:
+        if not commit and not isinstance(db, AsyncSession):
+            raise ValueError('An active database session is required for transactional note updates.')
         async with get_async_db_context(db) as db:
             result = await db.execute(select(Note).filter(Note.id == id))
             note = result.scalars().first()
@@ -363,7 +395,10 @@ class NoteTable:
 
             note.updated_at = int(time.time_ns())
 
-            await db.commit()
+            if commit:
+                await db.commit()
+            else:
+                await db.flush()
             return await self._to_note_model(note, db=db) if note else None
 
     async def toggle_note_pinned_by_id(

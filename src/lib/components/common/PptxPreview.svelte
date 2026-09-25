@@ -2,6 +2,11 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
+	import {
+		clampDocumentZoom,
+		DOCUMENT_ZOOM_BUTTON_STEP,
+		getDocumentWheelZoomDelta
+	} from './documentZoom';
 
 	export let slides: string[] = [];
 	export let currentSlide = 0;
@@ -125,17 +130,19 @@
 		if (!rootEl?.contains(document.activeElement)) rootEl?.focus();
 	};
 
-	const zoomIn = () => {
+	const setZoom = (percent: number, x?: number, y?: number) => {
 		if (!pzInstance || !stageEl) return;
-		pzInstance.zoomTo(stageEl.clientWidth / 2, stageEl.clientHeight / 2, 1.25);
+		const nextPercent = clampDocumentZoom(percent);
+		pzInstance.zoomAbs(
+			x ?? stageEl.clientWidth / 2,
+			y ?? stageEl.clientHeight / 2,
+			nextPercent / 100
+		);
 		zoomLevel = pzInstance.getTransform().scale;
 	};
 
-	const zoomOut = () => {
-		if (!pzInstance || !stageEl) return;
-		pzInstance.zoomTo(stageEl.clientWidth / 2, stageEl.clientHeight / 2, 0.8);
-		zoomLevel = pzInstance.getTransform().scale;
-	};
+	const zoomIn = () => setZoom(Math.round(zoomLevel * 100) + DOCUMENT_ZOOM_BUTTON_STEP);
+	const zoomOut = () => setZoom(Math.round(zoomLevel * 100) - DOCUMENT_ZOOM_BUTTON_STEP);
 
 	export const resetView = () => {
 		pzInstance?.moveTo(0, 0);
@@ -159,9 +166,12 @@
 
 			e.preventDefault();
 
-			const rect = sceneEl.getBoundingClientRect();
-			pzInstance.zoomTo(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * 0.002));
-			zoomLevel = pzInstance.getTransform().scale;
+			const rect = stageEl.getBoundingClientRect();
+			setZoom(
+				Math.round(zoomLevel * 100) + getDocumentWheelZoomDelta(e.deltaY),
+				e.clientX - rect.left,
+				e.clientY - rect.top
+			);
 			return;
 		}
 
@@ -231,6 +241,8 @@
 	});
 </script>
 
+<!-- Keyboard focus belongs to the composite slide viewer, not to one child control. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
 <div
 	bind:this={rootEl}
 	role="application"

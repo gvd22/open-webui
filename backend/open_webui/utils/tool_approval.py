@@ -1,13 +1,12 @@
 from typing import Any, Literal
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.models.chats import Chats
-from open_webui.socket.main import get_event_emitter
+from open_webui.socket.main import SESSION_POOL, get_event_emitter
 from open_webui.utils.json_codec import JSONCodec
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class ResolveToolCallForm(BaseModel):
@@ -15,6 +14,16 @@ class ResolveToolCallForm(BaseModel):
     action: Literal['approve', 'reject', 'answer']
     answers: Any | None = None
     timed_out: bool = False
+    session_id: str | None = None
+
+
+def _validate_resume_session(session_id: str | None, user_id: str) -> None:
+    """Reject a browser socket that is not currently owned by the caller."""
+    if session_id and SESSION_POOL.get(session_id, {}).get('id') != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Browser session is not available for this user.',
+        )
 
 
 async def resolve_tool_call_output(
@@ -31,78 +40,90 @@ async def resolve_tool_call_output(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    message = await Chats.get_message_by_id_and_message_id(chat_id, message_id)
-    if not message:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    _validate_resume_session(form_data.session_id, user.id)
 
-    output = message.get('output') or []
-    if not isinstance(output, list):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Message has no resolvable output.')
+    def resolve(message):
+        output = message.get('output') or []
+        if not isinstance(output, list):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Message has no resolvable output.')
 
-    function_call = next(
-        (
-            item
-            for item in output
-            if item.get('type') == 'function_call' and (item.get('call_id') or item.get('id')) == form_data.call_id
-        ),
-        None,
-    )
-    if not function_call:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tool call not found.')
-    function_call.setdefault('call_id', form_data.call_id)
-    tool_name = function_call.get('name')
+        function_call = next(
+            (
+                item
+                for item in output
+                if item.get('type') == 'function_call' and (item.get('call_id') or item.get('id')) == form_data.call_id
+            ),
+            None,
+        )
+        if not function_call:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tool call not found.')
+        function_call.setdefault('call_id', form_data.call_id)
+        tool_name = function_call.get('name')
 
-    if any(
-        item.get('type') == 'function_call_output' and item.get('call_id') == form_data.call_id for item in output
-    ) or function_call.get('status') not in {'pending', 'queued', 'requires_approval'}:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Tool call has already been resolved.')
+        if any(
+            item.get('type') == 'function_call_output' and item.get('call_id') == form_data.call_id for item in output
+        ) or function_call.get('status') not in {'pending', 'requires_approval'}:
+            detail = (
+                'Tool call is already running; it was not retried.'
+                if function_call.get('execution_started') or function_call.get('status') == 'in_progress'
+                else 'Tool call has already been resolved.'
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
-    if form_data.action == 'approve':
-        if tool_name == 'ask_user':
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='ask_user requires an answer or deny.')
-        function_call['status'] = 'queued'
-        function_call['approved'] = True
-    elif form_data.action == 'reject':
-        function_call['status'] = 'rejected'
-        output.append(
-            {
-                'type': 'function_call_output',
-                'id': f'fco_{form_data.call_id}',
-                'call_id': form_data.call_id,
-                'output': [{'type': 'input_text', 'text': 'Error: tool call rejected by user.'}],
-                'status': 'rejected',
+        if form_data.action == 'approve':
+            if tool_name == 'ask_user':
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='ask_user requires an answer or deny.')
+            function_call['status'] = 'queued'
+            function_call['approved'] = True
+        elif form_data.action == 'reject':
+            function_call['status'] = 'rejected'
+            output.append(
+                {
+                    'type': 'function_call_output',
+                    'id': f'fco_{form_data.call_id}',
+                    'call_id': form_data.call_id,
+                    'output': [{'type': 'input_text', 'text': 'Error: tool call rejected by user.'}],
+                    'status': 'rejected',
+                }
+            )
+        else:
+            if tool_name != 'ask_user':
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Tool call does not accept answers.')
+            if form_data.answers is None and not form_data.timed_out:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Answers are required for ask_user.')
+            function_call['status'] = 'completed'
+            answer_payload = (
+                {'status': 'cancelled', 'answers': {}, 'timed_out': True}
+                if form_data.timed_out
+                else {'status': 'answered', 'answers': form_data.answers or {}}
+            )
+            output.append(
+                {
+                    'type': 'function_call_output',
+                    'id': f'fco_{form_data.call_id}',
+                    'call_id': form_data.call_id,
+                    'output': [{'type': 'input_text', 'text': JSONCodec.dumps(answer_payload)}],
+                    'status': 'completed',
+                }
+            )
+
+        if form_data.session_id:
+            message['meta'] = {
+                **(message.get('meta') if isinstance(message.get('meta'), dict) else {}),
+                'session_id': form_data.session_id,
             }
-        )
-    else:
-        if tool_name != 'ask_user':
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Tool call does not accept answers.')
-        if form_data.answers is None and not form_data.timed_out:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Answers are required for ask_user.')
-        function_call['status'] = 'completed'
-        answer_payload = (
-            {'status': 'cancelled', 'answers': {}, 'timed_out': True}
-            if form_data.timed_out
-            else {'status': 'answered', 'answers': form_data.answers or {}}
-        )
-        output.append(
-            {
-                'type': 'function_call_output',
-                'id': f'fco_{form_data.call_id}',
-                'call_id': form_data.call_id,
-                'output': [{'type': 'input_text', 'text': JSONCodec.dumps(answer_payload)}],
-                'status': 'completed',
-            }
-        )
+        message['done'] = False
+        message['output'] = output
+        return message
 
-    await Chats.upsert_message_to_chat_by_id_and_message_id(
-        chat_id,
-        message_id,
-        {
-            'done': False,
-            'output': output,
-        },
-        touch=False,
-    )
+    try:
+        resolved = await Chats.mutate_message_by_id(chat_id, message_id, resolve, user_id=chat.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+    chat, message = resolved
+    output = message['output']
 
     event_emitter = await get_event_emitter(
         {
@@ -126,6 +147,26 @@ async def resolve_tool_call_output(
         for item in output
     )
     return {'chat': chat, 'message': message, 'output': output, 'paused': paused}
+
+
+async def claim_approved_tool_calls(chat_id: str, message_id: str, user_id: str):
+    def claim(message):
+        output = message.get('output') or []
+        results = {item.get('call_id') for item in output if item.get('type') == 'function_call_output'}
+        if any(item.get('execution_started') and item.get('call_id') not in results for item in output):
+            return output, [], True
+        calls = [
+            item for item in output
+            if item.get('type') == 'function_call' and item.get('approved') is True
+            and item.get('status') == 'queued' and item.get('call_id') not in results
+        ]
+        for item in calls:
+            item['status'] = 'in_progress'
+            item['execution_started'] = True
+        return output, calls, False
+
+    claimed = await Chats.mutate_message_by_id(chat_id, message_id, claim, user_id=user_id)
+    return claimed[1] if claimed else ([], [], True)
 
 
 async def build_tool_approval_resume_payload(chat_id: str, message_id: str, chat=None) -> dict:
@@ -168,15 +209,21 @@ async def build_tool_approval_resume_payload(chat_id: str, message_id: str, chat
         'model': model_id,
         'messages': messages,
         'params': params,
-        'files': message_meta.get('files') or chat_data.get('files') or None,
+        # An approval snapshot may intentionally contain no files. Only use
+        # mutable chat-level files for legacy messages without a snapshot key.
+        'files': message_meta.get('files') if 'files' in message_meta else chat_data.get('files') or None,
         'filter_ids': message_meta.get('filter_ids') or None,
         'tool_ids': message_meta.get('tool_ids') or None,
         'skill_ids': message_meta.get('skill_ids') or None,
         'terminal_id': message_meta.get('terminal_id') or None,
+        'workspace_focus': message_meta.get('workspace_focus'),
+        'workspace_file': message_meta.get('workspace_file'),
         'tool_servers': message_meta.get('tool_servers') or None,
         'features': message_meta.get('features') or {},
         'variables': message_meta.get('variables') or {},
         'chat_variables': chat.variables,
+        # Keep the original browser or automation target when the resolver did
+        # not provide an explicit live socket. Never retarget another browser tab.
         'session_id': message_meta.get('session_id'),
         'chat_id': chat_id,
         'id': message_id,

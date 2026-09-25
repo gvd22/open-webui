@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENABLE_CHAT_TERMINALS } from '$lib/chatUi';
 	import DOMPurify from 'dompurify';
 	import { toast } from 'svelte-sonner';
 
@@ -95,9 +96,8 @@
 
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
-	import Terminal from '../icons/Terminal.svelte';
-	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
 	import TerminalMenu from './MessageInput/TerminalMenu.svelte';
+	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
 	import Component from '../icons/Component.svelte';
 	import PlusAlt from '../icons/PlusAlt.svelte';
 	import Dropdown from '../common/Dropdown.svelte';
@@ -187,7 +187,6 @@
 
 	export let imageGenerationEnabled = false;
 	export let webSearchEnabled = false;
-	export let codeInterpreterEnabled = false;
 	export let toolApprovalMode = 'full';
 	export let onToolApprovalModeChange: Function = () => {};
 
@@ -243,7 +242,6 @@
 		selectedFilterIds,
 		imageGenerationEnabled,
 		webSearchEnabled,
-		codeInterpreterEnabled,
 		toolApprovalMode
 	};
 
@@ -768,13 +766,6 @@
 		modelCapabilitiesById
 	);
 
-	let codeInterpreterCapableModels = [];
-	$: codeInterpreterCapableModels = getCapableModelIds(
-		selectedModelIds,
-		'code_interpreter',
-		modelCapabilitiesById
-	);
-
 	let terminalCapableModels = [];
 	$: terminalCapableModels = getCapableModelIds(
 		selectedModelIds,
@@ -813,20 +804,13 @@
 		$config?.features?.enable_image_generation &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
 
-	let showCodeInterpreterButton = false;
-	$: showCodeInterpreterButton =
-		!$selectedTerminalId &&
-		selectedModelIds.length === codeInterpreterCapableModels.length &&
-		$config?.features?.enable_code_interpreter &&
-		($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter);
-
-	// Disable code interpreter when terminal is active (mutually exclusive)
-	$: if ($selectedTerminalId && codeInterpreterEnabled) {
-		codeInterpreterEnabled = false;
-	}
-
 	// Clear selected terminal when model doesn't support terminal
-	$: if ($selectedTerminalId && selectedModelIds.length > 0 && terminalCapableModels.length === 0) {
+	$: if (
+		ENABLE_CHAT_TERMINALS &&
+		$selectedTerminalId &&
+		selectedModelIds.length > 0 &&
+		terminalCapableModels.length === 0
+	) {
 		selectedTerminalId.set(null);
 	}
 
@@ -881,7 +865,7 @@
 		servers: any[] | null = $terminalServers,
 		settingsValue: any = $settings
 	) => {
-		if (!selectedId) return null;
+		if (!ENABLE_CHAT_TERMINALS || !selectedId) return null;
 
 		const systemTerminal = (servers ?? []).find(
 			(t: any) => t.id && t.id === selectedId && t.config?.chat_uploads === 'filesystem'
@@ -2132,7 +2116,6 @@
 
 															webSearchEnabled = false;
 															imageGenerationEnabled = false;
-															codeInterpreterEnabled = false;
 														}
 													}}
 													on:paste={async (e) => {
@@ -2250,26 +2233,24 @@
 										</button>
 									</InputMenu>
 
-									{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
+									{#if showWebSearchButton || showImageGenerationButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
 											class="flex self-center w-[0.0625rem] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50 shrink-0"
 										/>
 									{/if}
 
 									<div class="flex flex-1 items-center min-w-0 overflow-x-auto scrollbar-none">
-										{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
+										{#if showWebSearchButton || showImageGenerationButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
 											<IntegrationsMenu
 												selectedModels={selectedModelIds}
 												{toggleFilters}
 												{showWebSearchButton}
 												{showImageGenerationButton}
-												{showCodeInterpreterButton}
 												bind:selectedToolIds
 												bind:selectedSkillIds
 												bind:selectedFilterIds
 												bind:webSearchEnabled
 												bind:imageGenerationEnabled
-												bind:codeInterpreterEnabled
 												oauthRedirectHandler={(tool: {
 													id: string;
 													serverId: string;
@@ -2464,32 +2445,6 @@
 												</Tooltip>
 											{/if}
 
-											{#if codeInterpreterEnabled && showCodeInterpreterButton}
-												<Tooltip content={$i18n.t('Code Interpreter')} placement="top">
-													<button
-														aria-label={codeInterpreterEnabled
-															? $i18n.t('Disable Code Interpreter')
-															: $i18n.t('Enable Code Interpreter')}
-														aria-pressed={codeInterpreterEnabled}
-														on:click|preventDefault={() =>
-															(codeInterpreterEnabled = !codeInterpreterEnabled)}
-														type="button"
-														class=" group p-[0.375rem] flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden {codeInterpreterEnabled
-															? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} {($settings?.highContrastMode ??
-														false)
-															? 'm-1'
-															: 'focus:outline-hidden rounded-full'}"
-													>
-														<Terminal className="size-3.5" strokeWidth="2" />
-
-														<div class="hidden group-hover:block">
-															<XMark className="size-4" strokeWidth="1.75" />
-														</div>
-													</button>
-												</Tooltip>
-											{/if}
-
 											{#each pendingOAuthTools as pendingTool (pendingTool.id)}
 												<Tooltip content={$i18n.t('Click to connect')} placement="top">
 													<button
@@ -2507,7 +2462,7 @@
 											{/each}
 
 											<!-- Terminal Server Selector -->
-											{#if showTerminalSelector}
+											{#if ENABLE_CHAT_TERMINALS && showTerminalSelector}
 												<TerminalMenu
 													bind:show={showTerminalMenu}
 													disabled={generating ||

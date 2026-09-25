@@ -2323,12 +2323,26 @@ export const formatSkillName = (name) => {
  */
 export const displayFileHandler = (
 	path: string,
-	stores: { showControls: Writable<boolean>; showFileNavPath: Writable<FileNavOpenRequest | null> },
-	options: { page?: unknown } = {}
+	stores: {
+		showControls: Writable<boolean>;
+		showFileNavPath: Writable<FileNavOpenRequest | null>;
+		showArtifacts?: Writable<boolean>;
+	},
+	options: { page?: unknown; fileId?: string | null; chatId?: string | null } = {}
 ) => {
 	if (path) {
-		stores.showControls.set(true);
 		const page = normalizeDocumentTargetPage(options.page);
-		stores.showFileNavPath.set(page ? { path, page } : path);
+		stores.showArtifacts?.set(true);
+		stores.showFileNavPath.set(
+			page || options.fileId || options.chatId
+				? {
+						path,
+						page,
+						fileId: options.fileId ?? null,
+						chatId: options.chatId ?? null
+					}
+				: path
+		);
+		stores.showControls.set(true);
 	}
 };

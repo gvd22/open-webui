@@ -85,6 +85,7 @@ from open_webui.env import (
     ENABLE_AUDIT_GET_REQUESTS,
     ENABLE_COMPRESSION_MIDDLEWARE,
     ENABLE_CUSTOM_MODEL_FALLBACK,
+    ENABLE_DOCUMENT_VIEWER,
     ENABLE_EASTER_EGGS,
     # OAuth Back-Channel Logout
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
@@ -1214,6 +1215,8 @@ async def chat_completion(
 
         chat_variables = normalize_chat_variables(chat_variables)
 
+        workspace_focus = form_data.pop('workspace_focus', None)
+
         # Drop tool_servers if caller lacks features.direct_tool_servers —
         # mirrors the storage-side strip in user/settings/update.
         tool_servers = form_data.pop('tool_servers', None)
@@ -1237,7 +1240,7 @@ async def chat_completion(
                 if await Config.get('chat.tool_permissions.enable', False)
                 else 'full'
             )
-            or 'full'
+            or 'ask'
         )
 
         metadata = {
@@ -1258,6 +1261,7 @@ async def chat_completion(
             'features': form_data.get('features', {}),
             'variables': form_data.get('variables', {}),
             'chat_variables': chat_variables,
+            'workspace_focus': workspace_focus,
             'model': model,
             'direct': model_item.get('direct', False),
             'params': {
@@ -2314,6 +2318,7 @@ async def get_app_config(request: Request):
                     'enable_password_change_form': config.get('ui.enable_password_change_form'),
                     'enable_version_update_check': ENABLE_VERSION_UPDATE_CHECK,
                     'enable_pyodide_file_persistence': ENABLE_PYODIDE_FILE_PERSISTENCE,
+                    'enable_document_viewer': ENABLE_DOCUMENT_VIEWER,
                     'enable_public_active_users_count': ENABLE_PUBLIC_ACTIVE_USERS_COUNT,
                     'enable_easter_eggs': ENABLE_EASTER_EGGS,
                     'enable_direct_connections': config.get('direct.enable'),

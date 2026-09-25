@@ -2,6 +2,8 @@
 	import { toast } from 'svelte-sonner';
 
 	import { onMount, getContext, tick } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import { models, tools, functions, user } from '$lib/stores';
 	import { WEBUI_BASE_URL, DEFAULT_CAPABILITIES } from '$lib/constants';
 
@@ -35,7 +37,7 @@
 	import AccessButton from '$lib/components/common/AccessButton.svelte';
 	import { extractInputVariables } from '$lib/utils';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<i18nType> = getContext('i18n');
 
 	export let onSubmit: Function;
 	export let onBack: null | Function = null;
@@ -106,7 +108,10 @@
 	let filterIds = [];
 	let defaultFilterIds = [];
 
-	let capabilities = { ...DEFAULT_CAPABILITIES };
+	let capabilities: Record<string, boolean> = { ...DEFAULT_CAPABILITIES } as Record<
+		string,
+		boolean
+	>;
 	let defaultFeatureIds = [];
 	let builtinTools = {};
 
@@ -986,7 +991,7 @@
 
 						{#if capabilities.builtin_tools}
 							<div class="my-3">
-								<BuiltinTools bind:builtinTools />
+								<BuiltinTools bind:builtinTools {capabilities} />
 							</div>
 						{/if}
 

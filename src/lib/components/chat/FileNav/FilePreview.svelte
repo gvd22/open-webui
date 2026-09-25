@@ -373,6 +373,7 @@
 			<div class="absolute inset-0">
 				<FileCodeEditor
 					bind:this={fileCodeEditorRef}
+					{readOnly}
 					value={fileContent ?? ''}
 					filePath={selectedFile}
 					onSave={readOnly ? null : onSave}
@@ -415,6 +416,7 @@
 			<div class="absolute inset-0">
 				<FileCodeEditor
 					bind:this={fileCodeEditorRef}
+					{readOnly}
 					value={fileContent ?? ''}
 					filePath={selectedFile}
 					onSave={readOnly ? null : onSave}
@@ -428,6 +430,7 @@
 			<div class="absolute inset-0">
 				<FileCodeEditor
 					bind:this={fileCodeEditorRef}
+					{readOnly}
 					value={fileContent ?? ''}
 					filePath={selectedFile}
 					onSave={readOnly ? null : onSave}
@@ -485,6 +488,7 @@
 			<div class="absolute inset-0">
 				<FileCodeEditor
 					bind:this={fileCodeEditorRef}
+					{readOnly}
 					value={fileContent ?? ''}
 					filePath={selectedFile}
 					onSave={readOnly ? null : onSave}

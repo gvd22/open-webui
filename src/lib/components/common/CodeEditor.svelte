@@ -16,6 +16,7 @@
 	import { onMount, createEventDispatcher, getContext, tick, onDestroy } from 'svelte';
 
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
 
 	import { formatPythonCode } from '$lib/apis/utils';
 	import { toast } from 'svelte-sonner';
@@ -110,6 +111,16 @@
 		return new Promise((resolve, reject) => {
 			const id = `format-${++_formatReqId}`;
 			let timeout;
+			const armTimeout = (milliseconds) => {
+				clearTimeout(timeout);
+				timeout = setTimeout(() => {
+					worker.removeEventListener('message', handleMessage);
+					worker.removeEventListener('error', handleError);
+					terminatePyodideWorker(worker, 'Pyodide formatting timed out');
+					pyodideWorkerInstance = null;
+					reject('Execution Time Limit Exceeded');
+				}, milliseconds);
+			};
 			const worker = getPyodideWorker();
 
 			const startTag = `--||CODE-START-${id}||--`;
@@ -125,8 +136,12 @@ print("${endTag}")
 			const packages = ['black'];
 
 			function handleMessage(event) {
-				const { id: eventId, stdout, stderr } = event.data;
+				const { id: eventId, type, stdout, stderr } = event.data;
 				if (eventId !== id) return; // Only handle our message
+				if (type === 'pyodide:progress') {
+					armTimeout(getPyodideRequestTimeout(event.data.stage));
+					return;
+				}
 				clearTimeout(timeout);
 				worker.removeEventListener('message', handleMessage);
 				worker.removeEventListener('error', handleError);
@@ -162,19 +177,12 @@ print("${endTag}")
 			worker.addEventListener('message', handleMessage);
 			worker.addEventListener('error', handleError);
 
-			// Send to worker
-			worker.postMessage({ id, code: script, packages });
-
-			// Timeout
-			timeout = setTimeout(() => {
-				worker.removeEventListener('message', handleMessage);
-				worker.removeEventListener('error', handleError);
-				try {
-					worker.terminate();
-				} catch {}
-				pyodideWorkerInstance = null;
-				reject('Execution Time Limit Exceeded');
-			}, 60000);
+			armTimeout(getPyodideRequestTimeout('request-queued'));
+			try {
+				worker.postMessage({ id, code: script, packages });
+			} catch (error) {
+				handleError({ message: error instanceof Error ? error.message : String(error) });
+			}
 		});
 	};
 

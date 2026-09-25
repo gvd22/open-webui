@@ -157,6 +157,16 @@
 
 	$: parsedArgs = parseArguments(args);
 	$: parsedResult = parseJSONString(result);
+	$: isWorkspaceObjectToolCall = [
+		'canvas_create_document',
+		'canvas_update_document',
+		'canvas_select_document',
+		'canvas_list_documents',
+		'web_preview_create',
+		'web_preview_update',
+		'web_preview_select',
+		'web_preview_list'
+	].includes(attributes?.name ?? '');
 
 	const toggleOpen = () => {
 		open = !open;
@@ -172,7 +182,8 @@
 	};
 </script>
 
-<div {id} class={className}>
+{#if !isWorkspaceObjectToolCall || ['pending', 'requires_approval', 'queued', 'rejected'].includes(attributes?.status ?? '')}
+	<div {id} class={className}>
 	{#if !grouped && embeds && Array.isArray(embeds) && embeds.length > 0}
 		<!-- Embed Mode: Show iframes without collapsible behavior -->
 		<div class="py-1 w-full cursor-pointer">
@@ -381,4 +392,5 @@
 			{/each}
 		{/if}
 	{/if}
-</div>
+	</div>
+{/if}

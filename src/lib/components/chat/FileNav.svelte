@@ -42,6 +42,7 @@
 	import { isSavedChatId, isTemporaryChatId } from '$lib/utils/chatId';
 	import { copyToClipboard } from '$lib/utils';
 	import { normalizeDocumentTargetPage } from '$lib/utils/documentPreview';
+	import { isWorkspaceOpenRequestForChat } from './Artifacts/workspace';
 
 	import Spinner from '../common/Spinner.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
@@ -1349,6 +1350,10 @@
 
 		const unsubFileNav = showFileNavPath.subscribe(async (request) => {
 			if (!request || !selectedTerminal) return;
+			if (typeof request === 'object' && !isWorkspaceOpenRequestForChat(request.chatId, chatId)) {
+				showFileNavPath.set(null);
+				return;
+			}
 			handledDisplayFile = true;
 			showFileNavPath.set(null);
 			let filePath = typeof request === 'string' ? request : request.path;

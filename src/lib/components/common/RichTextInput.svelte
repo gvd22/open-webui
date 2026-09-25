@@ -203,6 +203,7 @@
 	export let oncompositionstart = (e) => {};
 	export let oncompositionend = (e) => {};
 	export let onChange = (e) => {};
+	export let onProgrammaticChange = (e) => {};
 
 	// create a lowlight instance with all languages loaded
 	const lowlight = createLowlight(
@@ -334,6 +335,16 @@
 	let element: Element | null = null;
 
 	let pendingUpdate = null;
+	let suppressOnChange = false;
+
+	const setContentWithoutChange = (nextContent) => {
+		suppressOnChange = true;
+		try {
+			editor.commands.setContent(nextContent);
+		} finally {
+			suppressOnChange = false;
+		}
+	};
 
 	const options = {
 		throwOnError: false
@@ -346,7 +357,7 @@
 	}
 
 	$: if (value === null && html !== null && editor) {
-		editor.commands.setContent(html);
+		setContentWithoutChange(html);
 	}
 
 	export const getWordAtDocPos = () => {
@@ -672,6 +683,11 @@
 		editor.commands.setContent(content);
 	};
 
+	export const setValue = (content) => {
+		value = content;
+		onValueChange();
+	};
+
 	const selectTemplate = () => {
 		if (value !== '') {
 			// After updating the state, try to find and select the next template
@@ -775,6 +791,7 @@
 				StarterKit.configure({
 					link: link,
 					code: false, // Disabled in favor of FixedCode (see workaround above)
+					undoRedo: collaboration ? false : {},
 					...(messageInput ? { italic: false } : {}),
 					// When rich text is on, ListKit + CodeBlockLowlight provide these.
 					// Disable StarterKit's equivalents to avoid duplicate extension names.
@@ -911,7 +928,7 @@
 			],
 			content: provider ? undefined : content,
 			autofocus: messageInput ? true : false,
-			onTransaction: () => {
+			onTransaction: ({ transaction }) => {
 				if (!editor) return;
 
 				// Defer Svelte reactivity trigger to rAF so we don't interleave
@@ -924,6 +941,9 @@
 						}
 					});
 				}
+
+				// Selection and decoration transactions must not normalize or autosave the document.
+				if (!transaction.docChanged) return;
 
 				htmlValue = editor.getHTML();
 				jsonValue = editor.getJSON();
@@ -951,11 +971,20 @@
 						.replace(/\u00a0/g, ' ');
 				}
 
-				onChange({
+				const nextContent = {
 					html: htmlValue,
 					json: jsonValue,
 					md: mdValue
-				});
+				};
+				if (suppressOnChange || provider?.isApplyingInitialContent) {
+					onProgrammaticChange({
+						...nextContent,
+						wordCount: editor.storage.characterCount.words(),
+						charCount: editor.storage.characterCount.characters()
+					});
+				} else {
+					onChange(nextContent);
+				}
 
 				if (json) {
 					value = jsonValue;
@@ -1323,7 +1352,12 @@
 			.replace(/\u00a0/g, ' ');
 
 		if (value === '') {
-			editor.commands.clearContent(); // Clear content if value is empty
+			suppressOnChange = true;
+			try {
+				editor.commands.clearContent(); // Clear content if value is empty
+			} finally {
+				suppressOnChange = false;
+			}
 			selectTemplate();
 
 			return;
@@ -1331,18 +1365,18 @@
 
 		if (json) {
 			if (!equal(value, jsonValue)) {
-				editor.commands.setContent(value);
+				setContentWithoutChange(value);
 				selectTemplate();
 			}
 		} else {
 			if (raw) {
 				if (value !== htmlValue) {
-					editor.commands.setContent(value);
+					setContentWithoutChange(value);
 					selectTemplate();
 				}
 			} else {
 				if (value !== mdValue) {
-					editor.commands.setContent(
+					setContentWithoutChange(
 						preserveBreaks
 							? value
 							: marked.parse(value.replaceAll(`\n<br/>`, `<br/>`), {
