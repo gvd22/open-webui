@@ -4,7 +4,7 @@
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
 	import { getPyodideRequestTimeout, terminatePyodideWorker } from '$lib/pyodide/runtimeTimeouts';
-	import { readWorkspaceText } from '$lib/pyodide/readWorkspaceText';
+	import { handleWorkspaceRpc } from '$lib/components/chat/Artifacts/workspaceRpc';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -296,15 +296,6 @@
 			pyodideWorker.set(worker);
 		}
 		return worker;
-	};
-
-	const readRuntimeFileForPreview = async (data) => {
-		const maxBytes = Math.min(Math.max(Number(data?.max_bytes) || 0, 1), 512000);
-		const sourcePath = String(data?.source_path ?? '');
-		if (data?.runtime === 'pyodide') {
-			return await readWorkspaceText(getOrCreateWorker(), sourcePath, maxBytes);
-		}
-		throw new Error('No supported runtime is active.');
 	};
 
 	const invalidatePyodideWorkspaceFiles = () => {
@@ -648,21 +639,8 @@
 					cb?.({ error: error instanceof Error ? error.message : String(error) });
 				});
 				return;
-			} else if (type === 'workspace:display_file') {
-				try {
-					const { displayWorkspaceOutput } =
-						await import('$lib/components/chat/Artifacts/workspaceDisplay');
-					cb(await displayWorkspaceOutput(event.chat_id, data.path));
-				} catch (error) {
-					cb({ error: error instanceof Error ? error.message : String(error) });
-				}
-				return;
-			} else if (type === 'workspace:read_runtime_file') {
-				try {
-					cb({ content: await readRuntimeFileForPreview(data) });
-				} catch (error) {
-					cb({ error: error instanceof Error ? error.message : String(error) });
-				}
+			} else if (type === 'workspace:display_file' || type === 'workspace:read_runtime_file') {
+				await handleWorkspaceRpc(type, data, event.chat_id, cb, getOrCreateWorker);
 				return;
 			} else if (type === 'execute:tool') {
 				console.log('execute:tool', data);

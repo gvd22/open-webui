@@ -1349,7 +1349,7 @@ test('registers oversized outputs without uploading and saves a later smaller ve
 	const seeded = await createUploadChat(page.request);
 	let uploadedFileId: string | undefined;
 	const path = '/mnt/uploads/workspace-e2e-output-size.csv';
-	const executeOutput = async (code: string) => {
+	const callRpc = async (type: string, data: Record<string, unknown>) => {
 		const modulePath = await page.evaluate(() =>
 			performance
 				.getEntriesByType('resource')
@@ -1370,23 +1370,28 @@ test('registers oversized outputs without uploading and saves a later smaller ve
 			)
 			.toBe(true);
 		const result = await page.evaluate(
-			async ({ chatId, code, modulePath }) => {
+			async ({ chatId, type, data, modulePath }) => {
 				const { socket } = await import(/* @vite-ignore */ modulePath);
 				let client;
 				socket.subscribe((value) => {
 					client = value;
 				})();
 				// Invoke the real session RPC handler without an external model request.
-				return new Promise<{ stderr: string | null; error?: string }>((resolve, reject) => {
-					const timer = setTimeout(() => reject(new Error('Python RPC timed out')), 30_000);
+				return new Promise<{
+					stderr?: string | null;
+					error?: string;
+					content?: string;
+					status?: string;
+				}>((resolve, reject) => {
+					const timer = setTimeout(() => reject(new Error(`${type} RPC timed out`)), 30_000);
 					const event = {
 						chat_id: chatId,
 						data: {
-							type: 'execute:python',
+							type,
 							data: {
 								session_id: client.id,
 								id: crypto.randomUUID(),
-								code
+								...data
 							}
 						}
 					};
@@ -1397,9 +1402,13 @@ test('registers oversized outputs without uploading and saves a later smaller ve
 						});
 				});
 			},
-			{ chatId: seeded.chatId, code, modulePath }
+			{ chatId: seeded.chatId, type, data, modulePath }
 		);
 		expect(result.error).toBeUndefined();
+		return result;
+	};
+	const executeOutput = async (code: string) => {
+		const result = await callRpc('execute:python', { code });
 		expect(result.stderr).toBeNull();
 	};
 	let uploads = 0;
@@ -1459,6 +1468,20 @@ test('registers oversized outputs without uploading and saves a later smaller ve
 			.poll(async () => (await readChat(page.request, seeded)).chat._workspace_outputs[0].fileId)
 			.toBe(uploadedFileId);
 		const savedSize = (await readChat(page.request, seeded)).chat._workspace_outputs[0].size;
+		const readResult = await callRpc('workspace:read_runtime_file', {
+			runtime: 'pyodide',
+			source_path: path,
+			max_bytes: 1024
+		});
+		expect(readResult.content).toBe('city,value\nBasel,1\n');
+		const displayResult = await callRpc('workspace:display_file', { path });
+		expect(displayResult.status).toBe('opening');
+		await page.keyboard.press('Escape');
+		await expect(
+			page.getByRole('tabpanel').getByRole('cell', { name: 'Basel', exact: true })
+		).toBeVisible();
+		await page.getByRole('button', { name: 'Close', exact: true }).click();
+		await outputs.click();
 		await executeOutput(
 			`with open(${JSON.stringify(path)}, 'wb') as file:\n    file.truncate(25 * 1024 * 1024 + 1)\n0`
 		);

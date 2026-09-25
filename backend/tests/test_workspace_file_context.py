@@ -2,8 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from open_webui.utils import middleware
-from open_webui.utils.middleware import has_pyodide_workspace_access, validate_workspace_file_reference
+from open_webui.utils import workspace_access
+from open_webui.utils.workspace_access import has_pyodide_workspace_access, validate_workspace_file_reference
 
 
 @pytest.mark.parametrize(
@@ -61,8 +61,8 @@ async def test_pyodide_workspace_access_matrix(
     async def config_get(key, default=None):
         return values.get(key, default)
 
-    monkeypatch.setattr(middleware.Config, 'get', config_get)
-    monkeypatch.setattr(middleware, 'has_permission', AsyncMock(return_value=permission))
+    monkeypatch.setattr(workspace_access.Config, 'get', config_get)
+    monkeypatch.setattr(workspace_access, 'has_permission', AsyncMock(return_value=permission))
 
     result = await has_pyodide_workspace_access(
         {'features': {'code_interpreter': feature}},

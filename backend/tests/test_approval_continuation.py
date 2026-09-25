@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import open_webui.utils.middleware as middleware
+from open_webui.utils.workspace_access import APPROVAL_FREE_WORKSPACE_TOOLS
 from open_webui.utils.workspace_context import remove_workspace_context_prompts
 
 
@@ -19,7 +20,7 @@ def _tool_metadata(name, *, builtin=True):
 
 
 def test_chat_local_canvas_and_preview_builtins_do_not_require_approval():
-    for name in middleware.APPROVAL_FREE_WORKSPACE_TOOLS:
+    for name in APPROVAL_FREE_WORKSPACE_TOOLS:
         assert middleware.tool_requires_approval(name, _tool_metadata(name)) is False
 
 

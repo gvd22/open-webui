@@ -7,13 +7,11 @@ import json
 import logging
 import mimetypes
 import os
-import posixpath
 import random
 import re
 import sys
 import textwrap
 import time
-import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 from uuid import uuid4
@@ -142,6 +140,11 @@ from open_webui.utils.tools import (
     get_tools,
     get_updated_tool_function,
 )
+from open_webui.utils.workspace_access import (
+    has_pyodide_workspace_access,
+    tool_requires_approval,
+    validate_workspace_file_reference,
+)
 from open_webui.utils.workspace_context import (
     build_workspace_context_prompt,
     compact_workspace_tool_output,
@@ -151,37 +154,6 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
-
-
-APPROVAL_FREE_WORKSPACE_TOOLS = frozenset(
-    {
-        'canvas_create_document',
-        'canvas_update_document',
-        'canvas_select_document',
-        'canvas_list_documents',
-        'canvas_read_document',
-        'canvas_replace_text',
-        'web_preview_create',
-        'web_preview_update',
-        'web_preview_select',
-        'web_preview_list',
-        'web_preview_read_file',
-        'web_preview_replace_text',
-    }
-)
-
-
-def tool_requires_approval(name: str, metadata: dict) -> bool:
-    """Keep approval bypasses limited to trusted, chat-local built-ins."""
-    if name not in APPROVAL_FREE_WORKSPACE_TOOLS:
-        return True
-
-    tool = (metadata.get('tools') or {}).get(name)
-    return not (
-        isinstance(tool, dict)
-        and tool.get('type') == 'builtin'
-        and tool.get('tool_id') == f'builtin:{name}'
-    )
 
 
 def _is_tool_result_error(value: Any) -> bool:
@@ -2403,44 +2375,6 @@ async def connect_mcp_server(
         tool_specs = [spec for spec in tool_specs if is_string_allowed(spec['name'], function_name_filter_list)]
 
     return client, tool_specs
-
-
-def validate_workspace_file_reference(reference, *, pyodide_available: bool):
-    if not pyodide_available or not isinstance(reference, dict):
-        return None
-
-    path = reference.get('path')
-    file_format = reference.get('format')
-    if (
-        not isinstance(path, str)
-        or not 0 < len(path) <= 4096
-        or not path.startswith('/mnt/uploads/')
-        or '\\' in path
-        or posixpath.normpath(path) != path
-        or any(unicodedata.category(character) in {'Cc', 'Cf'} for character in path)
-        or file_format not in {'pdf', 'docx', 'pptx'}
-        or not path.lower().endswith(f'.{file_format}')
-    ):
-        return None
-
-    return {'path': path, 'format': file_format}
-
-
-async def has_pyodide_workspace_access(form_data, user, model) -> bool:
-    features = form_data.get('features') or {}
-    if not features.get('code_interpreter'):
-        return False
-    if await Config.get('code_interpreter.engine', 'pyodide') == 'jupyter':
-        return False
-    model_capability = (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('code_interpreter', True)
-    builtin_enabled = (model.get('info', {}).get('meta', {}).get('builtinTools') or {}).get('code_interpreter', True)
-    if not builtin_enabled or not model_capability or not await Config.get('code_interpreter.enable'):
-        return False
-    return getattr(user, 'role', None) == 'admin' or await has_permission(
-        getattr(user, 'id', ''),
-        'features.code_interpreter',
-        await Config.get('user.permissions'),
-    )
 
 
 async def process_chat_payload(request, form_data, user, metadata, model):

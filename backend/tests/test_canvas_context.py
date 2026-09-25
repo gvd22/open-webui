@@ -21,7 +21,7 @@ from open_webui.routers.chat_artifacts import (
     undo_last_canvas_ai_update,
     update_transient_canvas_document,
 )
-from open_webui.tools.builtin import (
+from open_webui.tools.workspace import (
     canvas_create_document,
     canvas_read_document,
     canvas_replace_text,

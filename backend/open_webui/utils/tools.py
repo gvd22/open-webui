@@ -49,12 +49,6 @@ from open_webui.tools.builtin import (
     add_memory,
     ask_user,
     calculate_timestamp,
-    canvas_create_document,
-    canvas_list_documents,
-    canvas_read_document,
-    canvas_replace_text,
-    canvas_select_document,
-    canvas_update_document,
     create_automation,
     create_calendar_event,
     create_tasks,
@@ -105,6 +99,15 @@ from open_webui.tools.builtin import (
     view_knowledge_file,
     view_note,
     view_skill,
+    write_note,
+)
+from open_webui.tools.workspace import (
+    canvas_create_document,
+    canvas_list_documents,
+    canvas_read_document,
+    canvas_replace_text,
+    canvas_select_document,
+    canvas_update_document,
     web_preview_create,
     web_preview_import_runtime_file,
     web_preview_list,
@@ -113,7 +116,6 @@ from open_webui.tools.builtin import (
     web_preview_select,
     web_preview_update,
     workspace_display_file,
-    write_note,
 )
 from open_webui.utils.access_control import has_access, has_connection_access, has_permission
 from open_webui.utils.canvas import is_internal_note_chat

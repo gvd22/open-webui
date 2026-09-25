@@ -41,67 +41,29 @@ export const hardenDocumentLinks = (root: HTMLElement) => {
 const getZipEntrySize = (entry: JSZip.JSZipObject) =>
 	(entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
 
-const decodeXmlAttribute = (value: string) =>
-	value.replace(/&(amp|quot|apos|lt|gt|#\d+|#x[\da-f]+);/gi, (entity, code: string) => {
-		const named = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' } as const;
-		const normalized = code.toLowerCase();
-		if (normalized in named) return named[normalized as keyof typeof named];
-		const number = normalized.startsWith('#x')
-			? Number.parseInt(normalized.slice(2), 16)
-			: Number.parseInt(normalized.slice(1), 10);
-		return Number.isSafeInteger(number) && number >= 0 && number <= 0x10ffff
-			? String.fromCodePoint(number)
-			: entity;
-	});
-
-const getXmlAttribute = (tag: string, name: string) => {
-	const match = tag.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i'));
-	return decodeXmlAttribute(match?.[1] ?? match?.[2] ?? '').trim();
-};
-
-const isBlockedExternalRelationship = (tag: string) => {
-	if (getXmlAttribute(tag, 'TargetMode').toLowerCase() !== 'external') return false;
-	return !/\/hyperlink$/i.test(getXmlAttribute(tag, 'Type'));
-};
-
-const getRelationshipTags = (xml: string) => {
-	const relationships: string[] = [];
-	let cursor = 0;
-	while (cursor < xml.length) {
-		const start = xml.indexOf('<', cursor);
-		if (start === -1) break;
-		const delimiter = xml.startsWith('<!--', start)
-			? '-->'
-			: xml.startsWith('<![CDATA[', start)
-				? ']]>'
-				: xml.startsWith('<?', start)
-					? '?>'
-					: '';
-		if (delimiter) {
-			const delimitedEnd = xml.indexOf(delimiter, start + 2);
-			if (delimitedEnd === -1) throw new Error('PPTX relationship XML is malformed');
-			cursor = delimitedEnd + delimiter.length;
-			continue;
-		}
-
-		let quote = '';
-		let end = start + 1;
-		for (; end < xml.length; end += 1) {
-			const character = xml[end];
-			if (quote) {
-				if (character === quote) quote = '';
-				continue;
-			}
-			if (character === '"' || character === "'") quote = character;
-			else if (character === '>') break;
-		}
-		if (end === xml.length) throw new Error('PPTX relationship XML is malformed');
-
-		const tag = xml.slice(start, end + 1);
-		if (/^<\s*(?:[\w.-]+:)?Relationship\b/i.test(tag)) relationships.push(tag);
-		cursor = end + 1;
+const validatePptxRelationships = (xml: string) => {
+	if (/<!DOCTYPE/i.test(xml)) throw new Error('PPTX relationship XML must not contain a DOCTYPE');
+	const document = new DOMParser().parseFromString(xml, 'application/xml');
+	if (document.getElementsByTagNameNS('*', 'parsererror').length) {
+		throw new Error('PPTX relationship XML is malformed');
 	}
-	return relationships;
+
+	for (const element of document.getElementsByTagName('*')) {
+		if (element.localName.toLowerCase() !== 'relationship') continue;
+		const attributes = new Map<string, string>();
+		for (const attribute of element.attributes) {
+			const name = attribute.localName.toLowerCase();
+			if (name !== 'targetmode' && name !== 'type') continue;
+			if (attributes.has(name)) throw new Error('PPTX relationship attributes are ambiguous');
+			attributes.set(name, attribute.value.trim());
+		}
+		if (
+			attributes.get('targetmode')?.toLowerCase() === 'external' &&
+			!/\/hyperlink$/i.test(attributes.get('type') ?? '')
+		) {
+			throw new Error('PPTX external resource relationships are not allowed');
+		}
+	}
 };
 
 export const validatePptxArchive = async (candidateData: ArrayBuffer, limits = PPTX_ZIP_LIMITS) => {
@@ -133,10 +95,7 @@ export const validatePptxArchive = async (candidateData: ArrayBuffer, limits = P
 
 	for (const entry of relationshipEntries) {
 		const xml = await entry.async('text');
-		const relationships = getRelationshipTags(xml);
-		if (relationships.some(isBlockedExternalRelationship)) {
-			throw new Error('PPTX external resource relationships are not allowed');
-		}
+		validatePptxRelationships(xml);
 	}
 };
 
@@ -160,7 +119,8 @@ const validateBoundedOfficeArchive = async (
 		totalBytes += size;
 		if (entry.name.startsWith('word/media/')) mediaBytes += size;
 	}
-	if (totalBytes > limits.maxTotalBytes) throw new Error(`${label} expands beyond the viewer limit`);
+	if (totalBytes > limits.maxTotalBytes)
+		throw new Error(`${label} expands beyond the viewer limit`);
 	if (mediaBytes > limits.maxMediaBytes) throw new Error(`${label} media exceeds the viewer limit`);
 	if (totalBytes > candidateData.byteLength * limits.maxCompressionRatio) {
 		throw new Error(`${label} compression ratio exceeds the viewer limit`);

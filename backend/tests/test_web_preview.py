@@ -11,7 +11,7 @@ from open_webui.routers.chat_artifacts import (
     WebPreviewDocumentForm,
     update_transient_web_preview,
 )
-from open_webui.tools.builtin import (
+from open_webui.tools.workspace import (
     web_preview_create,
     web_preview_import_runtime_file,
     web_preview_read_file,
