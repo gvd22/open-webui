@@ -85,6 +85,7 @@ from open_webui.env import (
     ENABLE_AUDIT_GET_REQUESTS,
     ENABLE_COMPRESSION_MIDDLEWARE,
     ENABLE_CUSTOM_MODEL_FALLBACK,
+    ENABLE_DOCUMENT_VIEWER,
     ENABLE_EASTER_EGGS,
     # OAuth Back-Channel Logout
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
@@ -2314,6 +2315,7 @@ async def get_app_config(request: Request):
                     'enable_password_change_form': config.get('ui.enable_password_change_form'),
                     'enable_version_update_check': ENABLE_VERSION_UPDATE_CHECK,
                     'enable_pyodide_file_persistence': ENABLE_PYODIDE_FILE_PERSISTENCE,
+                    'enable_document_viewer': ENABLE_DOCUMENT_VIEWER,
                     'enable_public_active_users_count': ENABLE_PUBLIC_ACTIVE_USERS_COUNT,
                     'enable_easter_eggs': ENABLE_EASTER_EGGS,
                     'enable_direct_connections': config.get('direct.enable'),

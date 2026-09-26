@@ -6,6 +6,8 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 const backendTarget = process.env.WEBUI_BACKEND_URL || 'http://localhost:8080';
 
 export default defineConfig({
+	// Opening the lazy file worker must not reload the running chat in development.
+	optimizeDeps: { include: ['pyodide'] },
 	plugins: [
 		sveltekit(),
 		viteStaticCopy({

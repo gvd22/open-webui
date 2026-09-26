@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import type { WorkBook } from 'xlsx';
 	import DOMPurify from 'dompurify';
 
@@ -13,7 +14,7 @@
 	import CodeBlock from '$lib/components/chat/Messages/CodeBlock.svelte';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: import('svelte/store').Writable<import('i18next').i18n> = getContext('i18n');
 
 	const CONTENT_PREVIEW_LIMIT = 10000;
 	let expandedContent = false;
@@ -29,6 +30,7 @@
 	import DocxPreview from './DocxPreview.svelte';
 	import PptxPreview from './PptxPreview.svelte';
 	import Reset from '../icons/Reset.svelte';
+	import Download from '../icons/Download.svelte';
 
 	export let item;
 	export let show = false;
@@ -141,6 +143,11 @@
 	const loadExcelContent = async () => {
 		try {
 			excelError = '';
+			excelWorkbook = null;
+			excelSheetNames = [];
+			selectedSheet = '';
+			excelHtml = '';
+			rowCount = 0;
 			const [arrayBuffer, { read }] = await Promise.all([
 				getFileContentById(item.id),
 				import('xlsx')
@@ -160,11 +167,24 @@
 
 	const renderExcelSheet = async () => {
 		if (!excelWorkbook || !selectedSheet) return;
-		const { excelToTable } = await import('$lib/utils/excelToTable');
-		const worksheet = excelWorkbook.Sheets[selectedSheet];
-		const result = await excelToTable(worksheet);
-		excelHtml = DOMPurify.sanitize(result.html);
-		rowCount = result.rowCount;
+		const workbook = excelWorkbook;
+		const sheet = selectedSheet;
+		try {
+			const { excelToTable } = await import('$lib/utils/excelToTable');
+			const result = await excelToTable(workbook.Sheets[sheet]);
+			if (workbook !== excelWorkbook || sheet !== selectedSheet) return;
+			excelError = '';
+			excelHtml = DOMPurify.sanitize(result.html);
+			rowCount = result.rowCount;
+		} catch (cause) {
+			if (workbook !== excelWorkbook || sheet !== selectedSheet) return;
+			excelHtml = '';
+			rowCount = 0;
+			excelError =
+				cause instanceof Error && cause.message === 'too-large'
+					? fileText($i18n, 'This document is too large to display here.')
+					: $i18n.t('Failed to load Excel/CSV file. Please try downloading it instead.');
+		}
 	};
 
 	$: if (selectedSheet && excelWorkbook) {
@@ -242,8 +262,10 @@
 		await tick();
 	};
 
+	$: uploadPending = item?.type === 'file' && !item?.id;
 	$: if (show) {
-		loadContent();
+		if (uploadPending) loading = true;
+		else loadContent();
 	}
 
 	onMount(() => {
@@ -517,36 +539,42 @@
 							className="w-full h-[70vh] border-0 rounded-lg"
 						/>
 					{:else if isExcel}
+						{#if excelSheetNames.length > 1}
+							<div
+								class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-normal bg-transparent dark:text-gray-200"
+							>
+								{#each excelSheetNames as sheetName}
+									<button
+										class="min-w-fit py-1.5 px-4 border-b {selectedSheet === sheetName
+											? ' '
+											: ' border-transparent text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+										type="button"
+										on:click={() => {
+											selectedSheet = sheetName;
+										}}>{sheetName}</button
+									>
+								{/each}
+							</div>
+						{/if}
+
 						{#if excelError}
-							<div class="text-red-500 text-sm p-4">
-								{excelError}
+							<div role="alert" class="space-y-3 p-4 text-sm text-gray-500 dark:text-gray-400">
+								<div>{excelError}</div>
+								<a
+									href={`${WEBUI_API_BASE_URL}/files/${encodeURIComponent(item.id)}/content?attachment=true`}
+									download={item.name}
+									class="inline-flex items-center gap-2 font-medium underline"
+								>
+									<Download className="size-4" />
+									{$i18n.t('Download')}
+								</a>
+							</div>
+						{:else if excelHtml}
+							<div class="office-preview overflow-auto max-h-[60vh]">
+								{@html excelHtml}
 							</div>
 						{:else}
-							{#if excelSheetNames.length > 1}
-								<div
-									class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-normal bg-transparent dark:text-gray-200"
-								>
-									{#each excelSheetNames as sheetName}
-										<button
-											class="min-w-fit py-1.5 px-4 border-b {selectedSheet === sheetName
-												? ' '
-												: ' border-transparent text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-											type="button"
-											on:click={() => {
-												selectedSheet = sheetName;
-											}}>{sheetName}</button
-										>
-									{/each}
-								</div>
-							{/if}
-
-							{#if excelHtml}
-								<div class="office-preview overflow-auto max-h-[60vh]">
-									{@html excelHtml}
-								</div>
-							{:else}
-								<div class="text-gray-500 text-sm p-4">No content available</div>
-							{/if}
+							<div class="text-gray-500 text-sm p-4">No content available</div>
 						{/if}
 					{:else if isCode}
 						<div class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm relative">

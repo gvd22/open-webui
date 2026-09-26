@@ -2,6 +2,7 @@
 	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { executePyodide } from '$lib/pyodide/workerRequest';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -296,7 +297,6 @@
 		let stdout = null;
 		let stderr = null;
 
-		let executing = true;
 		let packages = [
 			/\bimport\s+requests\b|\bfrom\s+requests\b/.test(code) ? 'requests' : null,
 			/\bimport\s+bs4\b|\bfrom\s+bs4\b/.test(code) ? 'beautifulsoup4' : null,
@@ -311,7 +311,7 @@
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
-		].filter(Boolean);
+		].filter((name) => name !== null);
 
 		const worker = getOrCreateWorker();
 
@@ -334,101 +334,25 @@
 			}
 		}
 
-		worker.postMessage({
-			type: 'execute',
-			id: id,
-			code: code,
-			packages: packages,
-			files: filePayloads.length > 0 ? filePayloads : undefined
-		});
-
-		// Timeout for this specific execution (not the worker itself)
-		let timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
-
-				// Terminate and recreate the worker on timeout
-				worker.terminate();
-				pyodideWorker.set(null);
-
-				if (cb) {
-					cb(
-						JSON.parse(
-							JSON.stringify(
-								{
-									stdout: stdout,
-									stderr: stderr,
-									result: result
-								},
-								(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-							)
-						)
-					);
-				}
-			}
-		}, 60000);
-
-		// Use addEventListener so multiple concurrent executions don't clobber each other
-		const onMessage = (event) => {
-			const { id: eventId, ...data } = event.data;
-			// Only handle responses for this execution ID
-			if (eventId !== id) return;
-			// Ignore FS responses (they use a type field)
-			if (data.type && data.type.startsWith('fs:')) return;
-
-			console.log('pyodideWorker.onmessage', event);
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', onMessage);
-			worker.removeEventListener('error', onError);
-
-			data['stdout'] && (stdout = data['stdout']);
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
-
-			if (cb) {
-				cb(
-					JSON.parse(
-						JSON.stringify(
-							{
-								stdout: stdout,
-								stderr: stderr,
-								result: result
-							},
-							(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-						)
-					)
-				);
-			}
-
-			executing = false;
-		};
-
-		const onError = (event) => {
-			console.log('pyodideWorker.onerror', event);
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', onMessage);
-			worker.removeEventListener('error', onError);
-
-			if (cb) {
-				cb(
-					JSON.parse(
-						JSON.stringify(
-							{
-								stdout: stdout,
-								stderr: stderr,
-								result: result
-							},
-							(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-						)
-					)
-				);
-			}
-			executing = false;
-		};
-
-		worker.addEventListener('message', onMessage);
-		worker.addEventListener('error', onError);
+		try {
+			const data = await executePyodide(worker, { code, packages, files: filePayloads }, () => {
+				if ($pyodideWorker === worker) pyodideWorker.set(null);
+			});
+			stdout = data.stdout ?? null;
+			stderr = data.stderr ?? null;
+			result = data.result ?? null;
+		} catch (error) {
+			stderr = error instanceof Error ? error.message : String(error);
+		} finally {
+			window.dispatchEvent(new Event('pyodide:files'));
+		}
+		cb?.(
+			JSON.parse(
+				JSON.stringify({ stdout, stderr, result }, (_key, value) =>
+					typeof value === 'bigint' ? value.toString() : value
+				)
+			)
+		);
 	};
 
 	const resolveToolServer = (serverUrl) => {

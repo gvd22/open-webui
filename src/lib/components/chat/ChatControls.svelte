@@ -25,6 +25,8 @@
 	import Embeds from './ChatControls/Embeds.svelte';
 	import FileNav from './FileNav.svelte';
 	import PyodideFileNav from './PyodideFileNav.svelte';
+	import FilesWorkspace from './Artifacts/FilesWorkspace.svelte';
+	import { showFilesWorkspace } from '$lib/stores/fileWorkspace';
 	import Overview from './Overview.svelte';
 	import { isSavedChatId } from '$lib/utils/chatId';
 
@@ -47,6 +49,13 @@
 	export let modelId;
 
 	export let codeInterpreterEnabled = false;
+	$: pyodideFilesAvailable =
+		codeInterpreterEnabled && $config?.code?.interpreter_engine !== 'jupyter';
+	$: if (!pyodideFilesAvailable) showFilesWorkspace.set(false);
+	$: if ($showFileNavPath && !terminalFilesAvailable && pyodideFilesAvailable) {
+		showFilesWorkspace.set(true);
+		showControls.set(true);
+	}
 
 	let largeScreen = false;
 	let dragged = false;
@@ -137,8 +146,8 @@
 		}
 	};
 
-	const onMouseDown = () => {
-		dragged = true;
+	const onMouseDown = (event: MouseEvent) => {
+		dragged = event.target instanceof Element && !!event.target.closest('#controls-resizer');
 	};
 	const onMouseUp = () => {
 		dragged = false;
@@ -178,6 +187,7 @@
 	});
 
 	const closeHandler = () => {
+		if ($showFilesWorkspace) return;
 		if (!largeScreen) {
 			showControls.set(false);
 		}
@@ -189,7 +199,7 @@
 	$: if (mounted && !chatId) closeHandler();
 
 	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
+	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds || $showFilesWorkspace;
 </script>
 
 {#if !largeScreen}
@@ -216,6 +226,8 @@
 					</div>
 				{:else if $showEmbeds}
 					<Embeds />
+				{:else if $showFilesWorkspace && pyodideFilesAvailable}
+					<FilesWorkspace />
 				{:else if $showArtifacts}
 					<Artifacts {history} />
 				{:else}
@@ -241,7 +253,11 @@
 										'files'
 											? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
 											: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'files')}
+										on:click={() => {
+											activeTab = 'files';
+											if (pyodideFilesAvailable && !terminalFilesAvailable)
+												showFilesWorkspace.set(true);
+										}}
 									>
 										{$i18n.t('Files')}
 									</button>
@@ -339,6 +355,8 @@
 					</div>
 				{:else if $showEmbeds}
 					<Embeds overlay={dragged} />
+				{:else if $showFilesWorkspace && pyodideFilesAvailable}
+					<FilesWorkspace overlay={dragged} />
 				{:else if $showArtifacts}
 					<Artifacts {history} overlay={dragged} />
 				{:else}
@@ -364,7 +382,11 @@
 										'files'
 											? 'bg-gray-100/40 dark:bg-gray-800/25 font-normal text-gray-700 dark:text-gray-200'
 											: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
-										on:click={() => (activeTab = 'files')}
+										on:click={() => {
+											activeTab = 'files';
+											if (pyodideFilesAvailable && !terminalFilesAvailable)
+												showFilesWorkspace.set(true);
+										}}
 									>
 										{$i18n.t('Files')}
 									</button>

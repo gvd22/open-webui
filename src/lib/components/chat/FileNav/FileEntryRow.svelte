@@ -38,9 +38,10 @@
 		index: number
 	) => void = () => {};
 	export let onLongPress: () => void = () => {};
-	export let onToggleExpand: (path: string) => void = () => {};
+	export let onToggleExpand: ((path: string) => void) | null = null;
 	export let showDate: boolean = false;
 	export let parentWritable = true;
+	export let draggableEnabled = true;
 
 	$: entryPath =
 		fullPath ??
@@ -48,7 +49,7 @@
 	$: directoryPath = entryPath.endsWith('/') ? entryPath : `${entryPath}/`;
 	$: writable = entry.writable !== false;
 	$: canMutate = parentWritable && writable;
-	$: rowIndent = `${8 + depth * 16}px`;
+	$: rowIndent = `${10 + depth * 16}px`;
 
 	const formatRelativeTime = (epoch: number): string => {
 		const diff = Math.floor(Date.now() / 1000) - epoch;
@@ -161,11 +162,12 @@
 
 <li class="group" data-file-row>
 	<div
-		class="w-full flex items-center transition-colors duration-75
-			{selected ? 'bg-blue-50 dark:bg-blue-500/10' : 'hover:bg-gray-50/40 dark:hover:bg-white/4'}
+		class="file-entry w-full min-w-0 flex items-center rounded-md pr-2 transition-colors duration-100
+			{selected || menuOpen ? 'bg-gray-100 dark:bg-white/10' : 'hover:bg-gray-100 dark:hover:bg-white/5'}
 			{dragOverFolder
 			? 'bg-blue-50 dark:bg-blue-500/10 ring-1 ring-blue-400 dark:ring-blue-500 ring-inset'
 			: ''}"
+		style:padding-left={rowIndent}
 		role="presentation"
 		on:dragover={(e) => {
 			if (entry.type !== 'directory') return;
@@ -174,9 +176,9 @@
 			e.preventDefault();
 			e.stopPropagation();
 			dragOverFolder = true;
-			if (!expanded && !expandTimer) {
+			if (onToggleExpand && !expanded && !expandTimer) {
 				expandTimer = setTimeout(() => {
-					onToggleExpand(directoryPath);
+					onToggleExpand?.(directoryPath);
 					expandTimer = null;
 				}, 600);
 			}
@@ -207,12 +209,11 @@
 			} catch {}
 		}}
 	>
-		{#if entry.type === 'directory'}
+		{#if onToggleExpand && entry.type === 'directory'}
 			<button
 				type="button"
 				class="mr-1.5 flex w-5 shrink-0 items-center self-stretch justify-center text-gray-400 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400"
-				style="margin-left: {rowIndent};"
-				on:click|stopPropagation={() => onToggleExpand(directoryPath)}
+				on:click|stopPropagation={() => onToggleExpand?.(directoryPath)}
 				aria-label={expanded ? $i18n.t('Collapse') : $i18n.t('Expand')}
 			>
 				<Icon
@@ -222,16 +223,16 @@
 					class={loadingChildren ? 'animate-pulse' : ''}
 				/>
 			</button>
-		{:else}
-			<span class="mr-1.5 w-5 shrink-0 self-stretch" style="margin-left: {rowIndent};"></span>
+		{:else if onToggleExpand}
+			<span class="mr-1.5 w-5 shrink-0 self-stretch"></span>
 		{/if}
 
 		<button
 			type="button"
-			class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left"
-			draggable={canMutate}
+			class="file-entry-open flex min-h-7 min-w-0 flex-1 select-none items-center gap-2.5 py-1 pr-3 text-left focus-visible:outline-none"
+			draggable={canMutate && draggableEnabled}
 			on:dragstart={(e) => {
-				if (!canMutate) {
+				if (!canMutate || !draggableEnabled) {
 					e.preventDefault();
 					return;
 				}
@@ -282,7 +283,7 @@
 			{#if selectionMode || selected}
 				<!-- Checkbox indicator -->
 				<div
-					class="size-3.5 shrink-0 rounded border transition-colors flex items-center justify-center
+					class="size-4 shrink-0 rounded border transition-colors flex items-center justify-center
 						{selected
 						? 'bg-blue-500 dark:bg-blue-600 border-blue-500 dark:border-blue-600 text-white'
 						: 'border-gray-300 dark:border-gray-600'}"
@@ -291,14 +292,15 @@
 						<Icon name="check" size={10} strokeWidth={2} />
 					{/if}
 				</div>
+			{:else}
+				<FileTypeIcon name={entry.name} type={entry.type} size={16} strokeWidth={1.5} />
 			{/if}
-			<FileTypeIcon name={entry.name} type={entry.type} size={12} />
 			{#if renaming}
 				<!-- svelte-ignore a11y-click-events-have-key-events -->
 				<input
 					bind:this={renameInput}
 					bind:value={renameValue}
-					class="flex-1 text-xs bg-transparent border border-gray-100 dark:border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500 text-gray-800 dark:text-gray-200 min-w-0"
+					class="flex-1 text-[0.8125rem] leading-5 bg-transparent border border-gray-100 dark:border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-blue-400 dark:focus:border-blue-500 text-gray-800 dark:text-gray-200 min-w-0"
 					on:keydown={(e) => {
 						if (e.key === 'Enter') {
 							e.preventDefault();
@@ -313,7 +315,10 @@
 					on:click|stopPropagation
 				/>
 			{:else}
-				<span class="flex-1 text-xs text-gray-800 dark:text-gray-200 truncate">
+				<span
+					class="min-w-0 flex-1 text-[0.8125rem] leading-5 text-gray-800 dark:text-gray-200 truncate"
+					title={entry.name}
+				>
 					{entry.name}
 				</span>
 			{/if}
@@ -326,7 +331,9 @@
 						>{formatRelativeTime(entry.modified)}</span
 					>
 				{/if}
-				<span class="text-xs text-gray-400 shrink-0">{formatFileSize(entry.size)}</span>
+				<span class="text-xs tabular-nums text-gray-500 dark:text-gray-400 shrink-0"
+					>{formatFileSize(entry.size)}</span
+				>
 			{:else if entry.type === 'directory' && showDate && entry.modified && !renaming}
 				<span class="text-[0.625rem] text-gray-400 shrink-0"
 					>{formatRelativeTime(entry.modified)}</span
@@ -336,12 +343,13 @@
 
 		<Dropdown bind:show={menuOpen} align="end" sideOffset={4}>
 			<button
-				class="shrink-0 flex h-5 w-5 items-center justify-center mr-1 rounded transition
+				type="button"
+				class="shrink-0 flex size-6 items-center justify-center rounded-md transition
 					text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-400
-					hover:bg-gray-50/40 dark:hover:bg-white/4"
+					hover:bg-gray-200/60 dark:hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-gray-400"
 				aria-label={$i18n.t('More')}
 			>
-				<Icon name="three-dots" size={12} strokeWidth={1.4} />
+				<Icon name="three-dots" size={14} strokeWidth={1.5} />
 			</button>
 
 			<div slot="content">
@@ -365,14 +373,14 @@
 						</div>
 					</button>
 
-					{#if entry.type === 'directory'}
+					{#if entry.type === 'directory' && onToggleExpand}
 						<button
 							type="button"
 							class="select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-gray-50/40 dark:hover:bg-white/4 transition"
 							on:click={(e) => {
 								e.stopPropagation();
 								menuOpen = false;
-								onToggleExpand(directoryPath);
+								onToggleExpand?.(directoryPath);
 							}}
 						>
 							<Icon
@@ -384,7 +392,7 @@
 								{expanded ? $i18n.t('Collapse') : $i18n.t('Expand')}
 							</div>
 						</button>
-					{:else}
+					{:else if entry.type === 'file'}
 						<button
 							type="button"
 							class="select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-gray-50/40 dark:hover:bg-white/4 transition"
@@ -448,3 +456,14 @@
 		</Dropdown>
 	</div>
 </li>
+
+<style>
+	.file-entry:has(> .file-entry-open:focus-visible) {
+		outline: 2px solid #6b7280;
+		outline-offset: -2px;
+	}
+
+	:global(.dark) .file-entry:has(> .file-entry-open:focus-visible) {
+		outline-color: #9ca3af;
+	}
+</style>

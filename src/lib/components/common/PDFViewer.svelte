@@ -1,9 +1,18 @@
 <script lang="ts">
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import Spinner from './Spinner.svelte';
+	import DocumentPagination from './DocumentPagination.svelte';
+	import DocumentZoomControls from './DocumentZoomControls.svelte';
+	import {
+		clampDocumentZoom,
+		DOCUMENT_ZOOM_BUTTON_STEP,
+		DOCUMENT_ZOOM_MAX,
+		getDocumentWheelZoomDelta,
+		panDocumentViewport
+	} from './documentZoom';
 
 	export let url: string | null = null;
 	export let data: ArrayBuffer | Uint8Array | null = null;
@@ -15,6 +24,10 @@
 
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
 	type PdfTextLayer = InstanceType<typeof import('pdfjs-dist').TextLayer>;
+	const dispatch = createEventDispatcher<{
+		'preview-rendered': ArrayBuffer | Uint8Array | null;
+		'preview-failed': ArrayBuffer | Uint8Array | null;
+	}>();
 
 	let outerContainer: HTMLDivElement;
 	let sceneElement: HTMLDivElement;
@@ -27,9 +40,11 @@
 	let lastRenderedZoom = 1;
 	let pageCount = 0;
 	let renderedPage = 0;
-	let activePage = 1;
+	let currentPage = 1;
 	let loadToken = 0;
 	let renderToken = 0;
+	let fetchController: AbortController | null = null;
+	let pdfLoadingTask: ReturnType<typeof import('pdfjs-dist').getDocument> | null = null;
 	let scrollFrame: number | null = null;
 	let mounted = false;
 	let loadedSource: ArrayBuffer | Uint8Array | string | null = null;
@@ -39,7 +54,17 @@
 	const wheelNavigationCooldown = 450;
 	const pageShortcutKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
-	$: selectedPage = singlePage ? (clampDocumentTargetPage(targetPage, pageCount) ?? 1) : activePage;
+	$: selectedPage = singlePage
+		? (clampDocumentTargetPage(targetPage, pageCount) ?? 1)
+		: currentPage;
+
+	const cancelPendingLoad = () => {
+		fetchController?.abort();
+		fetchController = null;
+		const loadingTask = pdfLoadingTask;
+		pdfLoadingTask = null;
+		loadingTask?.destroy?.();
+	};
 
 	// Keep a reference to TextLayer instances so we can update/cancel them
 	let textLayerInstances: PdfTextLayer[] = [];
@@ -66,14 +91,9 @@
 			pzInstance = panzoom(sceneElement, {
 				bounds: true,
 				boundsPadding: 0.1,
-				zoomSpeed: 0.065,
-				beforeWheel: (e) => {
-					// Only zoom on pinch (ctrlKey / metaKey); let normal scroll pass through
-					if (!e.ctrlKey && !e.metaKey) {
-						return true; // returning true cancels the panzoom wheel handling
-					}
-					return false;
-				},
+				minZoom: 0.5,
+				maxZoom: DOCUMENT_ZOOM_MAX / 100,
+				beforeWheel: () => true,
 				beforeMouseDown: (e) => {
 					// Only allow drag-to-pan when zoomed in (not at default scale)
 					if ((e?.target as HTMLElement | null)?.closest?.('.textLayer')) {
@@ -99,19 +119,14 @@
 		}
 	};
 
-	const zoomIn = () => {
+	const setZoom = (percent: number, anchorX?: number, anchorY?: number) => {
 		if (!pzInstance || !outerContainer) return;
-		const cx = outerContainer.clientWidth / 2;
-		const cy = outerContainer.clientHeight / 2;
-		pzInstance.zoomTo(cx, cy, 1.25); // +25%
-		zoomLevel = pzInstance.getTransform().scale;
-	};
-
-	const zoomOut = () => {
-		if (!pzInstance || !outerContainer) return;
-		const cx = outerContainer.clientWidth / 2;
-		const cy = outerContainer.clientHeight / 2;
-		pzInstance.zoomTo(cx, cy, 0.8); // -20% (inverse of 1.25)
+		const nextZoom = clampDocumentZoom(percent) / 100;
+		pzInstance.zoomAbs(
+			anchorX ?? outerContainer.clientWidth / 2,
+			anchorY ?? outerContainer.clientHeight / 2,
+			nextZoom
+		);
 		zoomLevel = pzInstance.getTransform().scale;
 	};
 
@@ -139,7 +154,7 @@
 		if (!nextPage || nextPage === selectedPage) return;
 
 		targetPage = nextPage;
-		activePage = nextPage;
+		currentPage = nextPage;
 		onPageChange?.(nextPage);
 		if (!singlePage) await scrollToTargetPage();
 	};
@@ -156,7 +171,7 @@
 			| HTMLElement
 			| undefined;
 		pageWrapper?.scrollIntoView({ block: 'start' });
-		activePage = page;
+		currentPage = page;
 		onPageChange?.(page);
 	};
 
@@ -165,7 +180,7 @@
 		if (singlePage || !outerContainer || !sceneElement || !pdfDoc) return;
 
 		const marker = outerContainer.getBoundingClientRect().top + outerContainer.clientHeight * 0.35;
-		let bestPage = activePage;
+		let bestPage = currentPage;
 		let bestDistance = Number.POSITIVE_INFINITY;
 
 		for (const wrapper of sceneElement.querySelectorAll('.pdf-page-wrapper')) {
@@ -182,8 +197,8 @@
 			}
 		}
 
-		if (bestPage !== activePage) {
-			activePage = bestPage;
+		if (bestPage !== currentPage) {
+			currentPage = bestPage;
 			onPageChange?.(bestPage);
 		}
 	};
@@ -339,16 +354,31 @@
 	};
 
 	const handleWheel = (e: WheelEvent) => {
-		if (!singlePage) return;
-		if (e.ctrlKey || e.metaKey) return;
+		if (e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+			const rect = outerContainer.getBoundingClientRect();
+			setZoom(
+				zoomLevel * 100 + getDocumentWheelZoomDelta(e.deltaY),
+				e.clientX - rect.left,
+				e.clientY - rect.top
+			);
+			return;
+		}
 
 		const transform = pzInstance?.getTransform();
 		if (transform && Math.abs(transform.scale - 1) >= 0.01) {
 			e.preventDefault();
-			pzInstance?.moveBy(-e.deltaX, -e.deltaY, false);
+			const beforeLeft = outerContainer.scrollLeft;
+			const beforeTop = outerContainer.scrollTop;
+			panDocumentViewport(outerContainer, e.deltaX, e.deltaY);
+			if (beforeLeft === outerContainer.scrollLeft && beforeTop === outerContainer.scrollTop) {
+				pzInstance?.moveBy(-e.deltaX, -e.deltaY, false);
+			}
 			zoomLevel = pzInstance?.getTransform()?.scale ?? 1;
 			return;
 		}
+
+		if (!singlePage) return;
 
 		e.preventDefault();
 		if (pageCount <= 1) return;
@@ -396,6 +426,7 @@
 		const source = data ?? url;
 		if (source === loadedSource && pdfDoc) return;
 		const token = ++loadToken;
+		cancelPendingLoad();
 		loadedSource = source;
 		loading = true;
 		error = '';
@@ -415,20 +446,43 @@
 				pdfData = copyPdfData(data);
 			} else {
 				// Fetch with credentials so auth cookies are sent
-				const res = await fetch(url!, { credentials: 'include' });
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				pdfData = await res.arrayBuffer();
+				const controller = new AbortController();
+				fetchController = controller;
+				try {
+					const res = await fetch(url!, {
+						credentials: 'include',
+						signal: controller.signal
+					});
+					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					pdfData = await res.arrayBuffer();
+				} finally {
+					if (fetchController === controller) fetchController = null;
+				}
 			}
-			pdfDoc = await pdfjs.getDocument({ data: pdfData }).promise;
-			if (token !== loadToken) return;
+			const loadingTask = pdfjs.getDocument({ data: pdfData });
+			pdfLoadingTask = loadingTask;
+			let candidatePdfDoc: PdfDocument;
+			try {
+				candidatePdfDoc = await loadingTask.promise;
+			} finally {
+				if (pdfLoadingTask === loadingTask) pdfLoadingTask = null;
+			}
+			if (token !== loadToken) {
+				await candidatePdfDoc.destroy();
+				return;
+			}
+			pdfDoc = candidatePdfDoc;
 			pageCount = pdfDoc.numPages;
-			activePage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
+			currentPage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
 			targetPage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
 			await renderAllPages();
+			if (token === loadToken) dispatch('preview-rendered', data);
 		} catch (e) {
 			if (token === loadToken) {
+				if ((e as { name?: string })?.name === 'AbortError') return;
 				console.error('PDF render error:', e);
 				error = 'Failed to load PDF.';
+				dispatch('preview-failed', data);
 			}
 		} finally {
 			if (token === loadToken) loading = false;
@@ -455,6 +509,7 @@
 	onDestroy(() => {
 		loadToken++;
 		renderToken++;
+		cancelPendingLoad();
 		if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
 		if (rerenderTimer) clearTimeout(rerenderTimer);
 		pzInstance?.dispose();
@@ -482,8 +537,10 @@
 			? 'overflow-hidden h-full flex items-center justify-center overscroll-contain'
 			: 'overflow-y-auto h-full'}
 		bind:this={outerContainer}
-		role="application"
-		aria-label={`${itemLabel} viewer`}
+		role="region"
+		aria-label={singlePage
+			? `${itemLabel}, ${selectedPage} of ${pageCount}`
+			: `PDF document, page ${currentPage} of ${pdfDoc?.numPages ?? 0}`}
 		tabindex="0"
 		on:scroll={handleScroll}
 		on:wheel|nonpassive={handleWheel}
@@ -494,100 +551,23 @@
 	</div>
 
 	{#if !error && pdfDoc}
-		<div
-			class="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 rounded-lg bg-white/90 dark:bg-gray-850/90 backdrop-blur-sm shadow-lg border border-gray-200/60 dark:border-gray-700/60 px-1 py-0.5"
-		>
-			{#if singlePage}
-				<button
-					type="button"
-					class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 disabled:opacity-30"
-					disabled={selectedPage === 1}
-					on:click={() => selectPage(selectedPage - 1)}
-					aria-label={`Previous ${itemLabel.toLowerCase()}`}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 20 20"
-						fill="currentColor"
-						class="size-3.5"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
-							clip-rule="evenodd"
-						/>
-					</svg>
-				</button>
-				<span
-					class="shrink-0 min-w-12 text-center text-[0.6875rem] text-gray-500 dark:text-gray-400 tabular-nums"
-					>{selectedPage} / {pageCount}</span
-				>
-				<button
-					type="button"
-					class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 disabled:opacity-30"
-					disabled={selectedPage === pageCount}
-					on:click={() => selectPage(selectedPage + 1)}
-					aria-label={`Next ${itemLabel.toLowerCase()}`}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 20 20"
-						fill="currentColor"
-						class="size-3.5"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
-							clip-rule="evenodd"
-						/>
-					</svg>
-				</button>
-			{/if}
-			<!-- Pinch covers in/out on coarse pointers; reset has no gesture, so it stays -->
-			<button
-				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
-				on:click={zoomOut}
-				aria-label="Zoom out"
+		<div class="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
+			<DocumentPagination
+				current={selectedPage}
+				total={pageCount}
+				previousLabel={`Previous ${itemLabel.toLowerCase()}`}
+				nextLabel={`Next ${itemLabel.toLowerCase()}`}
+				onPrevious={() => selectPage(selectedPage - 1)}
+				onNext={() => selectPage(selectedPage + 1)}
 			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
-				>
-					<path
-						fill-rule="evenodd"
-						d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z"
-						clip-rule="evenodd"
-					/>
-				</svg>
-			</button>
-			<button
-				type="button"
-				class="shrink-0 min-w-12 h-7 px-1.5 py-1 text-center text-[0.6875rem] font-normal text-gray-500 dark:text-gray-400 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition tabular-nums"
-				on:click={resetView}
-				aria-label="Reset zoom"
-			>
-				{Math.round(zoomLevel * 100)}%
-			</button>
-			<button
-				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
-				on:click={zoomIn}
-				aria-label="Zoom in"
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					fill="currentColor"
-					class="size-3.5"
-				>
-					<path
-						d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z"
-					/>
-				</svg>
-			</button>
+				<DocumentZoomControls
+					percent={Math.round(zoomLevel * 100)}
+					maximum={DOCUMENT_ZOOM_MAX}
+					onZoomOut={() => setZoom(zoomLevel * 100 - DOCUMENT_ZOOM_BUTTON_STEP)}
+					onReset={resetView}
+					onZoomIn={() => setZoom(zoomLevel * 100 + DOCUMENT_ZOOM_BUTTON_STEP)}
+				/>
+			</DocumentPagination>
 		</div>
 	{/if}
 </div>
