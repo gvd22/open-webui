@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { getContext, onMount } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
@@ -97,17 +98,18 @@
 
 	const getLoadError = (cause: unknown) => {
 		if (cause instanceof Error && cause.message === 'missing') {
-			return $i18n.t('This file is no longer available.');
+			return fileText($i18n, 'This file is no longer available.');
 		}
 		if (cause instanceof Error && cause.message === 'unavailable') {
-			return $i18n.t(
+			return fileText(
+				$i18n,
 				'The document service is temporarily unavailable. Try again when it reconnects.'
 			);
 		}
 		if (cause instanceof Error && cause.message === DOCUMENT_TOO_LARGE_ERROR) {
-			return $i18n.t('This document is too large to display here.');
+			return fileText($i18n, 'This document is too large to display here.');
 		}
-		return $i18n.t('This document could not be opened.');
+		return fileText($i18n, 'This document could not be opened.');
 	};
 
 	const loadFile = async (isRefresh = false) => {
@@ -155,7 +157,7 @@
 				error = getLoadError(cause);
 			} else {
 				error = displayedData
-					? $i18n.t('The latest version could not be loaded. Showing the previous version.')
+					? fileText($i18n, 'The latest version could not be loaded. Showing the previous version.')
 					: getLoadError(cause);
 			}
 		} finally {
@@ -206,7 +208,7 @@
 		restoringAfterRenderFailure = Boolean(displayedData && rejectedCandidate !== displayedData);
 		candidateData = displayedData;
 		error = restoringAfterRenderFailure
-			? $i18n.t('The latest update could not be displayed. Showing the previous version.')
+			? fileText($i18n, 'The latest update could not be displayed. Showing the previous version.')
 			: getLoadError(cause);
 		loading = false;
 		refreshing = false;
@@ -315,8 +317,8 @@
 			displayedGeneration = 0;
 			error =
 				action === 'deleted'
-					? $i18n.t('This file is no longer available.')
-					: $i18n.t('This file was moved. Open it again from Files.');
+					? fileText($i18n, 'This file is no longer available.')
+					: fileText($i18n, 'This file was moved. Open it again from Files.');
 			loading = false;
 			refreshing = false;
 			return;
@@ -360,30 +362,30 @@
 	{#if displayedData || refreshing}
 		<div
 			role="group"
-			aria-label={$i18n.t('Document actions')}
+			aria-label={fileText($i18n, 'Document actions')}
 			class="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white/95 p-1 shadow-sm backdrop-blur-sm dark:border-gray-700/80 dark:bg-gray-850/95"
 		>
 			{#if refreshing}
-				<span class="mr-auto px-2" role="status" aria-label={$i18n.t('Loading')}>
+				<span class="mr-auto px-2" role="status" aria-label={fileText($i18n, 'Loading')}>
 					<Spinner className="size-3.5" />
 				</span>
 			{/if}
 			{#if displayedData}
-				<Tooltip content={$i18n.t('Download displayed version')}>
+				<Tooltip content={fileText($i18n, 'Download displayed version')}>
 					<button
 						type="button"
 						class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-						aria-label={$i18n.t('Download displayed version')}
+						aria-label={fileText($i18n, 'Download displayed version')}
 						on:click={() => download(displayedData)}
 					>
 						<Download className="size-4" />
 					</button>
 				</Tooltip>
-				<Tooltip content={$i18n.t('Fullscreen')}>
+				<Tooltip content={fileText($i18n, 'Fullscreen')}>
 					<button
 						type="button"
 						class="flex size-8 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-						aria-label={$i18n.t('Fullscreen')}
+						aria-label={fileText($i18n, 'Fullscreen')}
 						on:click={() => void toggleFullscreen()}
 					>
 						<ArrowsPointingOut className="size-4" />
@@ -417,7 +419,7 @@
 			<div
 				class="flex h-full items-center justify-center p-8 text-center text-sm text-gray-500 dark:text-gray-400"
 			>
-				{$i18n.t('Preview not available')}
+				{fileText($i18n, 'Preview not available')}
 			</div>
 		{:else if candidateData}
 			<FilePreview selectedFile={path} {fileContent} {fileImageUrl} readOnly />
@@ -425,7 +427,7 @@
 
 		{#if loading && !displayedData}
 			<div class="absolute inset-0 flex items-center justify-center">
-				<span class="sr-only" role="status">{$i18n.t('Loading')}</span>
+				<span class="sr-only" role="status">{fileText($i18n, 'Loading')}</span>
 				<Spinner className="size-5" />
 			</div>
 		{:else if error && !displayedData}

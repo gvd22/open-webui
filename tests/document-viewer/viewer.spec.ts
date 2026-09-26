@@ -486,14 +486,17 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 	const viewers = {
 		pdf: {
 			ready: () => page.getByText('KOBY-BASIC-PDF-2-PAGES'),
+			content: () => page.locator('.pdf-page-wrapper').first(),
 			viewport: () => page.getByRole('region', { name: /PDF document/ })
 		},
 		docx: {
 			ready: () => page.getByText('KOBY-BASIC-DOCX-2-PAGES'),
+			content: () => page.getByText('KOBY-BASIC-DOCX-2-PAGES'),
 			viewport: () => page.getByRole('region', { name: 'Word document' })
 		},
 		pptx: {
 			ready: () => page.getByRole('img', { name: 'Slide 1', exact: true }),
+			content: () => page.getByRole('img', { name: 'Slide 1', exact: true }),
 			viewport: () => page.getByRole('application', { name: 'Slide preview' }).locator('section')
 		}
 	} as const;
@@ -514,27 +517,19 @@ test('zooms, pans, resets, and reopens every document viewer', async ({ page }) 
 
 		for (let index = 0; index < 8; index += 1) await page.getByLabel('Zoom in').click();
 		await expect(resetZoom).toHaveText('202%');
-		const beforePan = (await viewer.viewport().locator('img[alt^="Slide "]').count())
-			? await viewer.viewport().locator('img[alt^="Slide "]').boundingBox()
-			: null;
+		const beforePan = await viewer.content().boundingBox();
+		expect(beforePan).not.toBeNull();
 		await viewer.viewport().hover();
 		await page.mouse.wheel(240, 240);
-		if (format === 'pptx') {
-			await expect
-				.poll(async () => {
-					const afterPan = await viewer.viewport().locator('img[alt^="Slide "]').boundingBox();
-					return Boolean(
-						beforePan && afterPan && (afterPan.x !== beforePan.x || afterPan.y !== beforePan.y)
-					);
-				})
-				.toBe(true);
-		} else {
-			await expect
-				.poll(() =>
-					viewer.viewport().evaluate((element) => element.scrollLeft > 0 && element.scrollTop > 0)
-				)
-				.toBe(true);
-		}
+		// Viewers can pan using native scrolling or a CSS transform.
+		await expect
+			.poll(async () => {
+				const afterPan = await viewer.content().boundingBox();
+				return Boolean(
+					beforePan && afterPan && (afterPan.x < beforePan.x - 1 || afterPan.y < beforePan.y - 1)
+				);
+			})
+			.toBe(true);
 
 		await resetZoom.click();
 		await expect(resetZoom).toHaveText('100%');

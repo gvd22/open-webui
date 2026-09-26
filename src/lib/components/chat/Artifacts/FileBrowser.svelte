@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { chatId, pyodideWorker, showFileNavPath } from '$lib/stores';
@@ -215,7 +216,7 @@
 			}
 			console.error('Failed to list Pyodide directory', loadError);
 			currentPath = previousPath;
-			error = $i18n.t('Files are currently unavailable');
+			error = fileText($i18n, 'Files are currently unavailable');
 			entries = [];
 		} finally {
 			if (requestId === directoryRequestId) loading = false;
@@ -282,8 +283,8 @@
 			if (requestId === fileRequestId) {
 				console.error('Failed to read Pyodide file', readError);
 				fileContent = String(readError).includes('File exceeds the read limit')
-					? $i18n.t('This file is too large to preview. Download it instead.')
-					: $i18n.t('Failed to read file');
+					? fileText($i18n, 'This file is too large to preview. Download it instead.')
+					: fileText($i18n, 'Failed to read file');
 			}
 		} finally {
 			if (requestId === fileRequestId) fileLoading = false;
@@ -359,7 +360,7 @@
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Delete failed:', e);
-			toast.error($i18n.t('Delete failed'));
+			toast.error(fileText($i18n, 'Delete failed'));
 		}
 	};
 
@@ -377,7 +378,7 @@
 		newFolderName = '';
 		if (!name) return;
 		if (!isValidPyodideEntryName(name)) {
-			toast.error($i18n.t('Enter a valid name without slashes.'));
+			toast.error(fileText($i18n, 'Enter a valid name without slashes.'));
 			return;
 		}
 		const folderPath = `${currentPath}${name}`.replace(/\/$/, '');
@@ -386,7 +387,7 @@
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Failed to create folder:', e);
-			toast.error($i18n.t('Folder could not be created'));
+			toast.error(fileText($i18n, 'Folder could not be created'));
 		}
 	};
 
@@ -404,12 +405,12 @@
 		newFileName = '';
 		if (!name) return;
 		if (!isValidPyodideEntryName(name)) {
-			toast.error($i18n.t('Enter a valid name without slashes.'));
+			toast.error(fileText($i18n, 'Enter a valid name without slashes.'));
 			return;
 		}
 		try {
 			if (entries.some((entry) => entry.name === name)) {
-				toast.error($i18n.t('File already exists'));
+				toast.error(fileText($i18n, 'File already exists'));
 				return;
 			}
 			await sendWorkerMessage({
@@ -420,7 +421,7 @@
 			await loadDir(currentPath);
 		} catch (e) {
 			console.error('Failed to create file:', e);
-			toast.error($i18n.t('File could not be created'));
+			toast.error(fileText($i18n, 'File could not be created'));
 		}
 	};
 
@@ -428,7 +429,7 @@
 		const payloads: { name: string; data: ArrayBuffer }[] = [];
 		for (const file of fileList) {
 			if (!isValidPyodideEntryName(file.name)) {
-				toast.error($i18n.t('One or more file names are invalid.'));
+				toast.error(fileText($i18n, 'One or more file names are invalid.'));
 				continue;
 			}
 			payloads.push({ name: file.name, data: await file.arrayBuffer() });

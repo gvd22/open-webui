@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
 	import type { Readable } from 'svelte/store';
 	import DocxPreview from './DocxPreview.svelte';
@@ -61,7 +62,7 @@
 			dispatch('preview-rendered', { data: candidate });
 		} catch (cause) {
 			if (currentGeneration !== generation || request !== sheetGeneration) return;
-			if (!sheetHtml) error = $i18n.t('This document could not be opened.');
+			if (!sheetHtml) error = fileText($i18n, 'This document could not be opened.');
 			dispatch('preview-failed', { data: candidate, error: cause });
 		}
 	};
@@ -101,7 +102,7 @@
 		} catch (cause) {
 			if (currentGeneration !== generation) return;
 			console.error('Office document render failed:', cause);
-			error = $i18n.t('This document could not be opened.');
+			error = fileText($i18n, 'This document could not be opened.');
 			dispatch('preview-failed', { data: candidate });
 		} finally {
 			if (currentGeneration === generation && candidateFormat !== 'docx') loading = false;
@@ -174,7 +175,7 @@
 	{#if loading && !docxData}
 		<div class="absolute inset-0 flex items-center justify-center">
 			<Spinner className="size-5" />
-			<span class="sr-only" role="status">{$i18n.t('Loading')}</span>
+			<span class="sr-only" role="status">{fileText($i18n, 'Loading')}</span>
 		</div>
 	{:else if error}
 		<div

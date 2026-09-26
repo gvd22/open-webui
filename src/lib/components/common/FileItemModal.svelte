@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import type { WorkBook } from 'xlsx';
 	import DOMPurify from 'dompurify';
 
@@ -181,7 +182,7 @@
 			rowCount = 0;
 			excelError =
 				cause instanceof Error && cause.message === 'too-large'
-					? $i18n.t('This document is too large to display here.')
+					? fileText($i18n, 'This document is too large to display here.')
 					: $i18n.t('Failed to load Excel/CSV file. Please try downloading it instead.');
 		}
 	};

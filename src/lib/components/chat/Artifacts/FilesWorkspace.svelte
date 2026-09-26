@@ -3,6 +3,7 @@
 </script>
 
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { getContext, onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { chatId, config, showControls, showFileNavPath } from '$lib/stores';
@@ -55,7 +56,7 @@
 		});
 		if (!saved && !persistenceWarningShown) {
 			persistenceWarningShown = true;
-			toast.error($i18n.t('Workspace layout could not be saved'));
+			toast.error(fileText($i18n, 'Workspace layout could not be saved'));
 		}
 	}
 

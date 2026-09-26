@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createInstance } from 'i18next';
+import { fileText } from './fileText';
 import {
 	buildWorkspaceFileContent,
 	buildWorkspaceTabs,
@@ -11,6 +13,17 @@ import {
 } from './workspace';
 
 describe('file workspace', () => {
+	it('localizes feature text without requiring empty upstream language entries', async () => {
+		const i18n = createInstance();
+		await i18n.init({ lng: 'de-CH', fallbackLng: false, resources: {} });
+		expect(fileText(i18n, 'Open documents')).toBe('Geöffnete Dokumente');
+		await i18n.changeLanguage('en-US');
+		expect(fileText(i18n, 'Open documents')).toBe('Open documents');
+		await i18n.changeLanguage('fr-FR');
+		expect(fileText(i18n, 'Open documents')).toBe('Open documents');
+		i18n.addResource('fr-FR', 'translation', 'Open documents', 'Documents ouverts');
+		expect(fileText(i18n, 'Open documents')).toBe('Documents ouverts');
+	});
 	it('opens documents, text and unknown files as distinct tabs', () => {
 		const paths = ['report.pdf', 'slides.pptx', 'notes.md', 'data.json', 'binary.zip'];
 		const files = paths.map((name) => buildWorkspaceFileContent(`/mnt/uploads/${name}`));

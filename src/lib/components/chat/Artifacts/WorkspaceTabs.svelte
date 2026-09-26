@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { getContext, onDestroy, tick } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
@@ -144,7 +145,7 @@
 			bind:this={tabListElement}
 			class="flex min-w-0 flex-1 items-center gap-2"
 			role="tablist"
-			aria-label={$i18n.t('Open documents')}
+			aria-label={fileText($i18n, 'Open documents')}
 		>
 			{#if filesTab}
 				<button
