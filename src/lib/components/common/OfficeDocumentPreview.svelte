@@ -2,6 +2,7 @@
 	import { fileText } from '$lib/components/chat/Artifacts/fileText';
 	import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte';
 	import type { Readable } from 'svelte/store';
+	import type { i18n as I18n } from 'i18next';
 	import DocxPreview from './DocxPreview.svelte';
 	import PptxPreview from './PptxPreview.svelte';
 	import Spinner from './Spinner.svelte';
@@ -9,7 +10,6 @@
 
 	type OfficeDocumentFormat = 'docx' | 'pptx' | 'xls' | 'xlsx' | 'csv';
 
-	type I18n = { t: (key: string, values?: Record<string, unknown>) => string };
 	const i18n = getContext<Readable<I18n>>('i18n');
 	const dispatch = createEventDispatcher<{
 		'preview-rendered': { data: ArrayBuffer };
