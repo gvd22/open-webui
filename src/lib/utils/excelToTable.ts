@@ -10,6 +10,8 @@
 
 import type { WorkSheet } from 'xlsx';
 
+export const MAX_SPREADSHEET_PREVIEW_CELLS = 100_000;
+
 /** Convert column index (0-based) to Excel-style letter (A, B, …, Z, AA, AB, …) */
 const colLetter = (i: number): string => {
 	let s = '';
@@ -35,11 +37,28 @@ export interface ExcelTableResult {
 
 /**
  * Render a worksheet as an HTML table string.
- * Uses sheet_to_json with header:1 for a raw 2D array.
+ * Uses stored cell formats for display, without changing the source values.
  */
 export async function excelToTable(worksheet: WorkSheet): Promise<ExcelTableResult> {
 	const XLSX = await import('xlsx');
-	const rows: unknown[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+	const range = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1');
+	const height = range.e.r - range.s.r + 1;
+	const width = range.e.c - range.s.c + 1;
+	// Sparse sheets can declare huge ranges even when their file is tiny.
+	if (
+		height < 1 ||
+		width < 1 ||
+		!Number.isSafeInteger(height * width) ||
+		height * width > MAX_SPREADSHEET_PREVIEW_CELLS
+	) {
+		throw new Error('too-large');
+	}
+	const rows: unknown[][] = XLSX.utils.sheet_to_json(worksheet, {
+		header: 1,
+		defval: '',
+		raw: false
+	});
+	const origin = range.s;
 
 	if (rows.length === 0) {
 		return {
@@ -72,7 +91,8 @@ export async function excelToTable(worksheet: WorkSheet): Promise<ExcelTableResu
 		parts.push(`<td class="excel-row-num">${r + 1}</td>`);
 		for (let c = 0; c < colCount; c++) {
 			const val = c < row.length ? row[c] : '';
-			const isNum = typeof val === 'number';
+			const cell = worksheet[XLSX.utils.encode_cell({ r: origin.r + r, c: origin.c + c })];
+			const isNum = cell?.t === 'n';
 			parts.push(`<td${isNum ? ' class="excel-num"' : ''}>${esc(val)}</td>`);
 		}
 		parts.push('</tr>');

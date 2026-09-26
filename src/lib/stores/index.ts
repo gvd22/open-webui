@@ -140,7 +140,10 @@ export const showOverview = writable(false);
 export const showArtifacts = writable(false);
 export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
-export type FileNavOpenRequest = string | { path: string; page?: number | null };
+export * from './fileWorkspace';
+export type FileNavOpenRequest =
+	| string
+	| { path: string; page?: number | null; fileId?: string | null; chatId?: string | null };
 export const showFileNavPath: Writable<FileNavOpenRequest | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedTerminalId: Writable<string | null> = writable(null);
@@ -324,6 +327,7 @@ type Document = {
 };
 
 type Config = {
+	code?: { engine?: string; interpreter_engine?: string };
 	license_metadata: any;
 	status: boolean;
 	name: string;
@@ -356,6 +360,7 @@ type Config = {
 		enable_direct_connections: boolean;
 		enable_version_update_check: boolean;
 		enable_pyodide_file_persistence?: boolean;
+		enable_document_viewer?: boolean;
 		folder_max_file_count?: number;
 		websocket_heartbeat_interval?: number | null;
 	};

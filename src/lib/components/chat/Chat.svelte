@@ -4303,6 +4303,8 @@
 						</div>
 					{:else}
 						<Navbar
+							filesWorkspaceAvailable={codeInterpreterEnabled &&
+								$config?.code?.interpreter_engine !== 'jupyter'}
 							bind:this={navbarElement}
 							{readOnly}
 							chat={{

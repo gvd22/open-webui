@@ -1,4 +1,7 @@
 <script lang="ts">
+	import FilesWorkspaceButton from './Artifacts/FilesWorkspaceButton.svelte';
+	import { showFilesWorkspace } from '$lib/stores/fileWorkspace';
+	export let filesWorkspaceAvailable = false;
 	import { getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -230,11 +233,13 @@
 						</Tooltip>
 					{/if}
 
+					<FilesWorkspaceButton available={filesWorkspaceAvailable} />
 					{#if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
 						<Tooltip content={$i18n.t('Controls')}>
 							<button
 								class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
 								on:click={async () => {
+									showFilesWorkspace.set(false);
 									await showControls.set(!$showControls);
 								}}
 								aria-label="Controls"

@@ -5,6 +5,7 @@
 	import { config, pyodideWorker as pyodideWorkerStore } from '$lib/stores';
 
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
+	import { executePyodide } from '$lib/pyodide/workerRequest';
 	import { executeCode } from '$lib/apis/utils';
 	import {
 		copyToClipboard,
@@ -235,7 +236,7 @@
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
-		].filter(Boolean);
+		].filter((name): name is string => name !== null);
 
 		console.log(packages);
 
@@ -250,32 +251,11 @@
 			localPyodideWorker = worker;
 		}
 
-		worker.postMessage({
-			id: id,
-			code: code,
-			packages: packages
-		});
-
-		const timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
-				if (!isShared) {
-					worker.terminate();
-					localPyodideWorker = null;
-				}
-			}
-		}, 60000);
-
-		const handler = (event) => {
-			// Ignore messages from other requests on the shared worker
-			if (event.data?.id !== id) return;
-
-			console.log('pyodideWorker.onmessage', event);
-			const { id: _id, ...data } = event.data;
-
-			console.log(_id, data);
-
+		try {
+			const data = await executePyodide(worker, { code, packages }, () => {
+				if (isShared && $pyodideWorkerStore === worker) pyodideWorkerStore.set(null);
+				else localPyodideWorker = null;
+			});
 			if (data['stdout']) {
 				stdout = data['stdout'];
 				const stdoutLines = stdout.split('\n');
@@ -305,8 +285,13 @@
 				}
 			}
 
-			if (data['result']) {
-				result = data['result'];
+			if (data.result !== null && data.result !== undefined) {
+				result =
+					typeof data.result === 'string'
+						? data.result
+						: JSON.stringify(data.result, (_key, value) =>
+								typeof value === 'bigint' ? value.toString() : value
+							);
 				const resultLines = result.split('\n');
 
 				for (const [idx, line] of resultLines.entries()) {
@@ -335,24 +320,12 @@
 			}
 
 			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
-
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', handler);
+		} catch (error) {
+			stderr = error instanceof Error ? error.message : String(error);
+		} finally {
 			executing = false;
-
-			// Signal PyodideFileNav to auto-refresh after execution
 			window.dispatchEvent(new Event('pyodide:files'));
-		};
-
-		worker.addEventListener('message', handler);
-
-		worker.onerror = (event) => {
-			console.log('pyodideWorker.onerror', event);
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', handler);
-			executing = false;
-		};
+		}
 	};
 
 	let mermaid = null;

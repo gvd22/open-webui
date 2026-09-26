@@ -1,0 +1,50 @@
+{
+	"fixtures": [
+		{
+			"path": "pdf/basic.pdf",
+			"format": "pdf",
+			"purpose": "ordinary two-page PDF with a deterministic text sentinel",
+			"bytes": 877,
+			"sha256": "86eba94e9f67940ce211f0fb52d216cf2df4ae1034139a996e1554ac4cec222b",
+			"expectedPages": 2,
+			"sentinel": "KOBY-BASIC-PDF-2-PAGES",
+			"generator": "scripts/generate-viewer-large-profiles.py (Python standard library)",
+			"source": "deterministic in-repository fixture generator",
+			"ownership": "KOBY project",
+			"license": "repository license; no third-party content",
+			"knownLimitations": ["basic text and page navigation only; not an Office fidelity fixture"]
+		},
+		{
+			"path": "docx/basic.docx",
+			"format": "docx",
+			"purpose": "ordinary Word layout with page break, table, Unicode, and safe link",
+			"bytes": 1523,
+			"sha256": "7f18f33dc6768681a70cbc1e101335136bbb9580f8ac97e745e0f8624ca489a9",
+			"expectedPages": 2,
+			"sentinel": "KOBY-BASIC-DOCX-2-PAGES",
+			"generator": "scripts/generate-viewer-large-profiles.py (Python standard library)",
+			"source": "deterministic in-repository fixture generator",
+			"ownership": "KOBY project",
+			"license": "repository license; no third-party content",
+			"knownLimitations": [
+				"does not represent tracked changes, embedded media, or Office-specific fields"
+			]
+		},
+		{
+			"path": "pptx/basic.pptx",
+			"format": "pptx",
+			"purpose": "ordinary two-slide deck with shape, table-like content, Unicode, and safe link",
+			"bytes": 4834,
+			"sha256": "42b30c1d0bcfdf2e4421e0e45f91350310c9373472d927cb6a6749e81eeaf3ba",
+			"expectedSlides": 2,
+			"sentinel": "KOBY-BASIC-PPTX-2-SLIDES",
+			"generator": "scripts/generate-viewer-large-profiles.py (Python standard library)",
+			"source": "deterministic in-repository fixture generator",
+			"ownership": "KOBY project",
+			"license": "repository license; no third-party content",
+			"knownLimitations": ["does not represent transitions, animations, charts, or embedded media"]
+		}
+	],
+	"maxCheckedInBytes": 262144,
+	"prohibitedContent": ["personal data", "credentials", "external media", "tracking URLs"]
+}

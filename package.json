@@ -18,10 +18,18 @@
 		"format:backend": "ruff format . --exclude .venv --exclude venv",
 		"i18n:parse": "i18next --config i18next-parser.config.ts && prettier --write \"src/lib/i18n/**/*.{js,json}\"",
 		"cy:open": "cypress open",
-		"test:frontend": "vitest --passWithNoTests",
-		"pyodide:fetch": "node scripts/prepare-pyodide.js"
+		"test:frontend": "vitest --passWithNoTests --exclude '{tests,scripts,.tmp}/**'",
+		"pyodide:fetch": "node scripts/prepare-pyodide.js",
+		"test:viewer": "vitest --run src/lib/components/chat/Artifacts/DocumentViewer src/lib/components/chat/Artifacts/workspace.test.ts src/lib/components/chat/Artifacts/workspaceSession.test.ts src/lib/components/common/documentZoom.test.ts src/lib/components/chat/FileNav/fileIcon.test.ts src/lib/pyodide/workerRequest.test.ts src/lib/pyodide/workspace.test.ts",
+		"test:viewer:e2e": "playwright test",
+		"test:files:e2e": "playwright test --config tests/files-workspace/playwright.config.ts",
+		"test:viewer:contracts": "node --test scripts/check-viewer-dependencies.test.mjs scripts/check-viewer-bundle.test.mjs",
+		"check:viewer:dependencies": "node scripts/check-viewer-dependencies.mjs",
+		"check:viewer:bundle": "node scripts/check-viewer-bundle.mjs"
 	},
 	"devDependencies": {
+		"@axe-core/playwright": "^4.13.0",
+		"@playwright/test": "^1.62.1",
 		"@sveltejs/adapter-auto": "3.2.2",
 		"@sveltejs/adapter-static": "^3.0.2",
 		"@sveltejs/kit": "^2.5.27",

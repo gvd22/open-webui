@@ -1,4 +1,9 @@
 import { loadPyodide, type PyodideInterface } from 'pyodide';
+import {
+	isValidPyodideEntryName,
+	PYODIDE_WORKSPACE_ROOT,
+	requirePyodideWorkspacePath
+} from '$lib/pyodide/workspace';
 
 declare global {
 	interface Window {
@@ -18,12 +23,18 @@ declare global {
 // ---------------------------------------------------------------------------
 
 let pyodideReady: Promise<void> | null = null;
+const installedPackages = new Set<string>();
 
-async function loadPyodideAndPackages(packages: string[] = []) {
+const reportBootstrapStage = (stage: string, id?: string) => {
+	self.postMessage({ type: 'pyodide:progress', stage, id });
+};
+
+async function loadPyodideAndPackages(id?: string) {
 	self.stdout = null;
 	self.stderr = null;
 	self.result = null;
 
+	reportBootstrapStage('loading-runtime', id);
 	self.pyodide = await loadPyodide({
 		indexURL: '/pyodide/',
 		stdout: (text) => {
@@ -45,22 +56,17 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 		},
 		packages: ['micropip']
 	});
+	reportBootstrapStage('mounting-files', id);
 
 	// Create the upload directory and mount IDBFS for persistence
-	const uploadDir = '/mnt/uploads';
+	const uploadDir = PYODIDE_WORKSPACE_ROOT;
 	self.pyodide.FS.mkdirTree(uploadDir);
 	self.pyodide.FS.mount(self.pyodide.FS.filesystems.IDBFS, {}, '/mnt');
 
 	// Load persisted files from IndexedDB
-	await new Promise<void>((resolve) => {
-		(self.pyodide.FS as any).syncfs(true, (err: Error | null) => {
-			if (err) {
-				console.error('Error syncing from IndexedDB:', err);
-			}
-			// Always resolve — missing data is fine on first run
-			resolve();
-		});
-	});
+	reportBootstrapStage('restoring-files', id);
+	await syncFS(true);
+	reportBootstrapStage('preparing-runtime', id);
 
 	// Ensure /mnt/uploads still exists after sync (first-time init)
 	try {
@@ -69,38 +75,46 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 		self.pyodide.FS.mkdirTree(uploadDir);
 	}
 
-	const micropip = self.pyodide.pyimport('micropip');
-	await micropip.install(packages);
+	await resetPythonWorkspace();
+	reportBootstrapStage('ready', id);
 }
 
 /**
  * Ensure Pyodide is loaded. On the first call, loads and installs packages.
  * Subsequent calls reuse the already-loaded instance (persistent worker).
  */
-async function ensurePyodide(packages: string[] = []) {
+async function ensurePyodide(packages: string[] = [], id?: string) {
 	if (!pyodideReady) {
-		pyodideReady = loadPyodideAndPackages(packages);
+		const loading = loadPyodideAndPackages(id);
+		pyodideReady = loading;
+		try {
+			await loading;
+		} catch (error) {
+			if (pyodideReady === loading) pyodideReady = null;
+			throw error;
+		}
+	} else {
+		await pyodideReady;
 	}
-	await pyodideReady;
 
-	// Install any additional packages not loaded on init
-	if (packages.length > 0 && self.pyodide) {
+	const missingPackages = packages.filter((name) => !installedPackages.has(name));
+	if (missingPackages.length > 0 && self.pyodide) {
 		const micropip = self.pyodide.pyimport('micropip');
-		await micropip.install(packages);
+		await micropip.install(missingPackages);
+		for (const name of missingPackages) installedPackages.add(name);
 	}
 }
 
 /**
- * Persist the in-memory FS to IndexedDB (fire-and-forget with logging).
+ * Synchronize the mounted workspace before acknowledging filesystem mutations.
  */
-function persistFS() {
-	if (!self.pyodide) return;
-	(self.pyodide.FS as any).syncfs(false, (err: Error | null) => {
-		if (err) {
-			console.error('Error syncing to IndexedDB:', err);
-		} else {
-			console.log('Successfully synced to IndexedDB.');
-		}
+function syncFS(populate: boolean) {
+	if (!self.pyodide) return Promise.resolve();
+	return new Promise<void>((resolve, reject) => {
+		(self.pyodide.FS as any).syncfs(populate, (error: Error | null) => {
+			if (error) reject(error);
+			else resolve();
+		});
 	});
 }
 
@@ -108,7 +122,14 @@ function persistFS() {
 // FS operations
 // ---------------------------------------------------------------------------
 
-function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = '/mnt/uploads') {
+async function resetPythonWorkspace() {
+	await self.pyodide.runPythonAsync(`import os
+os.environ["HOME"] = "${PYODIDE_WORKSPACE_ROOT}"
+os.chdir("${PYODIDE_WORKSPACE_ROOT}")`);
+}
+
+function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = PYODIDE_WORKSPACE_ROOT) {
+	dir = requirePyodideWorkspacePath(dir);
 	try {
 		self.pyodide.FS.stat(dir);
 	} catch {
@@ -116,58 +137,62 @@ function fsUploadFiles(files: { name: string; data: ArrayBuffer }[], dir = '/mnt
 	}
 
 	for (const file of files) {
-		self.pyodide.FS.writeFile(`${dir}/${file.name}`, new Uint8Array(file.data));
+		if (!isValidPyodideEntryName(file.name)) throw new Error('Invalid Pyodide file name');
+		const target = requirePyodideWorkspacePath(`${dir}/${file.name}`);
+		self.pyodide.FS.writeFile(target, new Uint8Array(file.data));
 	}
 }
 
 function fsList(path: string) {
-	const entries: { name: string; type: 'file' | 'directory'; size: number }[] = [];
-	try {
-		const items = self.pyodide.FS.readdir(path).filter((n: string) => n !== '.' && n !== '..');
-		for (const name of items) {
-			try {
-				const stat = self.pyodide.FS.stat(`${path}/${name}`);
-				const isDir = self.pyodide.FS.isDir(stat.mode);
-				entries.push({
-					name,
-					type: isDir ? 'directory' : 'file',
-					size: isDir ? 0 : stat.size
-				});
-			} catch {
-				// skip inaccessible entries
-			}
+	path = requirePyodideWorkspacePath(path);
+	const entries: {
+		name: string;
+		type: 'file' | 'directory';
+		size: number;
+		modified?: number;
+	}[] = [];
+	const items = self.pyodide.FS.readdir(path).filter((n: string) => n !== '.' && n !== '..');
+	for (const name of items) {
+		try {
+			const stat = self.pyodide.FS.stat(`${path}/${name}`);
+			const isDir = self.pyodide.FS.isDir(stat.mode);
+			entries.push({
+				name,
+				type: isDir ? 'directory' : 'file',
+				size: isDir ? 0 : stat.size,
+				...(stat.mtime instanceof Date ? { modified: stat.mtime.getTime() } : {})
+			});
+		} catch {
+			// One entry may disappear between readdir and stat; keep the rest usable.
 		}
-	} catch {
-		// directory doesn't exist
 	}
 	return entries;
 }
 
 function fsRead(path: string): ArrayBuffer {
+	path = requirePyodideWorkspacePath(path);
 	const data: Uint8Array = (self.pyodide.FS as any).readFile(path) as Uint8Array;
-	return data.buffer as ArrayBuffer;
+	return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
 }
 
 function fsDelete(path: string) {
-	try {
-		const stat = self.pyodide.FS.stat(path);
-		if (self.pyodide.FS.isDir(stat.mode)) {
-			// Recursively delete directory contents
-			const items = self.pyodide.FS.readdir(path).filter((n: string) => n !== '.' && n !== '..');
-			for (const item of items) {
-				fsDelete(`${path}/${item}`);
-			}
-			self.pyodide.FS.rmdir(path);
-		} else {
-			self.pyodide.FS.unlink(path);
+	path = requirePyodideWorkspacePath(path);
+	if (path === PYODIDE_WORKSPACE_ROOT)
+		throw new Error('The Pyodide workspace root cannot be deleted');
+	const stat = self.pyodide.FS.stat(path);
+	if (self.pyodide.FS.isDir(stat.mode)) {
+		const items = self.pyodide.FS.readdir(path).filter((n: string) => n !== '.' && n !== '..');
+		for (const item of items) {
+			fsDelete(`${path}/${item}`);
 		}
-	} catch {
-		// already gone
+		self.pyodide.FS.rmdir(path);
+	} else {
+		self.pyodide.FS.unlink(path);
 	}
 }
 
 function fsMkdir(path: string) {
-	self.pyodide.FS.mkdirTree(path);
+	self.pyodide.FS.mkdirTree(requirePyodideWorkspacePath(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -186,10 +211,12 @@ async function executeCode(
 	// Upload any accompanying files before execution
 	if (files && files.length > 0) {
 		fsUploadFiles(files);
-		persistFS();
+		await syncFS(false);
 	}
 
 	try {
+		await resetPythonWorkspace();
+		reportBootstrapStage('executing-code', id);
 		// check if matplotlib is imported in the code
 		if (code.includes('matplotlib')) {
 			// Override plt.show() to return base64 image
@@ -225,11 +252,14 @@ matplotlib.pyplot.show = show`);
 		self.result = processResult(self.result);
 
 		console.log('Python result:', self.result);
-
-		// Persist any files the code may have written
-		persistFS();
 	} catch (error: unknown) {
 		self.stderr = error instanceof Error ? error.message : String(error);
+	}
+	try {
+		await syncFS(false);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		self.stderr = [self.stderr, `Files could not be saved: ${message}`].filter(Boolean).join('\n');
 	}
 
 	self.postMessage({ id, result: self.result, stdout: self.stdout, stderr: self.stderr });
@@ -239,86 +269,110 @@ matplotlib.pyplot.show = show`);
 // Message handler
 // ---------------------------------------------------------------------------
 
-self.onmessage = async (event) => {
-	const data = event.data;
+const handleMessage = async (data: any) => {
 	const { id, type } = data;
+	try {
+		reportBootstrapStage('request-started', id);
+		// Backward compatibility: messages without a `type` field are execute requests
+		if (!type || type === 'execute') {
+			const { code, files, ...context } = data;
 
-	// Backward compatibility: messages without a `type` field are execute requests
-	if (!type || type === 'execute') {
-		const { code, files, ...context } = data;
-
-		// Copy context keys (packages, etc.) into worker scope
-		for (const key of Object.keys(context)) {
-			if (key !== 'id' && key !== 'type') {
-				self[key] = context[key];
-			}
-		}
-
-		await ensurePyodide(self.packages);
-		await executeCode(id, code, files);
-		return;
-	}
-
-	// FS operations require Pyodide to be loaded
-	await ensurePyodide();
-
-	switch (type) {
-		case 'fs:upload': {
-			const { files, dir } = data;
-			fsUploadFiles(files, dir);
-			persistFS();
-			self.postMessage({ id, type: 'fs:upload', success: true });
-			break;
-		}
-
-		case 'fs:list': {
-			const entries = fsList(data.path);
-			self.postMessage({ id, type: 'fs:list', entries });
-			break;
-		}
-
-		case 'fs:read': {
-			try {
-				const buffer = fsRead(data.path);
-				self.postMessage({ id, type: 'fs:read', data: buffer }, { transfer: [buffer] });
-			} catch (err: unknown) {
-				self.postMessage({
-					id,
-					type: 'fs:read',
-					error: err instanceof Error ? err.message : String(err)
-				});
-			}
-			break;
-		}
-
-		case 'fs:delete': {
-			fsDelete(data.path);
-			persistFS();
-			self.postMessage({ id, type: 'fs:delete', success: true });
-			break;
-		}
-
-		case 'fs:mkdir': {
-			fsMkdir(data.path);
-			persistFS();
-			self.postMessage({ id, type: 'fs:mkdir', success: true });
-			break;
-		}
-
-		case 'fs:sync': {
-			// Re-read from IndexedDB into memory to pick up externally written files
-			(self.pyodide.FS as any).syncfs(true, (err: Error | null) => {
-				if (err) {
-					console.error('Error syncing from IndexedDB:', err);
+			// Copy context keys (packages, etc.) into worker scope
+			for (const key of Object.keys(context)) {
+				if (key !== 'id' && key !== 'type') {
+					self[key] = context[key];
 				}
-				self.postMessage({ id, type: 'fs:sync', success: !err });
-			});
-			break;
+			}
+
+			await ensurePyodide(self.packages, id);
+			await executeCode(id, code, files);
+			return;
 		}
 
-		default:
-			console.warn('Unknown message type:', type);
+		// FS operations require Pyodide to be loaded
+		await ensurePyodide([], id);
+
+		switch (type) {
+			case 'fs:upload': {
+				const { files, dir } = data;
+				fsUploadFiles(files, dir);
+				await syncFS(false);
+				self.postMessage({ id, type: 'fs:upload', success: true });
+				break;
+			}
+
+			case 'fs:list': {
+				const entries = fsList(data.path);
+				self.postMessage({ id, type: 'fs:list', entries });
+				break;
+			}
+
+			case 'fs:read': {
+				try {
+					const path = requirePyodideWorkspacePath(data.path);
+					const stat = self.pyodide.FS.stat(path);
+					if (self.pyodide.FS.isDir(stat.mode)) throw new Error('Path is a directory');
+					if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+						throw new Error('File metadata is invalid');
+					}
+					if (Number.isSafeInteger(data.maxBytes) && stat.size > data.maxBytes) {
+						throw new Error('File exceeds the read limit');
+					}
+					const buffer = fsRead(path);
+					if (Number.isSafeInteger(data.maxBytes) && buffer.byteLength > data.maxBytes) {
+						throw new Error('File exceeds the read limit');
+					}
+					self.postMessage({ id, type: 'fs:read', data: buffer }, { transfer: [buffer] });
+				} catch (err: unknown) {
+					self.postMessage({
+						id,
+						type: 'fs:read',
+						error: err instanceof Error ? err.message : String(err)
+					});
+				}
+				break;
+			}
+
+			case 'fs:delete': {
+				fsDelete(data.path);
+				await syncFS(false);
+				self.postMessage({ id, type: 'fs:delete', success: true });
+				break;
+			}
+
+			case 'fs:mkdir': {
+				fsMkdir(data.path);
+				await syncFS(false);
+				self.postMessage({ id, type: 'fs:mkdir', success: true });
+				break;
+			}
+
+			case 'fs:sync': {
+				// Re-read from IndexedDB into memory to pick up externally written files
+				await syncFS(true);
+				self.postMessage({ id, type: 'fs:sync', success: true });
+				break;
+			}
+
+			default:
+				throw new Error(`Unknown Pyodide request type: ${String(type)}`);
+		}
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		self.postMessage({
+			id,
+			type,
+			error: message,
+			...(!type || type === 'execute' ? { stderr: message } : {})
+		});
 	}
+};
+
+let messageQueue = Promise.resolve();
+self.onmessage = (event) => {
+	const data = event.data;
+	reportBootstrapStage('request-queued', data?.id);
+	messageQueue = messageQueue.then(() => handleMessage(data));
 };
 
 // ---------------------------------------------------------------------------

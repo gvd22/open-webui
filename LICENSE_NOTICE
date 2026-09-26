@@ -9,3 +9,16 @@ This repository contains code governed by multiple licenses based on the date an
 3. All code contributed or modified after commit 60d84a3aae9802339705826e9095e272e3c83623 is licensed under the Open WebUI License (see LICENSE).
 
 For details on which commits are covered by which license, refer to LICENSE_HISTORY.
+
+## Bundled third-party notices
+
+`pdfjs-dist`, `docx-preview`, and `xlsx` are distributed under the Apache
+License 2.0. Their complete license texts remain available in their respective
+package distributions and in the container under `/app/legal`.
+
+The document viewer also bundles these verified package notices:
+
+- `pdfjs-dist/LICENSE` (Apache-2.0)
+- `docx-preview/LICENSE` (Apache-2.0)
+- `jszip/LICENSE.markdown` (MIT OR GPL-3.0-or-later)
+- `xlsx/LICENSE` (Apache-2.0)
