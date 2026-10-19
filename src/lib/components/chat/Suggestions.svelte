@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Fuse from 'fuse.js';
 	import Bolt from '$lib/components/icons/Bolt.svelte';
+	import SuggestionCards from './Placeholder/SuggestionCards.svelte';
+	import { stableRandomRank } from '$lib/utils/welcome';
 	import { getContext } from 'svelte';
 	import { settings, WEBUI_NAME } from '$lib/stores';
 	import { WEBUI_VERSION } from '$lib/constants';
@@ -11,6 +13,9 @@
 	export let className = '';
 	export let inputValue = '';
 	export let onSelect = () => {};
+	// AI-2390: welcome screen with background shows cards instead of the plain list
+	export let cards = false;
+	export let animate = true;
 
 	let sortedPrompts = [];
 
@@ -58,10 +63,19 @@
 	};
 
 	$: if (suggestionPrompts) {
-		sortedPrompts = [...(suggestionPrompts ?? [])].sort(() => Math.random() - 0.5);
+		// stable per page load, so a remount does not reshuffle
+		sortedPrompts = [...(suggestionPrompts ?? [])].sort(
+			(a, b) => stableRandomRank(a) - stableRandomRank(b)
+		);
 	}
 </script>
 
+<!-- AI-2390: in card mode the area keeps the card height even when typing filters out
+	every suggestion, so the centred input does not jump -->
+<div class={cards ? 'min-h-[14.125rem]' : ''}>
+{#if cards && filteredPrompts.length > 0}
+	<SuggestionCards prompts={filteredPrompts} {onSelect} {animate} />
+{:else}
 <div class="mb-1 flex gap-1 text-xs font-normal items-center text-gray-600 dark:text-gray-400">
 	{#if filteredPrompts.length > 0}
 		<Bolt />
@@ -124,6 +138,8 @@
 			{/each}
 		</div>
 	{/if}
+</div>
+{/if}
 </div>
 
 <style>

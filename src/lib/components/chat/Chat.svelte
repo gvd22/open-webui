@@ -120,6 +120,7 @@
 	import FilesOverlay from './MessageInput/FilesOverlay.svelte';
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
+	import WelcomeBackground from './Placeholder/WelcomeBackground.svelte';
 	import Modal from '../common/Modal.svelte';
 	import { isEmbedWindow } from '../common/FullHeightIframe.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
@@ -4274,7 +4275,10 @@
 	id={chatContainerId}
 >
 	{#if !loading}
-		<div in:fade={{ duration: 50 }} class="w-full h-full flex flex-col">
+		<!-- no fade-in for the new-chat / folder screens: switching between them
+			remounts the page, and fading the whole area (incl. the welcome background) in
+			again made the screen blink -->
+		<div in:fade={{ duration: chatIdProp ? 50 : 0 }} class="w-full h-full flex flex-col">
 			{#if backgroundImage}
 				<div
 					class="pointer-events-none absolute top-0 left-0 w-full h-full bg-cover bg-center bg-no-repeat"
@@ -4588,7 +4592,11 @@
 								</div>
 							</div>
 						{:else}
-							<div class="flex items-center h-full">
+							<div class="flex items-center h-full relative">
+								<!-- AI-2390: not in the project (folder) view -->
+								{#if ($settings?.welcomeBackground ?? true) && !$selectedFolder}
+									<WelcomeBackground />
+								{/if}
 								<Placeholder
 									bind:selectedModelIdx
 									{history}

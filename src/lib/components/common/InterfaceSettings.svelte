@@ -46,6 +46,8 @@
 	let showUsername = false;
 
 	let highContrastMode = false;
+	// AI-2390: animated welcome background with Swiss crosses
+	let welcomeBackground = true;
 
 	let detectArtifacts = true;
 	let displayMultiModelResponsesInTabs = false;
@@ -319,6 +321,7 @@
 		autoFollowUps = currentSettings?.autoFollowUps ?? true;
 
 		highContrastMode = currentSettings?.highContrastMode ?? false;
+		welcomeBackground = currentSettings?.welcomeBackground ?? true;
 
 		detectArtifacts = currentSettings?.detectArtifacts ?? true;
 		responseAutoCopy = currentSettings?.responseAutoCopy ?? false;
@@ -611,6 +614,29 @@
 		</div>
 		<p class={settingDescriptionClass}>
 			{$i18n.t('settings.personal.interface.accessibilityMode.description')}
+		</p>
+	</div>
+
+	<div>
+		<div class={settingRowClass}>
+			<div id="welcome-background-label" class={settingLabelClass}>
+				{$i18n.t('Welcome Screen Background')}
+			</div>
+
+			<div class={settingControlClass}>
+				<Switch
+					ariaLabelledbyId="welcome-background-label"
+					tooltip={true}
+					bind:state={welcomeBackground}
+					inherited={isDefaultSetting('welcomeBackground')}
+					on:change={() => {
+						saveSettings({ welcomeBackground });
+					}}
+				/>
+			</div>
+		</div>
+		<p class={settingDescriptionClass}>
+			{$i18n.t('Show the animated background with Swiss crosses on the welcome screen.')}
 		</p>
 	</div>
 
