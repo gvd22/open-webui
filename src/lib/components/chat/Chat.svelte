@@ -210,6 +210,8 @@
 	let showCommands = false;
 
 	let generating = false;
+	let backgroundPulseKey = 0;
+	let backgroundActive = false;
 	let dragged = false;
 	let generationController = null;
 	let contextCompactionToastId = null;
@@ -3177,9 +3179,11 @@
 			<PaneGroup direction="horizontal" class="w-full h-full">
 				<Pane defaultSize={50} minSize={30} class="h-full flex relative max-w-full flex-col">
 					<FilesOverlay show={dragged} />
-					{#if hasChatMessages}
-						<ChatStartBackground mode="ambient" active={generating} />
-					{/if}
+					<ChatStartBackground
+						mode={hasChatMessages ? 'ambient' : 'start'}
+						active={hasChatMessages ? generating : backgroundActive}
+						pulseKey={backgroundPulseKey}
+					/>
 					<Navbar
 						bind:this={navbarElement}
 						{readOnly}
@@ -3377,6 +3381,8 @@
 						{:else}
 							<div class="flex items-center h-full">
 								<Placeholder
+									bind:backgroundPulseKey
+									bind:backgroundActive
 									{history}
 									{selectedModels}
 									bind:messageInput

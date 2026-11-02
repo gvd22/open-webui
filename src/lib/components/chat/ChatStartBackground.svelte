@@ -1,446 +1,230 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
+	import { theme } from '$lib/stores';
 
 	export let pulseKey = 0;
 	export let active = false;
 	export let mode: 'start' | 'ambient' = 'start';
 
-	let rootElement: HTMLDivElement;
-	let prefersReducedMotion = false;
-	let pointerX = 0;
-	let pointerY = 0;
-	let animationFrame: number | null = null;
-	let pulseVisible = false;
-	let pulseTimer: ReturnType<typeof setTimeout> | null = null;
-	let mediaQuery: MediaQueryList | null = null;
-
-	$: if (pulseKey > 0) {
-		triggerPulse();
-	}
-
-	$: isStartMode = mode === 'start';
-
-	const setPointerVars = () => {
-		if (!rootElement || prefersReducedMotion || !isStartMode) {
-			animationFrame = null;
-			return;
-		}
-
-		rootElement.style.setProperty('--ai-pointer-x', `${pointerX.toFixed(3)}`);
-		rootElement.style.setProperty('--ai-pointer-y', `${pointerY.toFixed(3)}`);
-		animationFrame = null;
-	};
-
-	const handlePointerMove = (event: PointerEvent) => {
-		if (!isStartMode || prefersReducedMotion || event.pointerType === 'touch') {
-			return;
-		}
-
-		pointerX = event.clientX / window.innerWidth - 0.5;
-		pointerY = event.clientY / window.innerHeight - 0.5;
-
-		if (!animationFrame) {
-			animationFrame = requestAnimationFrame(setPointerVars);
-		}
-	};
-
-	const triggerPulse = () => {
-		if (prefersReducedMotion || !isStartMode) {
-			return;
-		}
-
-		pulseVisible = false;
-		requestAnimationFrame(() => {
-			pulseVisible = true;
-
-			if (pulseTimer) {
-				clearTimeout(pulseTimer);
-			}
-			pulseTimer = setTimeout(() => {
-				pulseVisible = false;
-			}, 900);
-		});
-	};
+	let root: HTMLDivElement;
+	let paused = true;
 
 	onMount(() => {
-		mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-		const updateMotionPreference = () => {
-			prefersReducedMotion = mediaQuery?.matches ?? false;
-		};
-
-		updateMotionPreference();
-		mediaQuery.addEventListener('change', updateMotionPreference);
-
-		if (isStartMode) {
-			window.addEventListener('pointermove', handlePointerMove, { passive: true });
-		}
-
+		let visible = true;
+		const updatePlayback = () => (paused = document.hidden || !visible);
+		const observer = new IntersectionObserver(([entry]) => {
+			visible = entry.isIntersecting;
+			updatePlayback();
+		});
+		observer.observe(root);
+		document.addEventListener('visibilitychange', updatePlayback);
+		updatePlayback();
 		return () => {
-			mediaQuery?.removeEventListener('change', updateMotionPreference);
-			if (isStartMode) {
-				window.removeEventListener('pointermove', handlePointerMove);
-			}
+			observer.disconnect();
+			document.removeEventListener('visibilitychange', updatePlayback);
 		};
-	});
-
-	onDestroy(() => {
-		if (animationFrame) {
-			cancelAnimationFrame(animationFrame);
-		}
-		if (pulseTimer) {
-			clearTimeout(pulseTimer);
-		}
 	});
 </script>
 
 <div
-	bind:this={rootElement}
+	bind:this={root}
+	class="ai-start-bg"
 	class:ai-start-bg--active={active}
 	class:ai-start-bg--ambient={mode === 'ambient'}
-	class="ai-start-bg"
+	class:ai-start-bg--oled={$theme === 'oled-dark'}
+	class:ai-start-bg--paused={paused}
 	aria-hidden="true"
 >
-	<div class="ai-start-bg__halo ai-start-bg__halo--blue"></div>
-	<div class="ai-start-bg__halo ai-start-bg__halo--red"></div>
-	<div class="ai-start-bg__halo ai-start-bg__halo--white"></div>
-	<div class="ai-start-bg__mesh"></div>
-	<div class="ai-start-bg__wave"></div>
-	<div class:pulse-visible={pulseVisible} class="ai-start-bg__pulse"></div>
+	<div class="ai-start-bg__layer"><div class="ai-start-bg__cloud"></div></div>
+	<div class="ai-start-bg__layer ai-start-bg__pattern">
+		<div class="ai-start-bg__cloud"></div>
+	</div>
+	{#key pulseKey}
+		{#if pulseKey > 0}
+			<div class="ai-start-bg__pulse"></div>
+		{/if}
+	{/key}
 </div>
 
 <style>
 	.ai-start-bg {
-		--ai-pointer-x: 0;
-		--ai-pointer-y: 0;
-		--ai-bg-opacity: 0.68;
-		--ai-bg-blur: 36px;
-		--ai-bg-saturate: 1;
-		--ai-blue: 5 40 86;
-		--ai-blue-soft: 51 102 204;
-		--ai-red: 185 32 44;
-		--ai-red-soft: 232 83 72;
-		--ai-white: 255 255 255;
+		--welcome-opacity: 0.32;
+		--cross-ink: rgb(5 40 86 / 0.075);
+		--cross-light-opacity: 0.3;
+		--cloud-move-amount: 1.3;
+		--cloud-shape-amount: 0.3;
+		--move-duration: 32s;
+		--shape-duration: 47s;
+		--limit-x: radial-gradient(ellipse 76% 80% at 50% 60%, black 12%, transparent 100%);
+		--limit-y: linear-gradient(transparent, black 34%, black 74%, transparent);
 		position: absolute;
-		left: 50%;
-		top: 50%;
-		z-index: -1;
-		width: min(1380px, 100%);
-		max-width: 100%;
-		height: min(700px, 76vh);
-		min-height: 390px;
-		pointer-events: none;
-		opacity: var(--ai-bg-opacity);
-		transform: translate3d(
-			calc(-50% + (var(--ai-pointer-x) * 18px)),
-			calc(-50% + (var(--ai-pointer-y) * 14px)),
-			0
-		);
-		filter: saturate(var(--ai-bg-saturate));
+		inset: 0;
+		z-index: 0;
 		overflow: hidden;
-		contain: paint;
-		mask-image:
-			linear-gradient(
-				90deg,
-				transparent 0 4%,
-				rgb(0 0 0 / 0.1) 14%,
-				#000 32% 68%,
-				rgb(0 0 0 / 0.1) 86%,
-				transparent 96%
-			),
-			radial-gradient(ellipse at 50% 50%, #000 0 31%, rgb(0 0 0 / 0.34) 55%, transparent 78%);
-		mask-composite: intersect;
-		-webkit-mask-image:
-			linear-gradient(
-				90deg,
-				transparent 0 4%,
-				rgb(0 0 0 / 0.1) 14%,
-				#000 32% 68%,
-				rgb(0 0 0 / 0.1) 86%,
-				transparent 96%
-			),
-			radial-gradient(ellipse at 50% 50%, #000 0 31%, rgb(0 0 0 / 0.34) 55%, transparent 78%);
+		pointer-events: none;
+		transition: opacity 1.2s ease;
+	}
+
+	:global(.dark) .ai-start-bg {
+		--welcome-opacity: 0.27;
+		--cross-ink: rgb(226 235 255 / 0.065);
+		--cross-light-opacity: 0.26;
+	}
+
+	:global(.dark) .ai-start-bg--oled {
+		--welcome-opacity: 0.23;
+	}
+
+	.ai-start-bg__layer {
+		position: absolute;
+		inset: 0;
+		container-type: size;
+		-webkit-mask: var(--limit-y), var(--limit-x);
 		-webkit-mask-composite: source-in;
-		transition:
-			opacity 420ms ease,
-			transform 260ms ease-out;
+		mask: var(--limit-y), var(--limit-x);
+		mask-composite: intersect;
+		transition: opacity 0.6s ease;
 	}
 
-	:global(html.dark) .ai-start-bg {
-		--ai-bg-opacity: 0.74;
-		--ai-bg-blur: 40px;
-		--ai-bg-saturate: 1.08;
-		--ai-blue: 5 40 86;
-		--ai-blue-soft: 51 102 204;
-		--ai-red: 196 28 44;
-		--ai-red-soft: 242 76 68;
-		--ai-white: 245 248 255;
+	.ai-start-bg__cloud {
+		position: absolute;
+		inset: -7%;
+		transform-origin: 50% 55%;
+		opacity: var(--welcome-opacity);
+		background:
+			radial-gradient(ellipse 39% 58% at 30% 49%, #ff6d87 0%, transparent 100%),
+			radial-gradient(ellipse 43% 46% at 44% 72%, #8060ef 0%, transparent 100%),
+			radial-gradient(ellipse 47% 52% at 65% 64%, #479aff 0%, transparent 100%);
+		animation:
+			cloud-move-balanced var(--move-duration) ease-in-out infinite,
+			cloud-shape var(--shape-duration) ease-in-out infinite;
 	}
 
-	.ai-start-bg--active {
-		--ai-bg-opacity: 0.76;
-		--ai-bg-saturate: 1.04;
+	.ai-start-bg__pattern {
+		--cross: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='52'%3E%3Cpath d='M24.5 21h3v3.5h3.5v3h-3.5v3.5h-3v-3.5H21v-3h3.5z'/%3E%3C/svg%3E")
+			0 0 / 52px 52px;
+		--falloff: radial-gradient(ellipse 55% 48% at 50% 59%, black 22%, transparent 100%);
+		/* Keep the texture out of the central reading and composing area. */
+		--content-clearance: radial-gradient(ellipse 35% 42% at 50% 54%, transparent 75%, black 100%);
+		background: var(--cross-ink);
+		opacity: 0.75;
+		-webkit-mask:
+			var(--cross), var(--content-clearance), var(--falloff), var(--limit-y), var(--limit-x);
+		-webkit-mask-composite: source-in, source-in, source-in, source-in;
+		mask: var(--cross), var(--content-clearance), var(--falloff), var(--limit-y), var(--limit-x);
+		mask-composite: intersect, intersect, intersect, intersect;
 	}
 
-	:global(html.dark) .ai-start-bg--active {
-		--ai-bg-opacity: 0.84;
-		--ai-bg-saturate: 1.16;
+	.ai-start-bg__pattern .ai-start-bg__cloud {
+		opacity: var(--cross-light-opacity);
+	}
+
+	.ai-start-bg--active:not(.ai-start-bg--ambient) > .ai-start-bg__layer:first-child {
+		opacity: 0.94;
+	}
+
+	.ai-start-bg__pulse {
+		position: absolute;
+		inset: 20%;
+		opacity: 0;
+		background: radial-gradient(ellipse, rgb(255 255 255 / 0.12), transparent 65%);
+		animation: cloud-pulse 1.2s ease-out both;
 	}
 
 	.ai-start-bg--ambient {
-		--ai-bg-opacity: 0.13;
-		--ai-bg-blur: 28px;
-		--ai-bg-saturate: 0.86;
-
-		top: 46%;
-		z-index: 0;
-		width: min(1180px, 100%);
-		max-width: 100%;
-		height: min(620px, 74vh);
-		min-height: 360px;
-		mask-image:
-			linear-gradient(
-				90deg,
-				transparent 0 6%,
-				rgb(0 0 0 / 0.08) 18%,
-				#000 36% 64%,
-				rgb(0 0 0 / 0.08) 82%,
-				transparent 94%
-			),
-			radial-gradient(ellipse at 50% 50%, #000 0 24%, rgb(0 0 0 / 0.22) 50%, transparent 76%);
-		-webkit-mask-image:
-			linear-gradient(
-				90deg,
-				transparent 0 6%,
-				rgb(0 0 0 / 0.08) 18%,
-				#000 36% 64%,
-				rgb(0 0 0 / 0.08) 82%,
-				transparent 94%
-			),
-			radial-gradient(ellipse at 50% 50%, #000 0 24%, rgb(0 0 0 / 0.22) 50%, transparent 76%);
-	}
-
-	:global(html.dark) .ai-start-bg--ambient {
-		--ai-bg-opacity: 0.18;
-		--ai-bg-blur: 30px;
-		--ai-bg-saturate: 0.96;
+		opacity: 0.22;
 	}
 
 	.ai-start-bg--ambient.ai-start-bg--active {
-		--ai-bg-opacity: 0.16;
-		--ai-bg-saturate: 0.92;
+		opacity: 0.28;
 	}
 
-	:global(html.dark) .ai-start-bg--ambient.ai-start-bg--active {
-		--ai-bg-opacity: 0.24;
-		--ai-bg-saturate: 1.02;
-	}
-
-	.ai-start-bg--ambient .ai-start-bg__halo--white,
-	.ai-start-bg--ambient .ai-start-bg__wave,
+	.ai-start-bg--ambient .ai-start-bg__pattern,
 	.ai-start-bg--ambient .ai-start-bg__pulse {
 		display: none;
 	}
 
-	.ai-start-bg__halo,
-	.ai-start-bg__mesh,
-	.ai-start-bg__wave,
-	.ai-start-bg__pulse {
-		position: absolute;
-		inset: 0;
-		will-change: transform, opacity;
-		transform: translateZ(0);
+	.ai-start-bg--paused .ai-start-bg__cloud,
+	.ai-start-bg--paused .ai-start-bg__pattern,
+	.ai-start-bg--paused .ai-start-bg__pulse {
+		animation-play-state: paused;
 	}
 
-	.ai-start-bg__halo--blue {
-		background:
-			radial-gradient(ellipse at 25% 70%, rgb(var(--ai-blue-soft) / 0.3), transparent 31%),
-			radial-gradient(ellipse at 60% 30%, rgb(var(--ai-blue) / 0.24), transparent 35%);
-		filter: blur(var(--ai-bg-blur));
-		animation: aiFieldBlue 10s ease-in-out infinite;
-	}
-
-	.ai-start-bg__halo--red {
-		background:
-			radial-gradient(ellipse at 66% 56%, rgb(var(--ai-red) / 0.56), transparent 42%),
-			radial-gradient(ellipse at 42% 58%, rgb(var(--ai-red-soft) / 0.32), transparent 38%);
-		filter: blur(var(--ai-bg-blur));
-		mix-blend-mode: screen;
-		animation: aiFieldRed 13s ease-in-out infinite;
-	}
-
-	.ai-start-bg__halo--white {
-		background:
-			radial-gradient(ellipse at 46% 40%, rgb(var(--ai-white) / 0.42), transparent 20%),
-			radial-gradient(ellipse at 56% 55%, rgb(var(--ai-white) / 0.2), transparent 30%);
-		filter: blur(calc(var(--ai-bg-blur) * 0.78));
-		animation: aiFieldWhite 16s ease-in-out infinite;
-	}
-
-	.ai-start-bg__mesh {
-		opacity: 0.72;
-		background: conic-gradient(
-			from 142deg at 50% 50%,
-			transparent,
-			rgb(var(--ai-white) / 0.18),
-			transparent 30%,
-			rgb(var(--ai-red-soft) / 0.22),
-			transparent 68%
-		);
-		filter: blur(18px);
-		animation: aiMeshShift 18s ease-in-out infinite;
-	}
-
-	.ai-start-bg__wave {
-		inset: -8% -10%;
-		opacity: 0.36;
-		background:
-			radial-gradient(ellipse at 42% 38%, rgb(var(--ai-white) / 0.22), transparent 30%),
-			conic-gradient(
-				from 118deg at 50% 52%,
-				transparent 0 14%,
-				rgb(var(--ai-blue-soft) / 0.1) 21%,
-				transparent 34% 47%,
-				rgb(var(--ai-red-soft) / 0.22) 58%,
-				transparent 72% 100%
-			);
-		filter: blur(26px);
-		mix-blend-mode: screen;
-		animation: aiWaveBreathe 12s ease-in-out infinite;
-	}
-
-	.ai-start-bg__pulse {
-		inset: 23% 19%;
-		border: 1px solid rgb(var(--ai-white) / 0.35);
-		border-radius: 999px;
-		opacity: 0;
-		transform: scale3d(0.42, 0.42, 1);
-		filter: blur(5px);
-	}
-
-	.ai-start-bg__pulse.pulse-visible {
-		animation: aiSubmitPulse 900ms ease-out;
-	}
-
-	@keyframes aiFieldBlue {
-		0% {
-			transform: translate3d(-12%, 7%, 0) scale3d(0.92, 1.08, 1) rotate(-6deg);
-			opacity: 0.68;
-		}
-		35% {
-			transform: translate3d(2%, -5%, 0) scale3d(1.14, 0.96, 1) rotate(3deg);
-			opacity: 0.96;
-		}
-		70% {
-			transform: translate3d(12%, -7%, 0) scale3d(1.06, 1.02, 1) rotate(7deg);
-			opacity: 0.9;
-		}
+	@keyframes cloud-move-balanced {
+		0%,
 		100% {
-			transform: translate3d(-12%, 7%, 0) scale3d(0.92, 1.08, 1) rotate(-6deg);
-			opacity: 0.68;
+			translate: 0 0;
 		}
-	}
-
-	@keyframes aiFieldRed {
-		0% {
-			transform: translate3d(12%, -6%, 0) scale3d(1.08, 0.92, 1) rotate(5deg);
-			opacity: 0.6;
+		20% {
+			translate: calc(1.5cqw * var(--cloud-move-amount)) calc(-4cqh * var(--cloud-move-amount));
 		}
 		40% {
-			transform: translate3d(0, 5%, 0) scale3d(0.92, 1.16, 1) rotate(-3deg);
-			opacity: 0.95;
+			translate: calc(3.75cqw * var(--cloud-move-amount)) calc(1cqh * var(--cloud-move-amount));
 		}
-		75% {
-			transform: translate3d(-13%, 7%, 0) scale3d(1.08, 1.04, 1) rotate(-8deg);
-			opacity: 0.84;
+		60% {
+			translate: 0 calc(8cqh * var(--cloud-move-amount));
 		}
-		100% {
-			transform: translate3d(12%, -6%, 0) scale3d(1.08, 0.92, 1) rotate(5deg);
-			opacity: 0.6;
+		80% {
+			translate: calc(-3.75cqw * var(--cloud-move-amount)) 0;
 		}
 	}
 
-	@keyframes aiFieldWhite {
-		0% {
-			transform: translate3d(-3%, -6%, 0) scale3d(0.92, 1.08, 1) rotate(-3deg);
-			opacity: 0.3;
-		}
-		50% {
-			transform: translate3d(4%, 2%, 0) scale3d(1.16, 0.93, 1) rotate(5deg);
-			opacity: 0.68;
-		}
+	@keyframes cloud-shape {
+		0%,
 		100% {
-			transform: translate3d(-3%, -6%, 0) scale3d(0.92, 1.08, 1) rotate(-3deg);
-			opacity: 0.3;
+			scale: 1 1;
+		}
+		20% {
+			scale: calc(1 + 0.25 * var(--cloud-shape-amount)) calc(1 - 0.3 * var(--cloud-shape-amount));
+		}
+		40% {
+			scale: calc(1 - 0.15 * var(--cloud-shape-amount)) calc(1 + 0.1 * var(--cloud-shape-amount));
+		}
+		60% {
+			scale: calc(1 + 0.2 * var(--cloud-shape-amount)) calc(1 - 0.4 * var(--cloud-shape-amount));
+		}
+		80% {
+			scale: calc(1 - 0.05 * var(--cloud-shape-amount)) calc(1 - 0.15 * var(--cloud-shape-amount));
 		}
 	}
 
-	@keyframes aiMeshShift {
-		0% {
-			transform: scale3d(0.94, 1.08, 1) rotate(-10deg);
-			opacity: 0.34;
-		}
-		50% {
-			transform: scale3d(1.12, 0.92, 1) rotate(6deg);
-			opacity: 0.82;
-		}
-		100% {
-			transform: scale3d(0.94, 1.08, 1) rotate(-10deg);
-			opacity: 0.34;
-		}
-	}
-
-	@keyframes aiWaveBreathe {
-		0% {
-			transform: translate3d(-7%, 5%, 0) scale3d(0.9, 1.08, 1) rotate(-10deg);
-			opacity: 0.16;
-		}
-		45% {
-			transform: translate3d(7%, -5%, 0) scale3d(1.12, 0.92, 1) rotate(6deg);
-			opacity: 0.44;
-		}
-		100% {
-			transform: translate3d(-7%, 5%, 0) scale3d(0.9, 1.08, 1) rotate(-10deg);
-			opacity: 0.16;
-		}
-	}
-
-	@keyframes aiSubmitPulse {
+	@keyframes cloud-pulse {
 		0% {
 			opacity: 0;
-			transform: scale3d(0.42, 0.42, 1);
+			scale: 0.8;
 		}
-		24% {
-			opacity: 0.72;
+		30% {
+			opacity: 1;
 		}
 		100% {
 			opacity: 0;
-			transform: scale3d(1.35, 1.35, 1);
+			scale: 1.3;
 		}
 	}
 
-	@media (max-width: 768px) {
+	@media (max-width: 640px) {
 		.ai-start-bg {
-			width: 100%;
-			max-width: 100%;
-			height: min(560px, 72vh);
-			min-height: 360px;
-			--ai-bg-blur: 28px;
+			--cloud-move-amount: 0.8;
+			--move-duration: 48s;
+			--shape-duration: 70s;
+		}
+		.ai-start-bg__pattern {
+			opacity: 0.45;
+		}
+		.ai-start-bg__pattern .ai-start-bg__cloud {
+			display: none;
 		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {
 		.ai-start-bg,
-		.ai-start-bg__halo,
-		.ai-start-bg__mesh,
-		.ai-start-bg__wave,
-		.ai-start-bg__pulse {
-			animation: none !important;
-			transition: none !important;
+		.ai-start-bg__layer {
+			transition: none;
 		}
-
-		.ai-start-bg {
-			transform: translate3d(-50%, -50%, 0);
-			opacity: 0.5;
+		.ai-start-bg__cloud,
+		.ai-start-bg__pattern,
+		.ai-start-bg__pulse {
+			animation: none;
 		}
 	}
 </style>

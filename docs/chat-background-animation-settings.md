@@ -4,7 +4,58 @@ This file documents local experiments for the OpenWebUI chat background. These n
 
 ## Current Active Design Specification
 
-The code currently uses the Soft Cross Glow settings in `ChatStartBackground.svelte`, but the design is not approved as the preferred direction. This section captures the product/design wishes that should guide the next iteration.
+The selected design is now **gallery variant 59**, the narrower, slightly lower version of 55. It is implemented in `ChatStartBackground.svelte`. Earlier experiments and feedback remain below for comparison; they are not the active specification.
+
+- Palette from the selected preview: rose `#ff6d87`, violet `#8060ef`, blue `#479aff`. This selection supersedes the earlier red/white-only direction; there is no gold or ice-blue page fill.
+- One moving gradient field, with overlapping ellipses sized `39% 58%`, `43% 46%`, and `47% 52%`, anchored at `30% 49%`, `44% 72%`, and `65% 64%`.
+- Full chat-pane coverage, with soft intersecting masks: ellipse `76% 80% at 50% 60%` (opaque through 12%), plus vertical fade stops `0 / 34 / 74 / 100%`. The animated layer overscans its container by 7%, without expanding document width.
+- Movement: 32-second translation cycle, amount `1.3`; 47-second independent shape cycle, amount `0.3`. Horizontal travel is 25% smaller than variant 55. Translate keyframes: `(0,0)`, `(1.5cqw,-4cqh)`, `(3.75cqw,1cqh)`, `(0,8cqh)`, `(-3.75cqw,0)`, multiplied by the motion amount.
+- Layer opacity: light `0.32`, dark `0.27`, OLED `0.23`. Page and input colors still come from the existing OpenWebUI theme. Focus slightly reduces the main field's opacity to protect text readability.
+- The cross texture uses the original 10px shape on a 52px grid, slightly denser than the faint 56px experiment but smaller and sparser than the rejected 12px/44px version. It is decorative, non-interactive, hidden in normal chats, and restrained. No particle simulation or separate cross pulse.
+- Normal chats retain 22% of the background strength (28% during generation); the same component stays mounted so the animation does not restart after sending.
+- On screens up to 640px: movement amount `0.8`, cycles `48s / 70s`, static cross texture at `0.45` opacity with no second moving gradient. Reduced-motion disables the animations and transitions. Hidden tabs and offscreen components pause playback.
+- Implementation uses CSS transforms, opacity and static masks, with no continuous JavaScript render loop, large blur filter, external imagery, or new library. Chat input styling and functionality are unchanged.
+- Integration: `Chat.svelte` owns one background behind the pane. `Placeholder.svelte` binds focus and submit state to it. Theme colors follow `.dark` and the existing theme store's `oled-dark` value.
+
+### Local Preview
+
+- Frontend: `http://127.0.0.1:5173`, Vite from this feature branch.
+- Backend: `http://127.0.0.1:8080`, `WEBUI_AUTH=false`, separate `DATA_DIR` and `STATIC_DIR` under `.cache/variant59-preview/`. Neither service is bound to the LAN.
+- This preview has no configured model provider; it is intended for visual inspection, not inference. Other running OpenWebUI instances and their data are untouched.
+- Snapshot branch: `codex/chat-background-variant59` (2026-11-02).
+
+### Current Refinement: Original Suggestions and Moderate Cross Visibility
+
+User feedback: restore the original Suggested presentation and leave it unchanged. The previous crosses became practically invisible; show a few more, without returning to the aggressive dense version.
+
+- Restored `Suggestions.svelte` to the feature branch's committed baseline, including its original list behavior. Removed the welcome-only variant and restored the original wrapper width and margins in `Placeholder.svelte`. No added tiles or shared panel remain.
+- Crosses stay 10px, with spacing adjusted from 56px to 52px (about 16% more per unit area). Coverage changes only slightly from `52% 46%` to `55% 48%`; the large reading clearance is unchanged.
+- Light base ink: `rgb(5 40 86 / 0.075)`; dark/OLED: `rgb(226 235 255 / 0.065)`. These remain under half of the aggressive version's 0.18/0.16 values. Moving color opacity: `0.30` / `0.26`, between the too-faint and too-strong settings.
+- Pattern opacity remains `0.75` on desktop and `0.45` on mobile. No extra breathing pulse. Main background palette, strength and motion are unchanged.
+
+### Previous Refinement: Rejected Shared Panel and Too-Faint Crosses
+
+Earlier request: the separate tiles did not match the chat input; the heading should be inside the white surface, and the suggestions should not have their own scroll area. The resulting shared panel was also rejected, and the cross texture was judged almost invisible. Retain the settings below only for comparison.
+
+- One shared suggestions surface, including the heading. It reuses the input's `rounded-3xl`, 1.5px border, white/86 light surface, gray-900/88 dark/OLED surface, and shadow. Its width and horizontal inset match the input. Suggestion actions inside have no separate card borders or colored fills.
+- All matching prompts remain visible; the list has natural height and no internal overflow scrolling. Two columns from 18rem of available container width, one below that; small screens hide the optional action arrows to leave more room for text. Native page scrolling remains possible when content cannot fit a small viewport.
+- Cross shape/spacing restored to 10px / 56px. Coverage reduced to `52% 46%`, reading clearance enlarged to `35% 42%` with a 75% transparent stop. Pattern opacity is a constant `0.75` on desktop; the separate 19-second brightness pulse is removed.
+- Base ink reduced from 0.18 to 0.035 in light mode and from 0.16 to 0.025 in dark/OLED. Moving color opacity reduced from 0.48/0.42 to 0.24/0.20. The main aurora colors and motion are unchanged.
+
+### Previous Refinement: Rejected Dense Crosses and Separate Tiles
+
+Earlier request: the plain suggestions no longer fit the animated background; the crosses were a welcome design element but disappeared too often. The following implementation was subsequently rejected; retain these settings only as a comparison.
+
+- Welcome suggestions now use translucent, bordered individual tiles with 8px corners and the existing arrow icon. Two columns when their container is at least 30rem wide, one column otherwise. The list remains scrollable, and all configured prompts remain selectable and searchable.
+- Tile surfaces: white at 65% in light mode, the existing `--color-gray-900` at 74% in dark/OLED. Hover surfaces increase to 90% / 94%; keyboard focus has a contrasting 2px outline. No backdrop blur or continuously animated tile effects.
+- Cross spacing reduced from 56px to 44px, roughly 62% more crosses per area; shape size increased from 10px to 12px.
+- Cross coverage increased from `48% 43%` to `66% 56%`, with the clear reading region reduced from `35% 42%` to `28% 30%`. All outer edges still fade smoothly.
+- Base ink: `rgb(5 40 86 / 0.18)` in light mode; `rgb(226 235 255 / 0.16)` in dark/OLED. Moving color opacity: `0.48` / `0.42`. The pattern breathes between 80% and 100% opacity over 19 seconds on desktop, instead of disappearing as the light moves.
+- Input behavior is unchanged. The alternate, non-welcome suggestions caller keeps its existing layout via the default variant.
+
+### Earlier Design Goals
+
+The following requests describe the earlier Swiss-themed experiments, not the selected variant 59 palette or texture.
 
 - Overall direction: Swiss/Bundesverwaltung inspired, calm, precise, institutional, and high quality.
 - Composition: central dynamic background behind greeting, logo, and chat input; normal chat may keep only a much weaker ambient version.

@@ -32,7 +32,6 @@
 	import MessageInput from './MessageInput.svelte';
 	import FolderPlaceholder from './Placeholder/FolderPlaceholder.svelte';
 	import FolderTitle from './Placeholder/FolderTitle.svelte';
-	import ChatStartBackground from './ChatStartBackground.svelte';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
 
@@ -73,8 +72,8 @@
 	let models = [];
 	let selectedModelIdx = 0;
 	let greetingDate = new Date();
-	let backgroundPulseKey = 0;
-	let backgroundActive = false;
+	export let backgroundPulseKey = 0;
+	export let backgroundActive = false;
 
 	$: if (selectedModels.length > 0) {
 		selectedModelIdx = models.length - 1;
@@ -113,7 +112,6 @@
 		}
 	}}
 >
-	<ChatStartBackground pulseKey={backgroundPulseKey} active={backgroundActive} />
 	<div class="mb-0.5 flex h-8 w-full items-center justify-center">
 		{#if $temporaryChatEnabled}
 			<Tooltip
